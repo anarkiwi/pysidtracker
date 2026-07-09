@@ -16,6 +16,16 @@ Provides one implementation of the pieces every format parser duplicated:
   classify `DIRECT` / `RELOCATED` / `PACKED` / `UNKNOWN` playroutines.
 - **`BaseSidParser`** — the class each format subclasses for a consistent
   `read` / `parse` / `detect` API.
+- **`CodePattern` / `find_code_all` / `find_code_first`** — masked 6502
+  code-fragment search with operand capture: locate a player fingerprint by its
+  opcode skeleton (per-tune operand bytes wildcarded) and read the captured
+  immediate/address. The one primitive every relocatable player's reader needs.
+- **`registers`** — documented C64 hardware register map (SID/CIA/VIC, IRQ/NMI
+  and CPU vectors) with predicates (`is_sid_reg`, `is_cia_timer`, …) and
+  `find_register_stores`, a scanner for absolute stores to a set of addresses.
+- **`trace_init` / `InitTrace`** — run a tune's init in py65 under a write
+  observer and report where it programs the CIA timer latch (cadence) and the
+  IRQ/NMI vectors (the real play routine an IRQ-driven header hides).
 
 ## Install
 

@@ -126,3 +126,15 @@ class SidImage:
     def find_split_table(self, lo, hi, *, min_length: int = 8) -> Optional[tuple]:
         """Locate a split lo/hi table anchor (see :func:`_scan.find_split_table`)."""
         return _scan.find_split_table(self.mem, lo, hi, min_length=min_length)
+
+    def find_code(self, pattern, *, start: Optional[int] = None):
+        """First masked code-fragment match of ``pattern`` (see :mod:`codescan`)."""
+        from . import codescan
+
+        return codescan.find_code_first(self, pattern, start=start)
+
+    def find_code_all(self, pattern, *, start: Optional[int] = None) -> List:
+        """Every masked code-fragment match of ``pattern`` (see :mod:`codescan`)."""
+        from . import codescan
+
+        return codescan.find_code_all(self, pattern, start=start)

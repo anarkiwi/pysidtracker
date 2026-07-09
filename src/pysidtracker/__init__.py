@@ -7,7 +7,9 @@ pyfuturecomposer, pymusicassembler, pydefmon, pyjch) build on for a consistent
 API.
 """
 
+from . import registers
 from .base import BaseSidParser
+from .codescan import CodePattern, Match, find_code_all, find_code_first
 from .detect import (
     Detection,
     PlayroutineKind,
@@ -23,19 +25,25 @@ from .errors import (
 )
 from .header import PSID_MAGIC, RSID_MAGIC, SidHeader, parse_sid_header
 from .image import MEM_SIZE, SidImage
+from .registers import RegisterStore, find_register_stores
 from .source import Source, read_bytes
+from .trace import InitTrace, trace_init
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "BaseSidParser",
+    "CodePattern",
     "Detection",
     "EmulatorUnavailable",
+    "InitTrace",
     "MEM_SIZE",
+    "Match",
     "PSID_MAGIC",
     "PlayroutineKind",
     "RSID_MAGIC",
     "Recognizer",
+    "RegisterStore",
     "SidError",
     "SidFormatError",
     "SidHeader",
@@ -44,7 +52,12 @@ __all__ = [
     "Source",
     "__version__",
     "detect_playroutine",
+    "find_code_all",
+    "find_code_first",
+    "find_register_stores",
     "parse_sid_header",
     "read_bytes",
+    "registers",
     "run_init",
+    "trace_init",
 ]
