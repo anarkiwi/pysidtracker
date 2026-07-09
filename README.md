@@ -30,10 +30,13 @@ Provides one implementation of the pieces every format parser duplicated:
 ## Install
 
 ```
-pip install pysidtracker          # core (stdlib only)
-pip install pysidtracker[emu]     # + py65, to unpack packed/relocating tunes
+pip install pysidtracker          # core (includes py65 for init emulation)
 pip install pysidtracker[fast]    # + numpy, to accelerate the image scan
 ```
+
+py65 is a required dependency (detection runs a tune's 6502 init routine to
+unpack packed/relocating playroutines). numpy is optional (a pure-stdlib scan
+fallback is used when it is absent).
 
 ## Usage
 

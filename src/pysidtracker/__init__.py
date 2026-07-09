@@ -29,7 +29,7 @@ from .registers import RegisterStore, find_register_stores
 from .source import Source, read_bytes
 from .trace import InitTrace, trace_init
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "BaseSidParser",
