@@ -1,0 +1,80 @@
+# Publishes pysidtracker to PyPI when a GitHub release is published, using
+# PyPI trusted publishing (OIDC) -- no API token stored in the repo.
+#
+# Setup checklist (do this once, in the repository's GitHub settings):
+#   1. Register the project on PyPI:
+#        https://pypi.org/manage/account/publishing/
+#      Add a new "pending" trusted publisher with:
+#        - PyPI project name:  pysidtracker
+#        - Owner:              anarkiwi
+#        - Repository name:    pysidtracker
+#        - Workflow filename:  publish.yml
+#        - Environment name:   pypi
+#   2. In this repo, create an Environment named "pypi" (Settings ->
+#      Environments -> New environment). No secrets are required when
+#      using trusted publishing.
+#
+# After the trusted publisher is configured, cutting a GitHub release will
+# build sdist + wheel and upload them via OIDC -- no PyPI token needed.
+
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Smoke test the wheel
+        run: |
+          pip install dist/*.whl
+          python -c "import pysidtracker; print(pysidtracker.__version__)"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Only run on real releases, not on workflow_dispatch dry runs.
+    if: github.event_name == 'release'
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pysidtracker/
+    permissions:
+      # Required for PyPI trusted publishing (OIDC).
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
