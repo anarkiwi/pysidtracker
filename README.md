@@ -1,42 +1,44 @@
 # pysidtracker
 
 Shared base for the pure-Python C64 SID tracker parsers (pygoattracker,
-pysidwizard, pydmcsid, pyfuturecomposer, pymusicassembler, pydefmon, pyjch).
+pysidwizard, pydmcsid, pyfuturecomposer, pymusicassembler, pydefmon, pyjch,
+pysoundmonitor).
 
-Provides one implementation of the pieces every format parser duplicated:
+Reads `.sid` containers (PSID/RSID) and bare `.prg` images into a 64 KiB C64
+memory model, and detects packed/relocating playroutines by running the tune's
+init in a 6502 emulator — container headers are not trusted. Each format
+package subclasses `BaseSidParser` for a consistent `read` / `parse` / `detect`
+API.
 
-- **`parse_sid_header` / `SidHeader`** — PSID/RSID container header parsing.
-- **`SidImage`** — a loaded 64 KiB C64 memory image with absolute-addressed
+## Components
+
+- `parse_sid_header` / `SidHeader` — PSID/RSID container header parsing.
+- `SidImage` — a loaded 64 KiB C64 memory image with absolute-addressed
   accessors, from a `.sid` container or a bare `.prg`.
-- **`read_bytes`** — path / `bytes` / file-like source dispatch.
-- **`SidError` hierarchy** — `SidParseError`, `SidFormatError`,
+- `read_bytes` — path / `bytes` / file-like source dispatch.
+- `SidError` hierarchy — `SidParseError`, `SidFormatError`,
   `EmulatorUnavailable`.
-- **`detect_playroutine` / `PlayroutineKind`** — the untrustworthy-header
-  detector: static signature recognition first, then an emulated init run to
-  classify `DIRECT` / `RELOCATED` / `PACKED` / `UNKNOWN` playroutines.
-- **`BaseSidParser`** — the class each format subclasses for a consistent
-  `read` / `parse` / `detect` API.
-- **`CodePattern` / `find_code_all` / `find_code_first`** — masked 6502
-  code-fragment search with operand capture: locate a player fingerprint by its
-  opcode skeleton (per-tune operand bytes wildcarded) and read the captured
-  immediate/address. The one primitive every relocatable player's reader needs.
-- **`registers`** — documented C64 hardware register map (SID/CIA/VIC, IRQ/NMI
-  and CPU vectors) with predicates (`is_sid_reg`, `is_cia_timer`, …) and
-  `find_register_stores`, a scanner for absolute stores to a set of addresses.
-- **`trace_init` / `InitTrace`** — run a tune's init in py65 under a write
-  observer and report where it programs the CIA timer latch (cadence) and the
-  IRQ/NMI vectors (the real play routine an IRQ-driven header hides).
+- `detect_playroutine` / `PlayroutineKind` — static signature recognition, then
+  an emulated init run to classify `DIRECT` / `RELOCATED` / `PACKED` /
+  `UNKNOWN`.
+- `BaseSidParser` — the base class each format subclasses.
+- `CodePattern` / `find_code_all` / `find_code_first` — masked 6502
+  code-fragment search with operand capture.
+- `registers` — C64 hardware register map (SID/CIA/VIC, IRQ/NMI and CPU
+  vectors) with predicates and `find_register_stores`.
+- `trace_init` / `InitTrace` — run a tune's init under a write observer to
+  report CIA timer cadence and the IRQ/NMI vectors an IRQ-driven header hides.
 
 ## Install
 
-```
+```bash
 pip install pysidtracker          # core (includes py65 for init emulation)
 pip install pysidtracker[fast]    # + numpy, to accelerate the image scan
 ```
 
-py65 is a required dependency (detection runs a tune's 6502 init routine to
-unpack packed/relocating playroutines). numpy is optional (a pure-stdlib scan
-fallback is used when it is absent).
+py65 is required (detection runs a tune's 6502 init to unpack
+packed/relocating playroutines). numpy is optional; a pure-stdlib scan is used
+when it is absent.
 
 ## Usage
 
@@ -45,9 +47,9 @@ from pysidtracker import BaseSidParser, PlayroutineKind
 
 class MyParser(BaseSidParser):
     def recognize(self, image):
-        return image.find(b"MYSIG")          # truthy anchor when found
+        return image.find(b"MYSIG")            # truthy anchor when found
     def parse(self, data, **kw):
-        image = self.load_image(data)
+        image = self.load_image(data)          # .sid or .prg -> SidImage
         ...                                    # decode image.mem into a model
 
 det = MyParser().detect("tune.sid")
@@ -55,14 +57,17 @@ if det.kind is PlayroutineKind.PACKED:
     ...                                        # header was not trustworthy
 ```
 
-See [docs/design.md](docs/design.md) for the detection model and how the
-format packages consume this base.
-
 ## Development
 
-```
+```bash
 pip install -e ".[dev]"
 pytest --cov=pysidtracker
 ```
 
-Apache-2.0 licensed.
+See [docs/design.md](docs/design.md) for the detection model and shared
+primitives, and [docs/adoption.md](docs/adoption.md) for how the format
+packages consume this base.
+
+## License
+
+Apache 2.0 — see [`LICENSE`](LICENSE).
