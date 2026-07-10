@@ -98,8 +98,7 @@ pytest --cov=pysidtracker
 ```
 
 See [docs/design.md](docs/design.md) for the detection model and shared
-primitives, and [docs/adoption.md](docs/adoption.md) for how the format
-packages consume this base.
+primitives.
 
 ## License
 
