@@ -26,10 +26,13 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional, Tuple
 
 from .errors import EmulatorUnavailable, SidParseError
+from .header import SidHeader
 from .image import MEM_SIZE, SidImage
+
+JMP_ABS = 0x4C
 
 # recognize(image) -> anchor (any truthy value) if the format is found, else None.
 Recognizer = Callable[[SidImage], object]
@@ -185,6 +188,36 @@ def _count_written_outside(mem: bytearray, load: int, end: int) -> int:
     return written
 
 
+def resolve_entry_points(
+    header: Optional[SidHeader],
+    load: int,
+    default_init: Optional[int] = None,
+    default_play: Optional[int] = None,
+) -> Tuple[int, int]:
+    """Resolve a tune's ``(init, play)`` addresses with the SID zero fallback.
+
+    When ``header`` is present, an ``init``/``play`` field of ``0`` means "use
+    the load address" (the documented SID convention). For a bare ``.prg``
+    (``header is None``) the ``default_init``/``default_play`` are used, each
+    falling back to ``load`` when not given.
+    """
+    if header is not None:
+        init = header.init_address or load
+        play = header.play_address or load
+    else:
+        init = load if default_init is None else default_init
+        play = load if default_play is None else default_play
+    return init, play
+
+
+def is_jmp_vector(image: SidImage, addr: int) -> bool:
+    """True if ``addr`` holds a ``JMP abs`` ($4C) whose target is in the image."""
+    if not image.contains(addr) or image.peek(addr) != JMP_ABS:
+        return False
+    target = image.peek(addr + 1) | (image.peek(addr + 2) << 8)
+    return image.contains(target)
+
+
 def run_init(image: SidImage, subtune: int = 0, max_cycles: int = 8_000_000) -> None:
     """Run the tune's init routine in a 6502 emulator so data lands in place.
 
@@ -201,7 +234,7 @@ def run_init(image: SidImage, subtune: int = 0, max_cycles: int = 8_000_000) -> 
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise EmulatorUnavailable(
             "py65 is required to unpack this tune (packed/relocating): "
-            "pip install pysidtracker[emu]"
+            "pip install pysidtracker"
         ) from exc
     mpu = MPU(memory=image.mem)
     start_sp = mpu.sp

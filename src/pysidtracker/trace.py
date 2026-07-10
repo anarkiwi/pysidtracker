@@ -12,8 +12,8 @@ hardware-register and interrupt-vector addresses, optionally calls the play
 address a few times, and returns an :class:`InitTrace` recording *where* the
 vectors were programmed and *to what*: the CIA timer latches (the cadence), the
 installed IRQ vector (the real play routine), the NMI vector, the VIC raster
-compare, the set of registers touched, and the SID writes. Requires the optional
-``py65`` dependency (the ``emu`` extra); raises
+compare, the set of registers touched, and the SID writes. Requires the core
+``py65`` dependency; raises
 :class:`~pysidtracker.errors.EmulatorUnavailable` if it is missing, consistent
 with :func:`run_init`.
 """
@@ -153,7 +153,7 @@ def trace_init(
     ``play_calls`` times (each also observed). ``subtune`` is passed to init in
     the accumulator (the SID calling convention).
 
-    Requires the optional ``py65`` dependency; raises
+    Requires the core ``py65`` dependency; raises
     :class:`~pysidtracker.errors.EmulatorUnavailable` if it is missing and
     :class:`~pysidtracker.errors.SidParseError` if the image has no init address.
     """
@@ -164,7 +164,7 @@ def trace_init(
         from py65.memory import ObservableMemory
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise EmulatorUnavailable(
-            "py65 is required to trace init: pip install pysidtracker[emu]"
+            "py65 is required to trace init: pip install pysidtracker"
         ) from exc
 
     writes: Dict[int, int] = {}

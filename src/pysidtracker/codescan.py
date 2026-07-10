@@ -33,9 +33,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from .image import MEM_SIZE, SidImage
+
+CodeBuffer = Union[SidImage, bytes, bytearray, memoryview]
 
 try:  # numpy is an optional accelerator, never required.
     import numpy as _np
@@ -54,10 +56,22 @@ class Match:
       addr: C64 address of the first pattern byte.
       captures: operand values keyed by capture name (a byte for ``{name}``,
         a little-endian word for ``{name:w}``).
+      buf: the scanned buffer, so :meth:`u8`/:meth:`u16` can read operand bytes
+        at an offset from :attr:`addr` (excluded from equality/hash).
     """
 
     addr: int
     captures: Dict[str, int] = field(default_factory=dict)
+    buf: Optional[bytes] = field(default=None, compare=False, repr=False)
+
+    def u8(self, offset: int = 0) -> int:
+        """The byte ``offset`` bytes into the match."""
+        return self.buf[self.addr + offset]
+
+    def u16(self, offset: int = 0) -> int:
+        """The little-endian word ``offset`` bytes into the match."""
+        base = self.addr + offset
+        return self.buf[base] | (self.buf[base + 1] << 8)
 
 
 class CodePattern:
@@ -108,10 +122,15 @@ class CodePattern:
 
 
 def _buffer_and_range(
-    image: SidImage, start: Optional[int], end: Optional[int]
+    source: CodeBuffer, start: Optional[int], end: Optional[int]
 ) -> Tuple[bytes, int, int]:
-    buf = bytes(image.mem)
-    lo = image.load if start is None else start
+    if isinstance(source, SidImage):
+        buf = bytes(source.mem)
+        default_lo = source.load
+    else:
+        buf = bytes(source)
+        default_lo = 0
+    lo = default_lo if start is None else start
     hi = MEM_SIZE if end is None else end
     return buf, max(0, lo), min(len(buf), hi)
 
@@ -152,7 +171,7 @@ def _matches_literals(buf: Sequence[int], pat: CodePattern, addr: int) -> bool:
 
 
 def find_code_all(
-    image: SidImage,
+    image: CodeBuffer,
     pattern: CodePattern | str,
     *,
     start: Optional[int] = None,
@@ -160,21 +179,23 @@ def find_code_all(
 ) -> List[Match]:
     """Every match of ``pattern`` in ``image`` at or after ``start``.
 
-    ``pattern`` may be a compiled :class:`CodePattern` or a spec string.
-    Searches ``image.mem`` over ``[start, end)`` (default ``image.load`` to the
-    top of memory). Matches are returned in ascending address order.
+    ``image`` may be a :class:`~pysidtracker.SidImage` or a raw
+    ``bytes``/``bytearray``/``memoryview`` buffer. ``pattern`` may be a compiled
+    :class:`CodePattern` or a spec string. Searches over ``[start, end)``
+    (default: the image load address, or 0 for a raw buffer, to the top of
+    memory). Matches are returned in ascending address order.
     """
     pat = pattern if isinstance(pattern, CodePattern) else CodePattern(pattern)
     buf, lo, hi = _buffer_and_range(image, start, end)
     out: List[Match] = []
     for addr in _candidate_starts(buf, pat, lo, hi):
         if _matches_literals(buf, pat, addr):
-            out.append(Match(addr, pat._read_captures(buf, addr)))
+            out.append(Match(addr, pat._read_captures(buf, addr), buf))
     return out
 
 
 def find_code_first(
-    image: SidImage,
+    image: CodeBuffer,
     pattern: CodePattern | str,
     *,
     start: Optional[int] = None,
@@ -188,5 +209,5 @@ def find_code_first(
     buf, lo, hi = _buffer_and_range(image, start, end)
     for addr in _candidate_starts(buf, pat, lo, hi):
         if _matches_literals(buf, pat, addr):
-            return Match(addr, pat._read_captures(buf, addr))
+            return Match(addr, pat._read_captures(buf, addr), buf)
     return None

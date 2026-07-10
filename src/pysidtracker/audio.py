@@ -69,6 +69,39 @@ def default_device(model: str, sampling_frequency=None, clock_frequency=None):
 _default_device = default_device
 
 
+def resolve_device(device=None, model: str = "6581", sampling_frequency=None):
+    """Return a render device, validating ``model`` and building the default.
+
+    Centralises the model-in-:data:`CHIP_MODELS` check plus default pyresidfp
+    device creation every leaf's ``audio.py`` duplicated. When ``device`` is
+    given it is validated (``model``) and returned as-is; otherwise the default
+    device is built (which raises :class:`~pysidtracker.errors.AudioUnavailable`
+    if pyresidfp is missing). Raises ``ValueError`` for an unknown ``model``.
+    """
+    if model not in CHIP_MODELS:
+        raise ValueError(f"chip model must be one of {CHIP_MODELS}")
+    if device is not None:
+        return device
+    return default_device(model, sampling_frequency)
+
+
+def seconds_to_frames(
+    seconds: float, cycles_per_frame: int, clock_frequency: float
+) -> int:
+    """Frames spanning ``seconds`` at ``cycles_per_frame`` / ``clock_frequency``.
+
+    At least one frame is always returned (a non-looping render needs a bound).
+    """
+    return max(1, round(seconds / (cycles_per_frame / clock_frequency)))
+
+
+def frames_to_seconds(
+    frames: int, cycles_per_frame: int, clock_frequency: float
+) -> float:
+    """Seconds spanned by ``frames`` at ``cycles_per_frame`` / ``clock_frequency``."""
+    return frames * cycles_per_frame / clock_frequency
+
+
 def device_sampling_frequency(device) -> float:
     """The output sampling frequency (Hz) of a rendered ``device``."""
     return float(device.sampling_frequency)

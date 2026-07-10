@@ -37,7 +37,24 @@ SID_MODE_VOL = 0xD418  # filter mode + master volume
 
 # The three SID voices are identical 7-register blocks; add a voice offset to a
 # voice-1 register to reach the same register in voice 2 or 3.
+SID_VOICES = 3
+SID_VOICE_REG_SIZE = 7
 SID_VOICE_OFFSET = (0, 7, 14)
+
+# Voice-relative SID register indices (offset within a voice's 7-register block).
+FREQ_LO = 0
+FREQ_HI = 1
+PW_LO = 2
+PW_HI = 3
+CTRL = 4
+AD = 5
+SR = 6
+
+# Global SID register indices (offset within the 25-register file from $D400).
+FC_LO = 0x15
+FC_HI = 0x16
+RES_FILT = 0x17
+MODE_VOL = 0x18
 # The pulse-width-high registers ($D403/$D40A/$D411): only the low 4 bits are
 # significant (12-bit pulse width), so a register grid masks them to a nibble.
 PW_HI_REGS = (0x03, 0x0A, 0x11)
@@ -228,3 +245,19 @@ def find_register_stores(image: SidImage, addrs: Iterable[int]) -> List[Register
 def sid_write_band(*, lo: int = SID_BASE, hi: int = SID_MODE_VOL) -> Sequence[int]:
     """The inclusive SID register address range ``lo..hi`` as a sequence."""
     return range(lo, hi + 1)
+
+
+def _nibble(value: int, what: str) -> int:
+    if not 0 <= value <= 15:
+        raise ValueError(f"{what} out of nibble range (0..15): {value}")
+    return value
+
+
+def attack_decay(attack: int, decay: int) -> int:
+    """Pack an ADSR attack/decay byte (``attack<<4 | decay``); nibbles validated."""
+    return (_nibble(attack, "attack") << 4) | _nibble(decay, "decay")
+
+
+def sustain_release(sustain: int, release: int) -> int:
+    """Pack an ADSR sustain/release byte (``sustain<<4 | release``); validated."""
+    return (_nibble(sustain, "sustain") << 4) | _nibble(release, "release")
