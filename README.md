@@ -28,12 +28,22 @@ API.
   vectors) with predicates and `find_register_stores`.
 - `trace_init` / `InitTrace` — run a tune's init under a write observer to
   report CIA timer cadence and the IRQ/NMI vectors an IRQ-driven header hides.
+- `reglog` — `RegWrite` register-log format (`read_reglog` / `write_reglog`) and
+  `frame_writes`, the shared per-frame SID-write framing loop.
+- `oracle` — per-frame SID register grids: `register_grid` (py65), the stdlib
+  `grid_from_writes` framer, `read_sidwr` (`preframr-sidtrace` `.sidwr.bin`),
+  and `aligned_match`.
+- `testing` — HVSC tune fetch/resolve for test suites (`fetch_tune`,
+  `resolve_tune`, `make_tune_fixtures`).
+- `audio` — `render_samples` / `render_wav` through an emulated SID (pyresidfp,
+  `audio` extra).
 
 ## Install
 
 ```bash
 pip install pysidtracker          # core (includes py65 for init emulation)
 pip install pysidtracker[fast]    # + numpy, to accelerate the image scan
+pip install pysidtracker[audio]   # + pyresidfp, for WAV/sample rendering
 ```
 
 py65 is required (detection runs a tune's 6502 init to unpack

@@ -87,3 +87,81 @@ optionally overrides `recognize(image) -> anchor` to opt into detection. It
 inherits `read`, `load_image`, and `detect`. Format-specific error classes
 subclass `SidError` (or `SidParseError`) so `except SidError` works across all
 of them.
+
+## 0.3.0 shared player/validation surfaces
+
+Five surfaces the format packages had each hand-copied during byte-exact HVSC
+validation, consolidated here.
+
+### Hardware constants (`registers`)
+
+`registers` gains documented C64 timing/layout facts: `PAL_CYCLES_PER_FRAME`
+(19656), `NTSC_CYCLES_PER_FRAME` (17095), `PAL_CLOCK_HZ` (985248),
+`NTSC_CLOCK_HZ` (1022727), `PW_HI_REGS` (`(0x03, 0x0A, 0x11)` — the
+pulse-width-high register offsets, masked to 4 bits in a register grid),
+`SID_VOICE_OFFSET` (`(0, 7, 14)`) and `SID_REG_COUNT` (25, the `$D400..$D418`
+file). `SID_BASE` (`0xD400`) is unchanged.
+
+### `reglog` — register-write log convention
+
+A register log is a player's output flattened to timed chip writes: one
+`RegWrite(clock, reg, val)` (namedtuple; `reg` is the `0..$18` offset from
+`$D400`) per SID write, serialized as one decimal `clock reg val` triple per
+line (`#` comments allowed, first line `REGLOG_HEADER`).
+
+- `write_reglog(writes, dst, header=True)` / `read_reglog(src)` — path or text
+  file-like; a malformed line raises `SidParseError` (not `ValueError`).
+- `frame_writes(per_frame_iter, *, cycles_per_frame, write_spacing=16,
+  start_frame=0, sid_reg_base=0xD400, reg_count=25)` — the shared framing loop.
+  For frame `f`, each `(reg, val)` write is rebased (`reg - sid_reg_base`) and
+  masked (`val & 0xFF`); rebased regs in `0..0x18` are emitted at
+  `clock = f*cycles_per_frame + offset*write_spacing` (`offset` increments per
+  emitted write). Pass `sid_reg_base=0` when the player already yields `0..24`
+  offsets. Raises `SidParseError` if `write_spacing * reg_count >=
+  cycles_per_frame`.
+
+### `oracle` — register-grid ground truth
+
+- `register_grid(image_or_bytes, nframes, *, subtune=0, illegal_opcodes=False)`
+  — runs `init` (accumulator `= subtune`) then `nframes` `play` calls on py65
+  (reusing `trace._run_to_rts`), sampling `$D400..$D418` (25 registers) per
+  frame. A minimal VIC raster (`$D011`/`$D012`) + SID-read (`$D41B`/`$D41C`)
+  read model lets init loops terminate. `illegal_opcodes=True` installs the
+  NMOS illegal opcodes (SBX/ANC/ALR/ARR/SBC/LAX/SAX + NOP illegals) defMON
+  needs (default off). Requires py65; raises `EmulatorUnavailable` if missing.
+- `grid_from_writes(writes, *, cycles_per_frame=19656, reg_count=25,
+  pw_hi_regs=(0x03,0x0A,0x11), gap=10000)` — pure-stdlib framer: anchor frame 0
+  to the first play call (first write after a `>gap`-cycle gap), forward-fill,
+  nibble-mask `pw_hi_regs`; frame assignment rounds to nearest
+  (`(clock - t0 + cpf//2)//cpf`).
+- `read_sidwr(path)` — parse a `preframr-sidtrace` `.sidwr.bin` record stream
+  (`struct.Struct("<qHBB")` = clock, addr, reg, val); drops the addr field and
+  records with `reg >= 25`, returning `(clock, reg, val)` triples.
+- `aligned_match(oracle, rendered, *, max_lead=4) -> bool` — True if `rendered`
+  matches `oracle` allowing up to `max_lead` leading silent frames.
+
+### `testing` — HVSC fetch/resolve
+
+Ships in the wheel (pure stdlib + a lazy pytest import).
+
+- `DEFAULT_MIRROR = "https://hvsc.brona.dk/HVSC/C64Music"` (`$HVSC_MIRROR`
+  overrides).
+- `fetch_tune(relpath, *, cache_dir, mirror=DEFAULT_MIRROR, retries=4,
+  force=False)` — cache-check, HTTPS GET with a User-Agent, PSID/RSID magic
+  validation, exponential backoff, atomic write; raises `TuneFetchError` on a
+  404 or after `retries`.
+- `resolve_tune(relpath, *, cache_dir, local_env="HVSC")` — local `$HVSC` tree,
+  then `cache_dir`, then fetch; `None` only when genuinely unreachable.
+- `make_tune_fixtures(tunes, cache_dir, ...)` — a pytest fixture factory
+  returning parametrized `tune_id` / `tune_path` fixtures (pytest imported
+  lazily).
+
+### `audio` — pyresidfp WAV render (`audio` extra)
+
+`render_samples(frame_iter, *, model, sampling_frequency, cycles_per_frame,
+clock_frequency, write_spacing=16, device=None)` and `render_wav(...)` clock a
+per-frame `(reg, val)` write stream through an emulated SID one write at a time
+(so renders line up with `reglog`). `model` in `("6581", "8580")`. pyresidfp is
+imported lazily; a missing `audio` extra raises `AudioUnavailable`. Any object
+with `write_register` / `clock(timedelta)` / `sampling_frequency` may be passed
+as `device`.

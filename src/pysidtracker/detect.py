@@ -156,6 +156,8 @@ def run_init(image: SidImage, subtune: int = 0, max_cycles: int = 8_000_000) -> 
     """
     if image.header is None:
         raise SidParseError("cannot run init: image has no SID header")
+    # TODO(pydexomizer): a native pure-Python exomizer decruncher is coming as
+    # an alternative to emulated-init unpacking for packed images.
     init_address = image.header.init_address or image.header.real_load_address
     try:
         from py65.devices.mpu6502 import MPU
