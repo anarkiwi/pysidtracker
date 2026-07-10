@@ -4,26 +4,27 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.3.0"
+version = "0.4.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
-requires-python = ">=3.10"
+# pydexomizer (a core dependency) requires Python >= 3.11.
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Josh Bailey" }]
 keywords = ["sid", "c64", "psid", "rsid", "tracker", "chiptune"]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Sound/Audio",
 ]
-# py65 is a core dependency: detection unpacks packed/relocating tunes by
-# running their 6502 init routine (run_init / trace_init), and every dependent
-# parser relies on that path being available.
-dependencies = ["py65>=1.1"]
+# Core dependencies. py65: detection unpacks packed/relocating tunes by running
+# their 6502 init routine (run_init / trace_init / playroutine_cadence), and
+# every dependent parser relies on that path. pydexomizer: native pure-Python
+# exomizer decrunch (native_decrunch), the init-free alternative unpack path.
+dependencies = ["py65>=1.1", "pydexomizer>=0.1"]
 
 [project.optional-dependencies]
 # Kept for backward compatibility; py65 is now a core dependency (above).
@@ -38,6 +39,7 @@ dev = [
     "black>=24",
     "numpy>=1.23",
     "py65>=1.1",
+    "pydexomizer>=0.1",
     "pylint>=3",
     "pytest>=7",
     "pytest-cov>=4",

@@ -82,13 +82,22 @@ def detect_playroutine(
     *,
     init: bool = True,
     subtune: int = 0,
+    native: bool = False,
 ) -> Detection:
     """Classify how ``image`` presents its playroutine data.
 
     ``recognize`` inspects the (possibly unpacked) image and returns a truthy
     anchor when it finds the format, else ``None``. When static recognition
-    fails and ``init`` is true, the init routine is emulated (requires the
-    optional ``py65`` dependency) and recognition retried.
+    fails and ``init`` is true, the init routine is emulated (requires the core
+    ``py65`` dependency) and recognition retried.
+
+    When ``native`` is true, an exomizer-packed image is first decrunched
+    natively (:func:`pysidtracker.decrunch.native_decrunch`, no init emulated);
+    if that unpacks a recognisable image it is reported as
+    :attr:`PlayroutineKind.PACKED` with ``ran_init=False``. Native decrunch is
+    opt-in and only a first try -- it falls back to the emulated-init path
+    below when the image is not exomizer-packed or stays unrecognised, so the
+    default behaviour is unchanged.
 
     Raises :class:`EmulatorUnavailable` if emulation is needed but ``py65`` is
     not installed.
@@ -96,6 +105,12 @@ def detect_playroutine(
     anchor = recognize(image)
     if anchor:
         return Detection(PlayroutineKind.DIRECT, ran_init=False, anchor=anchor)
+
+    if native:
+        native_hit = _try_native_decrunch(image, recognize)
+        if native_hit is not None:
+            return native_hit
+
     if not init:
         return Detection(PlayroutineKind.UNKNOWN, ran_init=False)
 
@@ -129,6 +144,30 @@ _STACK_LO = 0x0100
 _STACK_HI = 0x0200
 
 
+def _try_native_decrunch(image: SidImage, recognize: Recognizer):
+    """Native exomizer decrunch first-try; a :class:`Detection` or ``None``.
+
+    Returns a ``PACKED`` detection (``ran_init=False``) when native decrunch
+    unpacks an image the ``recognize`` callback then accepts, else ``None`` so
+    the caller falls back to the emulated-init path.
+    """
+    from .decrunch import native_decrunch
+
+    unpacked = native_decrunch(image)
+    if unpacked is None:
+        return None
+    anchor = recognize(unpacked)
+    if not anchor:
+        return None
+    written = sum(1 for value in unpacked.mem if value)
+    return Detection(
+        PlayroutineKind.PACKED,
+        ran_init=False,
+        anchor=anchor,
+        written_outside=written,
+    )
+
+
 def _count_changed(mem: bytearray, load: int, snapshot: bytes) -> int:
     return sum(1 for i, b in enumerate(snapshot) if mem[load + i] != b)
 
@@ -156,8 +195,6 @@ def run_init(image: SidImage, subtune: int = 0, max_cycles: int = 8_000_000) -> 
     """
     if image.header is None:
         raise SidParseError("cannot run init: image has no SID header")
-    # TODO(pydexomizer): a native pure-Python exomizer decruncher is coming as
-    # an alternative to emulated-init unpacking for packed images.
     init_address = image.header.init_address or image.header.real_load_address
     try:
         from py65.devices.mpu6502 import MPU

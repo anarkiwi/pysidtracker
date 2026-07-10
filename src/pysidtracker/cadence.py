@@ -1,0 +1,172 @@
+"""Derive a tune's play-routine cadence from what its init actually programs.
+
+*Playroutine cadence* -- the number of CPU cycles between consecutive
+play-routine calls -- is a global SID concept, not a per-format constant. It is
+set by whichever source triggers the play interrupt:
+
+* a **PAL** video frame (``PAL_CYCLES_PER_FRAME`` = 19656 cycles),
+* an **NTSC** video frame (``NTSC_CYCLES_PER_FRAME`` = 17095 cycles), or
+* a **CIA timer** (or NMI timer) whose latch defines an arbitrary period
+  (e.g. a defMON tune driving its own tempo).
+
+The SID header's advertised speed/clock fields are only a *hint* -- packed and
+IRQ-driven tunes program the real trigger from inside their init routine, and a
+player can even reprogram the timer mid-tune. :func:`playroutine_cadence`
+therefore *derives* the cadence by tracing what init installs (reusing
+:func:`pysidtracker.trace.trace_init`), not by trusting the header.
+
+CIA timer period
+----------------
+A CIA timer in continuous (reload) mode is loaded with its 16-bit latch ``L``
+and counts ``L, L-1, ..., 1, 0``; on the cycle after it reaches ``0`` it
+underflows (raising the interrupt) and reloads ``L``. Two consecutive
+underflows are therefore ``L + 1`` cycles apart, so
+``cycles_per_call = latch + 1``. This is validated against a real defMON tune:
+its init latches ``0x5BF9`` (23545), which yields the documented defMON cadence
+of ``23546`` cycles per call.
+"""
+
+from __future__ import annotations
+
+import enum
+from dataclasses import dataclass
+from typing import Optional, Union
+
+from . import registers as reg
+from .errors import EmulatorUnavailable
+from .image import SidImage
+from .trace import trace_init
+
+# A CIA Timer-A latch below this is not a plausible play cadence (it is a
+# lo-byte-only artefact, e.g. the ``$FF`` a reset writes to ``$DC04``); a real
+# play period always programs the hi byte, so it is >= 256.
+_MIN_CIA_LATCH = 0x100
+
+
+class TriggerSource(enum.Enum):
+    """What triggers each play-routine call."""
+
+    PAL_VIDEO = "pal_video"  # PAL raster/VBI frame (19656 cycles)
+    NTSC_VIDEO = "ntsc_video"  # NTSC raster/VBI frame (17095 cycles)
+    CIA_TIMER = "cia_timer"  # a CIA (or NMI) timer latch period
+
+
+@dataclass(frozen=True)
+class Cadence:
+    """The derived play-routine cadence of a tune.
+
+    Attributes:
+      cycles_per_call: CPU cycles between consecutive play calls.
+      source: the :class:`TriggerSource` driving the cadence.
+      clock_hz: the CPU clock (``PAL_CLOCK_HZ`` / ``NTSC_CLOCK_HZ``) for the
+        resolved video standard; combine with ``cycles_per_call`` for the call
+        rate in Hz (``clock_hz / cycles_per_call``).
+      latch: the CIA Timer-A latch when CIA-driven, else ``None``.
+      dynamic: True if the tune rewrites the timer latch to a different value
+        during play (a variable-tempo player); the reported ``cycles_per_call``
+        is then only the initial cadence.
+    """
+
+    cycles_per_call: int
+    source: TriggerSource
+    clock_hz: int
+    latch: Optional[int] = None
+    dynamic: bool = False
+
+    @property
+    def calls_per_second(self) -> float:
+        """The play-call rate in Hz (``clock_hz / cycles_per_call``)."""
+        return self.clock_hz / self.cycles_per_call
+
+
+def _resolve_standard(image: SidImage, clock: Optional[str]) -> bool:
+    """Return True for NTSC, False for PAL.
+
+    Honours an explicit ``clock`` ("PAL"/"NTSC"); else reads the PSID/RSID v2+
+    header ``flags`` clock bits (bits 2-3: 01=PAL, 10=NTSC) as a hint; defaults
+    to PAL.
+    """
+    if clock is not None:
+        key = clock.strip().upper()
+        if key == "NTSC":
+            return True
+        if key == "PAL":
+            return False
+        raise ValueError(f"clock must be 'PAL' or 'NTSC', got {clock!r}")
+    if image.header is not None:
+        clock_bits = (image.header.flags >> 2) & 0x3
+        if clock_bits == 0b10:  # NTSC
+            return True
+    return False  # PAL default (also for %00 unknown and %11 both)
+
+
+def _cia_latch(trace) -> tuple[Optional[int], Optional[int]]:
+    """The plausible CIA Timer-A play latch and its mid-play rewrite, if any.
+
+    Prefers CIA #1 over CIA #2. Returns ``(latch, rewritten_latch)`` where
+    either may be ``None``.
+    """
+    for latch, rewritten in (
+        (trace.cia1_timer_latch, trace.cia1_latch_rewritten),
+        (trace.cia2_timer_latch, trace.cia2_latch_rewritten),
+    ):
+        if latch is not None and latch >= _MIN_CIA_LATCH:
+            return latch, rewritten
+    return None, None
+
+
+def playroutine_cadence(
+    image_or_bytes: Union[SidImage, bytes, bytearray],
+    *,
+    clock: Optional[str] = None,
+    play_calls: int = 8,
+) -> Cadence:
+    """Derive the play-routine :class:`Cadence` of a tune.
+
+    Resolves the video standard (explicit ``clock``, else the header clock-bit
+    hint, else PAL), then traces the tune's init (and ``play_calls`` play calls)
+    to observe the real trigger. If init programs a plausible CIA Timer-A latch,
+    the cadence is CIA-driven (``cycles_per_call = latch + 1``); otherwise it is
+    video-timed (one PAL/NTSC frame). ``dynamic`` is set when a play call
+    rewrites the latch to a different value.
+
+    Requires the ``py65`` emulator (a core dependency); raises
+    :class:`~pysidtracker.errors.EmulatorUnavailable` if it is missing.
+    """
+    image = (
+        image_or_bytes
+        if isinstance(image_or_bytes, SidImage)
+        else SidImage.from_bytes(bytes(image_or_bytes))
+    )
+    ntsc = _resolve_standard(image, clock)
+    clock_hz = reg.NTSC_CLOCK_HZ if ntsc else reg.PAL_CLOCK_HZ
+
+    trace = trace_init(image, play_calls=play_calls)
+    latch, rewritten = _cia_latch(trace)
+
+    if latch is not None:
+        # CIA/NMI timer drives the play interrupt: the latch IS the cadence.
+        return Cadence(
+            cycles_per_call=latch + 1,
+            source=TriggerSource.CIA_TIMER,
+            clock_hz=clock_hz,
+            latch=latch,
+            dynamic=rewritten is not None,
+        )
+
+    frame = reg.NTSC_CYCLES_PER_FRAME if ntsc else reg.PAL_CYCLES_PER_FRAME
+    source = TriggerSource.NTSC_VIDEO if ntsc else TriggerSource.PAL_VIDEO
+    # TODO: a full per-call cadence schedule (video tunes that switch to a CIA
+    # timer mid-play, or multi-speed raster) is a future extension; for now a
+    # video-timed tune reports a single constant frame cadence.
+    return Cadence(
+        cycles_per_call=frame,
+        source=source,
+        clock_hz=clock_hz,
+        latch=None,
+        dynamic=False,
+    )
+
+
+# EmulatorUnavailable is surfaced by trace_init; re-exported name for callers.
+__all__ = ["TriggerSource", "Cadence", "playroutine_cadence", "EmulatorUnavailable"]

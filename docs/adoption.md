@@ -151,3 +151,16 @@ delegating the fetch to `pysidtracker.testing`.
 | --- | --- |
 | `pygoattracker` / `pyfuturecomposer` / `pymusicassembler` `src/*/audio.py` (`_default_device`, `render_samples`, `write_wav`, `render_wav`) | `pysidtracker.audio` (behind the `audio` extra). Pass the package player's per-frame `(reg, val)` iterables as `frame_iter`; supply `cycles_per_frame` / `clock_frequency` from `registers`. |
 | per-package `CHIP_MODELS`, pyresidfp import guard raising the format error | `pysidtracker.audio.CHIP_MODELS`; a missing extra raises `AudioUnavailable`. |
+| the private `_default_device` import each `audio.py` copied | the public `default_device(model, sampling_frequency, clock_frequency)`; read a device's rate with `device_sampling_frequency(device)`. `_default_device` stays as a back-compat alias. |
+
+## 0.4.0 cadence + native decrunch
+
+| Parser's old code | Replace with |
+| --- | --- |
+| per-format play-cadence **constants** (e.g. pydefmon's hard-coded CIA period `23546`, per-format PAL/NTSC frame constants keyed off the header) | `playroutine_cadence(image_or_bytes, clock=None)` — derives the cadence from what init actually programs (video frame vs CIA-timer latch), returning a `Cadence(cycles_per_call, source, clock_hz, latch, dynamic)`. defMON's `23546` = a `23545` CIA latch + 1; the latch is the tune's tempo, so it is derived, never assumed. |
+| bespoke "is this tune CIA-timed?" checks reading the header speed bits | `playroutine_cadence(...).source is TriggerSource.CIA_TIMER` (headers are only a hint; the trigger is read from init). |
+| emulated-init unpacking as the *only* depack path for exomizer-packed tunes | `native_decrunch(image_or_bytes)` (native pydexomizer decrunch, no init run) as an init-free alternative; `detect_playroutine(..., native=True)` wires it in as an opt-in first try with the emulated-init fallback intact. |
+
+Per-format cadence constants (defMON's 23546 and friends) are **replaced** by
+`playroutine_cadence`; a dependent that pinned a constant should call the
+derivation and read `cadence.cycles_per_call`.

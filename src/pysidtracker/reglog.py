@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from typing import IO, Iterable, Iterator, NamedTuple, Tuple
+from typing import IO, Iterable, Iterator, NamedTuple, Tuple, Union
 
 from .errors import SidParseError
 
@@ -43,12 +43,26 @@ class RegWrite(NamedTuple):
     val: int
 
 
-def write_reglog(writes: Iterable[RegWrite], dst, header: bool = True) -> None:
-    """Write a register log to a path or text file-like object."""
+def write_reglog(
+    writes: Iterable[RegWrite], dst, header: Union[bool, str] = True
+) -> None:
+    """Write a register log to a path or text file-like object.
+
+    ``header`` controls the leading ``#`` comment line: ``True`` emits the
+    default :data:`REGLOG_HEADER`, ``False`` emits none, and a ``str`` emits
+    that exact line verbatim (dependents can pin their own header while sharing
+    this writer).
+    """
+    if header is True:
+        header_line = REGLOG_HEADER
+    elif header is False:
+        header_line = None
+    else:
+        header_line = header
 
     def _dump(out: IO[str]) -> None:
-        if header:
-            print(REGLOG_HEADER, file=out)
+        if header_line is not None:
+            print(header_line, file=out)
         for write in writes:
             print(f"{write.clock} {write.reg} {write.val}", file=out)
 
