@@ -32,6 +32,23 @@ def test_round_trip_filelike_no_header():
     assert read_reglog(io.StringIO(text)) == writes
 
 
+def test_custom_string_header():
+    writes = [RegWrite(0, 0, 1)]
+    buf = io.StringIO()
+    custom = "# pygoattracker register log: clock reg val"
+    write_reglog(writes, buf, header=custom)
+    lines = buf.getvalue().splitlines()
+    assert lines[0] == custom
+    assert lines[0] != REGLOG_HEADER
+    assert read_reglog(io.StringIO(buf.getvalue())) == writes
+
+
+def test_header_true_uses_default():
+    buf = io.StringIO()
+    write_reglog([RegWrite(0, 0, 1)], buf, header=True)
+    assert buf.getvalue().splitlines()[0] == REGLOG_HEADER
+
+
 def test_comments_and_blank_lines_ignored():
     text = "# a comment\n\n0 0 10  # inline\n  \n16 1 20\n"
     assert read_reglog(io.StringIO(text)) == [RegWrite(0, 0, 10), RegWrite(16, 1, 20)]

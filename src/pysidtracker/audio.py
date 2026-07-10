@@ -30,7 +30,20 @@ except ImportError:  # pragma: no cover - exercised only without numpy
 CHIP_MODELS = ("6581", "8580")
 
 
-def _default_device(model: str, sampling_frequency):
+def default_device(model: str, sampling_frequency=None, clock_frequency=None):
+    """Construct the default pyresidfp SID device for ``model``.
+
+    ``model`` is one of :data:`CHIP_MODELS`. ``sampling_frequency`` selects the
+    output rate (pyresidfp's own default when falsy). ``clock_frequency`` is
+    accepted for signature symmetry with the render helpers and forwarded to
+    pyresidfp when it supports it; it is optional and ignored otherwise. Use
+    :func:`device_sampling_frequency` to read back the device's actual rate.
+
+    Raises :class:`~pysidtracker.errors.AudioUnavailable` if pyresidfp is not
+    installed and ``ValueError`` for an unknown model.
+    """
+    if model not in CHIP_MODELS:
+        raise ValueError(f"chip model must be one of {CHIP_MODELS}")
     try:
         from pyresidfp import SoundInterfaceDevice
         from pyresidfp.sound_interface_device import ChipModel
@@ -40,11 +53,25 @@ def _default_device(model: str, sampling_frequency):
             "install with: pip install pysidtracker[audio]"
         ) from exc
     chip = {"6581": ChipModel.MOS6581, "8580": ChipModel.MOS8580}[model]
+    kwargs = {"model": chip}
     if sampling_frequency:
-        return SoundInterfaceDevice(
-            model=chip, sampling_frequency=float(sampling_frequency)
-        )
-    return SoundInterfaceDevice(model=chip)
+        kwargs["sampling_frequency"] = float(sampling_frequency)
+    if clock_frequency:
+        kwargs["clock_frequency"] = float(clock_frequency)
+    try:
+        return SoundInterfaceDevice(**kwargs)
+    except TypeError:  # pragma: no cover - older pyresidfp without clock kwarg
+        kwargs.pop("clock_frequency", None)
+        return SoundInterfaceDevice(**kwargs)
+
+
+# Back-compat private alias for any internal caller that imported the old name.
+_default_device = default_device
+
+
+def device_sampling_frequency(device) -> float:
+    """The output sampling frequency (Hz) of a rendered ``device``."""
+    return float(device.sampling_frequency)
 
 
 def render_samples(
@@ -71,7 +98,7 @@ def render_samples(
     if model not in CHIP_MODELS:
         raise ValueError(f"chip model must be one of {CHIP_MODELS}")
     if device is None:
-        device = _default_device(model, sampling_frequency)
+        device = default_device(model, sampling_frequency, clock_frequency)
     write_q = write_spacing / clock_frequency
     frame_seconds = cycles_per_frame / clock_frequency
     samples = array("h")
@@ -115,7 +142,7 @@ def render_wav(
     Keyword options are those of :func:`render_samples`.
     """
     if device is None:
-        device = _default_device(model, sampling_frequency)
+        device = default_device(model, sampling_frequency, clock_frequency)
     samples = render_samples(
         frame_iter,
         model=model,
@@ -125,5 +152,5 @@ def render_wav(
         write_spacing=write_spacing,
         device=device,
     )
-    write_wav(dst, samples, float(device.sampling_frequency))
+    write_wav(dst, samples, device_sampling_frequency(device))
     return Path(dst)

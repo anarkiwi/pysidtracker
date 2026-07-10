@@ -28,6 +28,11 @@ API.
   vectors) with predicates and `find_register_stores`.
 - `trace_init` / `InitTrace` — run a tune's init under a write observer to
   report CIA timer cadence and the IRQ/NMI vectors an IRQ-driven header hides.
+- `playroutine_cadence` / `Cadence` / `TriggerSource` — derive the play-routine
+  cadence (PAL/NTSC video frame vs CIA-timer latch) from what init programs, not
+  the header.
+- `native_decrunch` — native exomizer unpack (pydexomizer), an init-free
+  alternative depack path; opt-in via `detect_playroutine(..., native=True)`.
 - `reglog` — `RegWrite` register-log format (`read_reglog` / `write_reglog`) and
   `frame_writes`, the shared per-frame SID-write framing loop.
 - `oracle` — per-frame SID register grids: `register_grid` (py65), the stdlib
@@ -46,9 +51,9 @@ pip install pysidtracker[fast]    # + numpy, to accelerate the image scan
 pip install pysidtracker[audio]   # + pyresidfp, for WAV/sample rendering
 ```
 
-py65 is required (detection runs a tune's 6502 init to unpack
-packed/relocating playroutines). numpy is optional; a pure-stdlib scan is used
-when it is absent.
+py65 and pydexomizer are required core dependencies (detection runs a tune's
+6502 init, and `native_decrunch` unpacks exomizer-packed images natively).
+numpy is optional; a pure-stdlib scan is used when it is absent.
 
 ## Usage
 

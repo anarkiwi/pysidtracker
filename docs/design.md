@@ -165,3 +165,77 @@ per-frame `(reg, val)` write stream through an emulated SID one write at a time
 imported lazily; a missing `audio` extra raises `AudioUnavailable`. Any object
 with `write_register` / `clock(timedelta)` / `sampling_frequency` may be passed
 as `device`.
+
+`default_device(model, sampling_frequency=None, clock_frequency=None)` is the
+public accessor dependents use to construct that default pyresidfp device (the
+old private `_default_device` remains as a thin alias for back-compat), and
+`device_sampling_frequency(device)` reads back a device's output rate.
+
+## 0.4.0 playroutine cadence and native decrunch
+
+### `cadence` — derived play-routine cadence
+
+*Playroutine cadence* — the CPU cycles between consecutive play-routine calls —
+is a **global SID concept**, not a per-format constant. It is set by whatever
+triggers the play interrupt:
+
+- a **PAL** video frame (`PAL_CYCLES_PER_FRAME` = 19656 cycles),
+- an **NTSC** video frame (`NTSC_CYCLES_PER_FRAME` = 17095 cycles), or
+- a **CIA/NMI timer** whose latch defines an arbitrary period.
+
+The header's speed/clock fields are only a *hint* (the base's guiding principle:
+headers are untrustworthy). IRQ-driven tunes program the real trigger from
+inside init, and a player can reprogram the timer mid-tune, so cadence is not
+guaranteed constant.
+
+`playroutine_cadence(image_or_bytes, *, clock=None, play_calls=8) -> Cadence`:
+
+1. Resolve the video standard — explicit `clock` (`"PAL"`/`"NTSC"`) wins, else
+   the PSID/RSID v2+ header `flags` clock bits (bits 2–3: `%01`=PAL, `%10`=NTSC)
+   as a hint, else PAL.
+2. `trace_init` observes what init installs (reusing the py65 plumbing, not
+   duplicating it): the CIA Timer-A latch(es), the IRQ/NMI vectors, the VIC
+   raster compare, and — via a small extension — whether a play call rewrites a
+   Timer-A latch (`cia{1,2}_latch_rewritten`).
+3. Decide the source: if init programs a plausible CIA Timer-A latch (≥ 256, so
+   a lone `$FF` reset write to `$DC04` is ignored) the cadence is
+   **CIA-driven**; otherwise it is **video-timed** (one PAL/NTSC frame).
+4. `dynamic` is set when a play call rewrites the chosen Timer-A latch to a
+   different value (a variable-tempo player). A full per-call cadence *schedule*
+   is a documented future extension (`# TODO`); the dynamic case is detected and
+   flagged now.
+
+`Cadence` (frozen dataclass): `cycles_per_call`, `source` (`TriggerSource`
+enum: `PAL_VIDEO` / `NTSC_VIDEO` / `CIA_TIMER`), `clock_hz` (`PAL_CLOCK_HZ` /
+`NTSC_CLOCK_HZ`), `latch` (the CIA latch when CIA-driven, else `None`),
+`dynamic`.
+
+**CIA period (the +1).** A CIA timer in continuous (reload) mode is loaded with
+its 16-bit latch `L` and counts `L, L-1, …, 1, 0`; on the cycle after `0` it
+underflows (raising the interrupt) and reloads `L`. Consecutive underflows are
+therefore `L + 1` cycles apart, so **`cycles_per_call = latch + 1`**. This is
+validated against real defMON tunes (Aleksi Eeben), whose init self-installs a
+CIA-timer play IRQ: e.g. `Stella_2600_by_Starlight` latches 19759 → 19760
+cycles, and defMON's canonical **23546** cadence is a **23545** latch + 1. The
+latch is the tune's tempo, so it is tune-specific; the `+1` relationship is the
+invariant. Replaces per-format cadence constants (e.g. defMON's hard-coded
+23546) with a single derivation.
+
+### `decrunch` — native exomizer unpack
+
+Packed tunes ship an exomizer-crunched payload; `detect.run_init` materialises
+it by emulating the tune's whole init. `native_decrunch(image_or_bytes) ->
+Optional[SidImage]` is the targeted alternative: it runs *only* the exomizer
+decruncher via [`pydexomizer`](https://pypi.org/project/pydexomizer/) (a core
+dependency, like py65) — trying the self-extracting `sfx` format (bounded step
+cap so a non-exomizer image fails fast), then the `mem` format
+(`decrunch_mem_auto`) — and returns the unpacked image, or `None` when the image
+is not exomizer-packed. It never raises for the not-packed case, so it is safe
+as a first-try step.
+
+`detect_playroutine(..., native=False)` gains an **opt-in** `native` flag: when
+true, an exomizer-packed image is decrunched natively first (no init emulated) →
+reported `PACKED` with `ran_init=False`; if that does not yield a recognised
+image, detection falls back to the existing emulated-init path. Native decrunch
+is opt-in specifically so the default detection behaviour — and every existing
+detect test — is unchanged.

@@ -5,7 +5,14 @@ from datetime import timedelta
 
 import pytest
 
-from pysidtracker import PAL_CLOCK_HZ, PAL_CYCLES_PER_FRAME, render_samples, render_wav
+from pysidtracker import (
+    PAL_CLOCK_HZ,
+    PAL_CYCLES_PER_FRAME,
+    default_device,
+    render_samples,
+    render_wav,
+)
+from pysidtracker import audio as audio_mod
 from pysidtracker.errors import AudioUnavailable
 
 try:  # the audio extra is optional
@@ -88,6 +95,34 @@ def test_default_device_requires_pyresidfp():
             cycles_per_frame=PAL_CYCLES_PER_FRAME,
             clock_frequency=PAL_CLOCK_HZ,
         )
+
+
+def test_default_device_public_accessor_requires_pyresidfp():
+    if HAVE_PYRESIDFP:
+        pytest.skip("pyresidfp installed; default backend available")
+    with pytest.raises(AudioUnavailable):
+        default_device("8580", 44100, PAL_CLOCK_HZ)
+
+
+def test_default_device_bad_model():
+    with pytest.raises(ValueError):
+        default_device("bogus")
+
+
+def test_default_device_private_alias_is_public():
+    # Back-compat: the old private name aliases the public accessor.
+    assert audio_mod._default_device is audio_mod.default_device
+
+
+def test_device_sampling_frequency_accessor():
+    dev = FakeSID(sampling_frequency=48000)
+    assert audio_mod.device_sampling_frequency(dev) == 48000.0
+
+
+@pytest.mark.skipif(not HAVE_PYRESIDFP, reason="audio extra (pyresidfp) not installed")
+def test_default_device_returns_device_with_sampling_frequency():
+    dev = default_device("8580", 44100, PAL_CLOCK_HZ)
+    assert audio_mod.device_sampling_frequency(dev) > 0
 
 
 @pytest.mark.skipif(not HAVE_PYRESIDFP, reason="audio extra (pyresidfp) not installed")

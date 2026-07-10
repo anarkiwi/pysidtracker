@@ -64,6 +64,11 @@ class InitTrace:
         ``$D011`` bit-7 high bit when that was written too).
       registers_touched: every watched address that received a write.
       sid_writes: last value written to each SID register address touched.
+      cia1_latch_rewritten: the CIA #1 Timer-A latch was rewritten to a value
+        *different* from what init left, during the observed play calls (the
+        tune reschedules its own cadence -- a dynamic/variable-tempo player).
+        ``None`` when unknown (no play calls) or unchanged.
+      cia2_latch_rewritten: same for CIA #2 Timer-A.
     """
 
     cia1_timer_latch: Optional[int] = None
@@ -74,6 +79,8 @@ class InitTrace:
     vic_raster: Optional[int] = None
     registers_touched: Set[int] = field(default_factory=set)
     sid_writes: Dict[int, int] = field(default_factory=dict)
+    cia1_latch_rewritten: Optional[int] = None
+    cia2_latch_rewritten: Optional[int] = None
 
 
 def _word(writes: Dict[int, int], lo_addr: int, hi_addr: int) -> Optional[int]:
@@ -91,7 +98,11 @@ def _raster(writes: Dict[int, int]) -> Optional[int]:
     return line
 
 
-def _build_trace(writes: Dict[int, int]) -> InitTrace:
+def _build_trace(
+    writes: Dict[int, int],
+    cia1_rewritten: Optional[int] = None,
+    cia2_rewritten: Optional[int] = None,
+) -> InitTrace:
     sid_writes = {a: v for a, v in writes.items() if reg.is_sid_reg(a)}
     return InitTrace(
         cia1_timer_latch=_word(writes, reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI),
@@ -102,6 +113,8 @@ def _build_trace(writes: Dict[int, int]) -> InitTrace:
         vic_raster=_raster(writes),
         registers_touched=set(writes),
         sid_writes=sid_writes,
+        cia1_latch_rewritten=cia1_rewritten,
+        cia2_latch_rewritten=cia2_rewritten,
     )
 
 
@@ -167,9 +180,21 @@ def trace_init(
     init_address = image.header.init_address or image.header.real_load_address
     _run_to_rts(mpu, mem, init_address, subtune, max_cycles)
 
+    # Post-init CIA Timer-A latch values, to detect a mid-play reschedule.
+    init_cia1 = _word(writes, reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI)
+    init_cia2 = _word(writes, reg.CIA2_TIMER_A_LO, reg.CIA2_TIMER_A_HI)
+    cia1_rewritten: Optional[int] = None
+    cia2_rewritten: Optional[int] = None
+
     play_address = image.header.play_address
     if play_address:
         for _ in range(play_calls):
             _run_to_rts(mpu, mem, play_address, 0, max_cycles)
+            play_cia1 = _word(writes, reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI)
+            play_cia2 = _word(writes, reg.CIA2_TIMER_A_LO, reg.CIA2_TIMER_A_HI)
+            if play_cia1 is not None and play_cia1 != init_cia1:
+                cia1_rewritten = play_cia1
+            if play_cia2 is not None and play_cia2 != init_cia2:
+                cia2_rewritten = play_cia2
 
-    return _build_trace(writes)
+    return _build_trace(writes, cia1_rewritten, cia2_rewritten)

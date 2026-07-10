@@ -8,8 +8,9 @@ API.
 """
 
 from . import registers
-from .audio import render_samples, render_wav
+from .audio import default_device, render_samples, render_wav
 from .base import BaseSidParser
+from .cadence import Cadence, TriggerSource, playroutine_cadence
 from .codescan import CodePattern, Match, find_code_all, find_code_first
 from .detect import (
     Detection,
@@ -18,6 +19,7 @@ from .detect import (
     detect_playroutine,
     run_init,
 )
+from .decrunch import native_decrunch
 from .errors import (
     AudioUnavailable,
     EmulatorUnavailable,
@@ -58,11 +60,12 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "AudioUnavailable",
     "BaseSidParser",
+    "Cadence",
     "CodePattern",
     "DEFAULT_MIRROR",
     "DEFAULT_WRITE_SPACING",
@@ -92,9 +95,11 @@ __all__ = [
     "SidImage",
     "SidParseError",
     "Source",
+    "TriggerSource",
     "TuneFetchError",
     "__version__",
     "aligned_match",
+    "default_device",
     "detect_playroutine",
     "fetch_tune",
     "find_code_all",
@@ -103,7 +108,9 @@ __all__ = [
     "frame_writes",
     "grid_from_writes",
     "make_tune_fixtures",
+    "native_decrunch",
     "parse_sid_header",
+    "playroutine_cadence",
     "read_bytes",
     "read_reglog",
     "read_sidwr",
