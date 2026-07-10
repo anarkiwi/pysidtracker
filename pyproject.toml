@@ -7,14 +7,14 @@ name = "pysidtracker"
 version = "0.4.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
-requires-python = ">=3.10"
+# pydexomizer (a core dependency) requires Python >= 3.11.
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Josh Bailey" }]
 keywords = ["sid", "c64", "psid", "rsid", "tracker", "chiptune"]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
