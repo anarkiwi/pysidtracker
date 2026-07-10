@@ -35,6 +35,20 @@ SID_FILTER_HI = 0xD416  # cutoff hi
 SID_RES_FILT = 0xD417  # resonance + filter routing
 SID_MODE_VOL = 0xD418  # filter mode + master volume
 
+# The three SID voices are identical 7-register blocks; add a voice offset to a
+# voice-1 register to reach the same register in voice 2 or 3.
+SID_VOICE_OFFSET = (0, 7, 14)
+# The pulse-width-high registers ($D403/$D40A/$D411): only the low 4 bits are
+# significant (12-bit pulse width), so a register grid masks them to a nibble.
+PW_HI_REGS = (0x03, 0x0A, 0x11)
+
+# --- C64 frame timing (documented hardware facts) ---------------------------
+# CPU cycles in one video frame and the CPU clock, per video standard.
+PAL_CYCLES_PER_FRAME = 19656
+NTSC_CYCLES_PER_FRAME = 17095
+PAL_CLOCK_HZ = 985248
+NTSC_CLOCK_HZ = 1022727
+
 # --- CIA #1 ($DC00..$DC0F) --------------------------------------------------
 CIA1_BASE = 0xDC00
 CIA1_LAST = 0xDC0F

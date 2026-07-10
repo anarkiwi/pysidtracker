@@ -75,3 +75,18 @@ def test_find_register_stores(scan_backend):  # pylint: disable=unused-argument
     ]
     # Only stores to the requested addresses are reported.
     assert find_register_stores(img, [0xD415]) == []
+
+
+def test_hardware_timing_and_layout_constants():
+    assert reg.PAL_CYCLES_PER_FRAME == 19656
+    assert reg.NTSC_CYCLES_PER_FRAME == 17095
+    assert reg.PAL_CLOCK_HZ == 985248
+    assert reg.NTSC_CLOCK_HZ == 1022727
+    assert reg.PW_HI_REGS == (0x03, 0x0A, 0x11)
+    assert reg.SID_VOICE_OFFSET == (0, 7, 14)
+    assert reg.SID_REG_COUNT == 25
+    assert reg.SID_BASE == 0xD400
+    # PW-hi registers are the pulse-width-high byte of each voice.
+    assert all(
+        off + 0x03 == pw for off, pw in zip(reg.SID_VOICE_OFFSET, reg.PW_HI_REGS)
+    )

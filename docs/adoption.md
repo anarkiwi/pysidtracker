@@ -96,3 +96,58 @@ back as `cia1_timer_latch` + `irq_vector` without re-deriving them from operands
   the IRQ-driven, relocating cohorts — pysoundmonitor's CIA-timed builds (latch +
   `$0314`/`$0315` handler) and pysidwizard's relocated-export tail the readers
   currently cannot locate statically.
+
+## 0.3.0 shared player/validation surfaces
+
+The 0.3.0 surfaces consolidate the register-log / oracle / tune-fetch / audio
+code the format packages hand-copied. Each parser's old copy maps to the new
+shared module as below. **No parser repo is edited here** — this is the plan.
+
+Common import after adoption:
+
+```python
+from pysidtracker import RegWrite, read_reglog, write_reglog, frame_writes
+from pysidtracker import register_grid, grid_from_writes, read_sidwr, aligned_match
+from pysidtracker import fetch_tune, resolve_tune, make_tune_fixtures
+from pysidtracker import render_samples, render_wav
+from pysidtracker import PAL_CYCLES_PER_FRAME, PAL_CLOCK_HZ, PW_HI_REGS
+```
+
+### `reglog`
+
+| Parser's old copy | Replace with |
+| --- | --- |
+| `pygoattracker/src/pygoattracker/reglog.py` (`RegWrite`, `read_reglog`, `write_reglog`) | `pysidtracker.reglog` (identical text format). |
+| `pyjch/src/pyjch/reglog.py`, `pydefmon/pydefmon/reglog.py`, `pymusicassembler` / `pyfuturecomposer` `reglog.py` | same. |
+| each package's `iter_register_writes` framing body (`enumerate(iter_frames(...))`, `clock + offset*spacing`, the `write_spacing * SID_REGISTERS >= cycles_per_frame` guard) | `frame_writes(per_frame_iter, cycles_per_frame=..., write_spacing=...)`. Keep the package's player driver; feed its per-frame `(reg, val)` iterables in. defMON's absolute-`$D400..$D418` writes keep `sid_reg_base=0xD400`; players already yielding `0..24` pass `sid_reg_base=0`. |
+| per-package `REGLOG_HEADER` / `DEFAULT_WRITE_SPACING` | `pysidtracker.reglog` constants (the header string carries the `pysidtracker` name). |
+| `read_reglog` raising each package's own error (or `ValueError` in pydefmon) | now raises `SidParseError` uniformly. |
+
+### `oracle`
+
+| Parser's old copy | Replace with |
+| --- | --- |
+| `pydefmon/tests/_support/py65_oracle.py` `Oracle.grid` + `_patch_illegals` | `register_grid(image, nframes, illegal_opcodes=True)`. |
+| `pyjch/tests/_v20oracle.py` `Oracle.grid` / `oracle_grid` | `register_grid(image, nframes)`. |
+| `pyjch` / `pymusicassembler` / `pyfuturecomposer` `tests/conftest.py` `_grid_from_writes` / `grid_from_writes` | `grid_from_writes(writes)`. |
+| `pydmcsid/tests/helpers.py` `grid_from_writes` | same. |
+| `_read_sidwr` (`struct.Struct("<qHBB")`) in those conftests | `read_sidwr(path)`. |
+| `pyjch` conftest `aligned_match` | `aligned_match(oracle, rendered)` (now returns `bool`; the old `(ok, lead, divergence)` tuple is dropped — callers that reported divergence keep their own comparison). |
+
+### `testing`
+
+| Parser's old copy | Replace with |
+| --- | --- |
+| `pygoattracker` / `pydmcsid` (and peers) `scripts/fetch_tunes.py` `fetch` + `_download` + `_is_sid` + mirror/retry logic | `fetch_tune(relpath, cache_dir=..., mirror=..., retries=...)`. |
+| conftest `_try_resolve` (`$HVSC` local → cache → fetch) | `resolve_tune(relpath, cache_dir=..., local_env="HVSC")`. |
+| conftest `tune_id` / `tune_path` parametrized fixtures | `tune_id, tune_path = make_tune_fixtures(TUNES, CACHE)`. Keep each package's `TUNES` mapping. |
+
+`scripts/fetch_tunes.py` keeps only its package-specific `TUNES` table + CLI,
+delegating the fetch to `pysidtracker.testing`.
+
+### `audio`
+
+| Parser's old copy | Replace with |
+| --- | --- |
+| `pygoattracker` / `pyfuturecomposer` / `pymusicassembler` `src/*/audio.py` (`_default_device`, `render_samples`, `write_wav`, `render_wav`) | `pysidtracker.audio` (behind the `audio` extra). Pass the package player's per-frame `(reg, val)` iterables as `frame_iter`; supply `cycles_per_frame` / `clock_frequency` from `registers`. |
+| per-package `CHIP_MODELS`, pyresidfp import guard raising the format error | `pysidtracker.audio.CHIP_MODELS`; a missing extra raises `AudioUnavailable`. |

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.2.1"
+version = "0.3.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +31,9 @@ emu = ["py65>=1.1"]
 # numpy accelerates the image anchor scan; a pure-stdlib fallback is used
 # when it is not installed.
 fast = ["numpy>=1.23"]
+# Audio rendering (pysidtracker.audio) drives an emulated SID via pyresidfp;
+# everything else works without it.
+audio = ["pyresidfp>=0.17"]
 dev = [
     "black>=24",
     "numpy>=1.23",
