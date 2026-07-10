@@ -171,7 +171,7 @@ def register_grid(
         from py65.memory import ObservableMemory
     except ImportError as exc:  # pragma: no cover - py65 is a core dependency
         raise EmulatorUnavailable(
-            "py65 is required for register_grid: pip install pysidtracker[emu]"
+            "py65 is required for register_grid: pip install pysidtracker"
         ) from exc
 
     subject = image.mem

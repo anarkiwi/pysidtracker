@@ -8,13 +8,31 @@ addressed read accessors. This is the shared substitute for the per-parser
 
 from __future__ import annotations
 
-from typing import List, Optional
+import struct
+from typing import List, Optional, Tuple
 
 from . import _scan
 from .errors import SidParseError
 from .header import SidHeader, parse_sid_header
 
 MEM_SIZE = 0x10000
+
+
+def parse_prg(raw: bytes, expected_load: Optional[int] = None) -> Tuple[int, bytes]:
+    """Split a bare ``.prg`` workfile into ``(load_addr, body)``.
+
+    The first two bytes are the little-endian load address; the rest is the
+    image body. When ``expected_load`` is given and differs from the file's
+    load address, :class:`SidParseError` is raised.
+    """
+    if len(raw) < 2:
+        raise SidParseError("PRG too short for a load address")
+    load = raw[0] | (raw[1] << 8)
+    if expected_load is not None and load != expected_load:
+        raise SidParseError(
+            f"unexpected load address {load:#06x}, expected {expected_load:#06x}"
+        )
+    return load, bytes(raw[2:])
 
 
 class SidImage:
@@ -110,6 +128,43 @@ class SidImage:
     def ptr(self, lo_base: int, hi_base: int, index: int) -> int:
         """Read a split-pointer-table entry (``lo[index]`` + ``hi[index]<<8``)."""
         return self.peek(lo_base + index) | (self.peek(hi_base + index) << 8)
+
+    def contains(self, addr: int) -> bool:
+        """True if ``addr`` lies within the loaded region (``load <= addr < end``)."""
+        return self.load <= addr < self.end
+
+    def byte_at(self, addr: int) -> int:
+        """Read one byte at absolute C64 ``addr`` (raises out of ``0..0xFFFF``)."""
+        return self.byte(addr)
+
+    def word_at(self, addr: int) -> int:
+        """Read a little-endian 16-bit word at absolute C64 ``addr``."""
+        return self.word(addr)
+
+    def poke(self, addr: int, value: int) -> None:
+        """Write one byte at ``addr``, growing ``end`` on overrun.
+
+        Writes before the load address raise :class:`SidParseError`; writes at
+        or past ``end`` extend the loaded region.
+        """
+        if addr < self.load:
+            raise SidParseError(f"poke at {addr:#06x} is before the load address")
+        if addr >= MEM_SIZE:
+            raise SidParseError(f"poke at {addr:#06x} out of range")
+        self.mem[addr] = value & 0xFF
+        if addr >= self.end:
+            self.end = addr + 1
+
+    def poke_bytes(self, addr: int, data: bytes) -> None:
+        """Write ``data`` starting at ``addr`` (see :meth:`poke`)."""
+        for offset, value in enumerate(data):
+            self.poke(addr + offset, value)
+
+    def to_prg(self) -> bytes:
+        """Serialise to a bare ``.prg`` (LE load address + loaded image body)."""
+        return struct.pack("<H", self.load & 0xFFFF) + bytes(
+            self.mem[self.load : self.end]
+        )
 
     def find(self, needle: bytes, start: Optional[int] = None) -> int:
         """First address of ``needle`` in the image, or ``-1``.

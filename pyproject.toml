@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.4.0"
+version = "0.5.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -27,8 +27,6 @@ classifiers = [
 dependencies = ["py65>=1.1", "pydexomizer>=0.1"]
 
 [project.optional-dependencies]
-# Kept for backward compatibility; py65 is now a core dependency (above).
-emu = ["py65>=1.1"]
 # numpy accelerates the image anchor scan; a pure-stdlib fallback is used
 # when it is not installed.
 fast = ["numpy>=1.23"]

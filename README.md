@@ -41,7 +41,25 @@ API.
 - `testing` — HVSC tune fetch/resolve for test suites (`fetch_tune`,
   `resolve_tune`, `make_tune_fixtures`).
 - `audio` — `render_samples` / `render_wav` through an emulated SID (pyresidfp,
-  `audio` extra).
+  `audio` extra), plus `resolve_device` / `seconds_to_frames`.
+- Writers — `SidHeader.to_bytes` / `write_psid` / `SidImage.to_prg` (the inverse
+  of the parsers), `parse_prg`, and `encode_cstr` / `decode_cstr`.
+- `SidImage` absolute-address accessors — `byte_at` / `word_at` / `contains` /
+  `poke`, relocation-safe and bounds-checked.
+- `mos6502` — shared 6502 primitives: `OP_LEN`, opcode-class sets, `s8` / `adc`
+  / `sbc`, `SidWriteCapturingMemory`, `walk_until`.
+- `MemPlayer` — per-frame register-diff player scaffold; subclasses implement
+  `_init` / `_frame`. `register_writes_from_player` drives it to a reglog.
+- `notefreq` — `NoteFreqTable`, computed PAL/NTSC pitch tables, and
+  `locate_note_freq` (find hi/lo tables from paired absolute-indexed reads).
+- `make_package_errors` — per-package error hierarchy factory whose `*ParseError`
+  / `*FormatError` subclass the base ones, so base `except` clauses catch them.
+- `cli` — shared argparse scaffold: `run_cli`, `add_reglog_command`,
+  `add_wav_command`, `print_info`.
+- `registers` additions — `SID_VOICES`, voice/global register indices, and the
+  `attack_decay` / `sustain_release` ADSR nibble packers.
+- `resolve_entry_points` / `is_jmp_vector`, `cadence_from_latch`, and the
+  `ByteCursor` / `check` / `byte_range` parse helpers.
 
 ## Install
 

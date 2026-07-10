@@ -168,5 +168,36 @@ def playroutine_cadence(
     )
 
 
+def cadence_from_latch(latch: Optional[int], clock: Optional[str] = None) -> Cadence:
+    """Derive a :class:`Cadence` from a static CIA timer latch (no-init path).
+
+    Shares the traced path's model: a plausible latch (``>= 256``) is a
+    CIA-timer cadence of ``latch + 1`` cycles per call; a missing/implausible
+    latch falls back to the PAL/NTSC video frame. ``clock`` selects the video
+    standard (``"PAL"``/``"NTSC"``, default PAL) for the reported ``clock_hz``.
+    """
+    key = (clock or "PAL").strip().upper()
+    if key not in ("PAL", "NTSC"):
+        raise ValueError(f"clock must be 'PAL' or 'NTSC', got {clock!r}")
+    ntsc = key == "NTSC"
+    clock_hz = reg.NTSC_CLOCK_HZ if ntsc else reg.PAL_CLOCK_HZ
+    if latch is not None and latch >= _MIN_CIA_LATCH:
+        return Cadence(
+            cycles_per_call=latch + 1,
+            source=TriggerSource.CIA_TIMER,
+            clock_hz=clock_hz,
+            latch=latch,
+        )
+    frame = reg.NTSC_CYCLES_PER_FRAME if ntsc else reg.PAL_CYCLES_PER_FRAME
+    source = TriggerSource.NTSC_VIDEO if ntsc else TriggerSource.PAL_VIDEO
+    return Cadence(cycles_per_call=frame, source=source, clock_hz=clock_hz)
+
+
 # EmulatorUnavailable is surfaced by trace_init; re-exported name for callers.
-__all__ = ["TriggerSource", "Cadence", "playroutine_cadence", "EmulatorUnavailable"]
+__all__ = [
+    "TriggerSource",
+    "Cadence",
+    "playroutine_cadence",
+    "cadence_from_latch",
+    "EmulatorUnavailable",
+]

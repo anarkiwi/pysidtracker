@@ -134,3 +134,39 @@ def frame_writes(
             if 0 <= rebased <= 0x18:
                 yield RegWrite(base_clock + offset * write_spacing, rebased, val & 0xFF)
                 offset += 1
+
+
+def register_writes_from_player(
+    player,
+    max_frames: int,
+    cycles_per_frame: int,
+    write_spacing: int = DEFAULT_WRITE_SPACING,
+) -> Iterator[RegWrite]:
+    """Frame a :class:`~pysidtracker.player.MemPlayer` into a :class:`RegWrite` log.
+
+    Emits the post-init SID register baseline (``player.regs``) as
+    ``write_spacing``-spaced writes at clock 0, then the player's per-frame
+    ``(reg, val)`` writes one frame later (``start_frame=1``), so an oracle
+    framer anchors frame 0 to the first play call and treats the init writes as
+    frame 0's baseline. ``player`` yields ``0..24`` register offsets, so the
+    frames go straight through :func:`frame_writes` with ``sid_reg_base=0``.
+
+    Raises :class:`~pysidtracker.errors.SidParseError` if
+    ``write_spacing * SID_REG_COUNT >= cycles_per_frame``.
+    """
+    if write_spacing * SID_REG_COUNT >= cycles_per_frame:
+        raise SidParseError("write_spacing too large for one frame")
+    for offset, val in enumerate(player.regs):
+        yield RegWrite(offset * write_spacing, offset, val)
+
+    def _play_frames() -> Iterator[Iterable[Tuple[int, int]]]:
+        for _ in range(max_frames):
+            yield player.play_frame()
+
+    yield from frame_writes(
+        _play_frames(),
+        cycles_per_frame=cycles_per_frame,
+        write_spacing=write_spacing,
+        start_frame=1,
+        sid_reg_base=0,
+    )

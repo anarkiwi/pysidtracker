@@ -77,8 +77,8 @@ times, and returns an `InitTrace`: the CIA timer latches (`cia1_timer_latch` /
 (`$0314`/`$0315`) and `hw_irq_vector` (`$FFFE`/`$FFFF`, the real play routine),
 `nmi_vector`, `vic_raster`, the `registers_touched` set and the `sid_writes`.
 This reveals the play address and cadence that an IRQ-driven header hides
-(e.g. Soundmonitor's CIA-timed cohort). Requires the `emu` extra; raises
-`EmulatorUnavailable` if py65 is missing.
+(e.g. Soundmonitor's CIA-timed cohort). Requires the core `py65` dependency;
+raises `EmulatorUnavailable` if py65 is missing.
 
 ## What each format supplies
 
