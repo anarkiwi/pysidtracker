@@ -59,8 +59,12 @@ API.
   `locate_note_freq` (find hi/lo tables from paired absolute-indexed reads).
 - `make_package_errors` — per-package error hierarchy factory whose `*ParseError`
   / `*FormatError` subclass the base ones, so base `except` clauses catch them.
-- `cli` — shared argparse scaffold: `run_cli`, `add_reglog_command`,
-  `add_wav_command`, `print_info`.
+- `formats` / `maincli` — the one `pysidtracker` CLI (`info` / `reglog` / `wav`)
+  that discovers installed formats through the `pysidtracker.formats`
+  entry-point group and runs against each format's parser + player, plus any
+  subcommands it contributes. A format package registers a `SidFormat` instead
+  of shipping its own CLI. `cli` holds the underlying argparse scaffold
+  (`run_cli`, `print_info`, `add_reglog_command`, `add_wav_command`).
 - `registers` additions — `SID_VOICES`, voice/global register indices, and the
   `attack_decay` / `sustain_release` ADSR nibble packers.
 - `resolve_entry_points` / `is_jmp_vector`, `cadence_from_latch`, and the

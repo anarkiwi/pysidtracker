@@ -42,6 +42,12 @@ from .errors import (
     SidParseError,
     make_package_errors,
 )
+from .formats import (
+    FormatCommand,
+    SidFormat,
+    discover_formats,
+    recognize_format,
+)
 from .header import (
     PSID_MAGIC,
     RSID_MAGIC,
@@ -125,7 +131,7 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -139,6 +145,7 @@ __all__ = [
     "Detection",
     "EmuPlayer",
     "EmulatorUnavailable",
+    "FormatCommand",
     "InitTrace",
     "MEM_SIZE",
     "Match",
@@ -172,6 +179,7 @@ __all__ = [
     "SidHeader",
     "SidImage",
     "SidParseError",
+    "SidFormat",
     "SidWriteCapturingMemory",
     "SidtraceRow",
     "SidtraceUnavailable",
@@ -192,6 +200,7 @@ __all__ = [
     "decode_cstr",
     "default_device",
     "detect_playroutine",
+    "discover_formats",
     "encode_cstr",
     "fetch_disk",
     "fetch_prgs",
@@ -221,6 +230,7 @@ __all__ = [
     "read_reglog",
     "read_sidtrace",
     "read_sidwr",
+    "recognize_format",
     "register_grid",
     "register_writes_from_player",
     "registers",

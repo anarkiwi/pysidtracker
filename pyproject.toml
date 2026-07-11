@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.8.0"
+version = "0.9.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -41,6 +41,10 @@ dev = [
 ]
 
 [project.scripts]
+# The one CLI every dependent format plugs into (pysidtracker.formats): info /
+# reglog / wav for any installed format, plus that format's own subcommands. So
+# a format package registers a SidFormat instead of shipping its own CLI binary.
+pysidtracker = "pysidtracker.maincli:main"
 # Pre-cache HVSC tunes into the shared tune cache (CI populates a persisted
 # actions/cache before the suite runs).
 pysid-tune-fetch = "pysidtracker.testing:main"
