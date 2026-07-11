@@ -1,18 +1,7 @@
 """Tests for the hardware register map predicates and store scanner."""
 
-import pytest
-
 from pysidtracker import RegisterStore, SidImage, find_register_stores
 from pysidtracker import registers as reg
-
-
-@pytest.fixture(params=["numpy", "python"])
-def scan_backend(request, monkeypatch):
-    if request.param == "python":
-        monkeypatch.setattr(reg, "_np", None)
-    elif reg._np is None:  # pragma: no cover - numpy present in dev deps
-        pytest.skip("numpy not installed")
-    return request.param
 
 
 def _image(payload, load=0x1000):
@@ -48,7 +37,7 @@ def test_cia_vic_and_vector_predicates():
     assert list(reg.sid_write_band(lo=0xD400, hi=0xD402)) == [0xD400, 0xD401, 0xD402]
 
 
-def test_find_register_stores(scan_backend):  # pylint: disable=unused-argument
+def test_find_register_stores():
     # STA $DC04 ; STA $D412 ; STA $0314 ; LDA (irrelevant) ; STA $D400,X
     payload = [
         0x8D,

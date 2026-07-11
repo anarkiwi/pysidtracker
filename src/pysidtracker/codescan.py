@@ -25,8 +25,7 @@ tokens:
 ``find_code_all`` / ``find_code_first`` scan a :class:`~pysidtracker.SidImage`
 (its ``mem`` from ``image.load`` by default) and return :class:`Match` objects
 carrying the match address and the captured operands. The literal/wildcard
-prefilter is numpy-accelerated when numpy is importable, with a pure-stdlib
-fallback (mirroring :mod:`pysidtracker._scan`).
+prefilter is numpy-accelerated (mirroring :mod:`pysidtracker._scan`).
 """
 
 from __future__ import annotations
@@ -39,10 +38,7 @@ from .image import MEM_SIZE, SidImage
 
 CodeBuffer = Union[SidImage, bytes, bytearray, memoryview]
 
-try:  # numpy is an optional accelerator, never required.
-    import numpy as _np
-except ImportError:  # pragma: no cover - exercised only without numpy
-    _np = None
+import numpy as _np
 
 _CAPTURE_RE = re.compile(r"^\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::(?P<kind>[bw]))?\}$")
 _LITERAL_RE = re.compile(r"^[0-9A-Fa-f]{2}$")
@@ -143,21 +139,6 @@ def _candidate_starts(buf: bytes, pat: CodePattern, lo: int, hi: int) -> Sequenc
     if not pat.literals:
         return range(lo, last + 1)
     off0, val0 = pat.literals[0]
-    if _np is not None:
-        return _candidate_starts_np(buf, off0, val0, lo, last)
-    return _candidate_starts_py(buf, off0, val0, lo, last)
-
-
-def _candidate_starts_py(buf, off0, val0, lo, last):
-    starts = []
-    pos = buf.find(val0, lo + off0, last + off0 + 1)
-    while pos != -1:
-        starts.append(pos - off0)
-        pos = buf.find(val0, pos + 1, last + off0 + 1)
-    return starts
-
-
-def _candidate_starts_np(buf, off0, val0, lo, last):
     arr = _np.frombuffer(buf, dtype=_np.uint8)
     hits = _np.nonzero(arr[lo + off0 : last + off0 + 1] == val0)[0]
     return (hits + lo).tolist()
