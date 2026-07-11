@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from typing import IO, Iterable, Iterator, NamedTuple, Tuple, Union
+from typing import IO, Iterable, Iterator, NamedTuple, Optional, Tuple, Union
 
 from .errors import SidParseError
 from .registers import PAL_CYCLES_PER_FRAME
@@ -25,10 +25,6 @@ from .registers import PAL_CYCLES_PER_FRAME
 # Cycles between consecutive writes within one frame, approximating the store
 # instructions of the 6502 playroutine.
 DEFAULT_WRITE_SPACING = 16
-
-# One minute at the 50 Hz PAL frame rate: the default register-log length for a
-# forever-looping playroutine.
-DEFAULT_MAX_FRAMES = 50 * 60
 
 # SID register file size ($D400..$D418): 25 registers.
 SID_REG_COUNT = 0x19
@@ -143,7 +139,7 @@ def frame_writes(
 
 def register_writes_from_player(
     player,
-    max_frames: int = DEFAULT_MAX_FRAMES,
+    max_frames: Optional[int] = None,
     cycles_per_frame: int = PAL_CYCLES_PER_FRAME,
     write_spacing: int = DEFAULT_WRITE_SPACING,
 ) -> Iterator[RegWrite]:
@@ -156,8 +152,11 @@ def register_writes_from_player(
     frame 0's baseline. ``player`` yields ``0..24`` register offsets, so the
     frames go straight through :func:`frame_writes` with ``sid_reg_base=0``.
 
-    Defaults frame one minute of PAL playback (a forever-looping playroutine
-    must be bounded). Raises :class:`~pysidtracker.errors.SidParseError` if
+    ``max_frames`` is ``None`` by default -- the tune plays as long as it plays
+    (the generator is unbounded, matching
+    :meth:`~pysidtracker.player.MemPlayer.iter_frames`); a caller producing a
+    finite artifact passes an explicit bound. Raises
+    :class:`~pysidtracker.errors.SidParseError` if
     ``write_spacing * SID_REG_COUNT >= cycles_per_frame``.
     """
     if write_spacing * SID_REG_COUNT >= cycles_per_frame:
@@ -166,8 +165,10 @@ def register_writes_from_player(
         yield RegWrite(offset * write_spacing, offset, val)
 
     def _play_frames() -> Iterator[Iterable[Tuple[int, int]]]:
-        for _ in range(max_frames):
+        frame = 0
+        while max_frames is None or frame < max_frames:
             yield player.play_frame()
+            frame += 1
 
     yield from frame_writes(
         _play_frames(),
