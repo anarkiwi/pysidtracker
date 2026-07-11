@@ -97,7 +97,6 @@ from .registers import (
     sustain_release,
 )
 from .reglog import (
-    DEFAULT_MAX_FRAMES,
     DEFAULT_WRITE_SPACING,
     REGLOG_HEADER,
     RegWrite,
@@ -131,7 +130,6 @@ __all__ = [
     "Cadence",
     "CodePattern",
     "D64File",
-    "DEFAULT_MAX_FRAMES",
     "DEFAULT_MIRROR",
     "DEFAULT_WRITE_SPACING",
     "Detection",
