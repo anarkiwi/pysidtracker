@@ -37,9 +37,12 @@ API.
   `frame_writes`, the shared per-frame SID-write framing loop.
 - `oracle` — per-frame SID register grids: `register_grid` (py65), the stdlib
   `grid_from_writes` framer, `read_sidwr` (`preframr-sidtrace` `.sidwr.bin`),
-  and `aligned_match`.
+  `aligned_match`, and the `sidtrace` (sidplayfp) oracle bridge — `run_sidtrace`,
+  `read_sidtrace`, `sidtrace_cadence`, `sidtrace_grid`.
 - `testing` — HVSC tune fetch/resolve for test suites (`fetch_tune`,
-  `resolve_tune`, `make_tune_fixtures`).
+  `resolve_tune`, `make_tune_fixtures`), and `make_oracle_fixtures` /
+  `oracle_grid` — a reusable byte-exact player-vs-`sidtrace`-oracle test
+  ([docs/oracle-testing.md](docs/oracle-testing.md)).
 - `audio` — `render_samples` / `render_wav` through an emulated SID (pyresidfp,
   `audio` extra), plus `resolve_device` / `seconds_to_frames`.
 - Writers — `SidHeader.to_bytes` / `write_psid` / `SidImage.to_prg` (the inverse
