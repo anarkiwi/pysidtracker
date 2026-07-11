@@ -23,7 +23,7 @@ def test_hvsc_fixture_resolves_local(pytester, tmp_path):
             assert path.exists()
             assert hvsc.read("A/x.sid")[:4] == b"PSID"
         """)
-    result = pytester.runpytest_inprocess("-p", "no:cacheprovider")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1)
 
 
@@ -43,7 +43,7 @@ def test_hvsc_fixture_raises_when_unreachable(pytester, tmp_path):
             with pytest.raises(TuneFetchError):
                 hvsc("A/missing.sid")
         """)
-    result = pytester.runpytest_inprocess("-p", "no:cacheprovider")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1)
 
 
@@ -61,7 +61,7 @@ def test_disk_prgs_fixture_reads_d64(pytester, tmp_path):
             assert [f.name for f in files] == ["TUNE"]
             assert files[0].prg == b"\\x00\\x20abc"
         """)
-    result = pytester.runpytest_inprocess("-p", "no:cacheprovider")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1)
 
 
@@ -81,5 +81,5 @@ def test_hvsc_local_envs_ini_option(pytester, tmp_path):
         def test_it(hvsc):
             assert hvsc("A/x.sid").exists()
         """)
-    result = pytester.runpytest_inprocess("-p", "no:cacheprovider")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1)
