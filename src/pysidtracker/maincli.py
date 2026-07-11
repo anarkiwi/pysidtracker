@@ -15,12 +15,13 @@ from __future__ import annotations
 import argparse
 from typing import List, Optional, Sequence, Tuple
 
-from .audio import CHIP_MODELS, render_player_wav
+from .audio import CHIP_MODELS, render_player_wav, seconds_to_frames
+from .cadence import playroutine_cadence
 from .cli import print_info, run_cli
 from .errors import SidError, SidParseError
 from .formats import SidFormat, discover_formats, recognize_format
 from .image import SidImage
-from .registers import PAL_CYCLES_PER_FRAME, cycles_per_frame_for_flags
+from .registers import PAL_CLOCK_HZ, PAL_CYCLES_PER_FRAME
 from .reglog import register_writes_from_player, write_reglog
 from .source import read_bytes
 
@@ -34,13 +35,21 @@ def _load(song, formats: Sequence[SidFormat]) -> Tuple[SidFormat, bytes, object]
     return fmt, data, fmt.parser.parse(data)
 
 
-def _cadence(data: bytes) -> int:
-    """The tune's own play cadence (PAL/NTSC); a bare ``.prg`` defaults to PAL."""
+def _cadence(data: bytes) -> Tuple[int, float]:
+    """The tune's play cadence (cycles per frame) and CPU clock (Hz).
+
+    Derived from what the tune's init actually programs
+    (:func:`~pysidtracker.cadence.playroutine_cadence`): a CIA-timer latch period
+    for a timer-driven or multi-speed tune, else its PAL/NTSC video frame -- not
+    merely the header's advertised rate, so a timed tune is framed at its real
+    period rather than a nominal 50 Hz. A bare ``.prg`` (no init to trace)
+    defaults to the PAL frame."""
     if data[:4] in (b"PSID", b"RSID"):
-        header = SidImage.from_bytes(data).header
-        if header is not None:
-            return cycles_per_frame_for_flags(header.flags)
-    return PAL_CYCLES_PER_FRAME
+        image = SidImage.from_bytes(data)
+        if image.header is not None:
+            cadence = playroutine_cadence(image)
+            return cadence.cycles_per_call, float(cadence.clock_hz)
+    return PAL_CYCLES_PER_FRAME, float(PAL_CLOCK_HZ)
 
 
 def _info(args, formats: Sequence[SidFormat]) -> None:
@@ -54,10 +63,11 @@ def _info(args, formats: Sequence[SidFormat]) -> None:
 
 def _reglog(args, formats: Sequence[SidFormat]) -> None:
     fmt, data, model = _load(args.song, formats)
+    cycles_per_frame, clock_hz = _cadence(data)
     writes = register_writes_from_player(
         fmt.player(model),
-        max_frames=round(args.seconds * 50),
-        cycles_per_frame=_cadence(data),
+        max_frames=seconds_to_frames(args.seconds, cycles_per_frame, clock_hz),
+        cycles_per_frame=cycles_per_frame,
     )
     write_reglog(writes, args.output)
     print(f"wrote {args.output}")
@@ -65,12 +75,13 @@ def _reglog(args, formats: Sequence[SidFormat]) -> None:
 
 def _wav(args, formats: Sequence[SidFormat]) -> None:
     fmt, data, model = _load(args.song, formats)
+    cycles_per_frame, _clock_hz = _cadence(data)
     render_player_wav(
         fmt.player(model),
         args.output,
         seconds=args.seconds,
         model=args.model,
-        cycles_per_frame=_cadence(data),
+        cycles_per_frame=cycles_per_frame,
     )
     print(f"wrote {args.output}")
 
