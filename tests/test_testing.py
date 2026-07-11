@@ -8,10 +8,13 @@ from pysidtracker import testing
 from pysidtracker.testing import (
     DEFAULT_MIRROR,
     TuneFetchError,
+    default_tune_cache,
     fetch_tune,
+    gather_tune_relpaths,
     make_tune_fixtures,
     resolve_tune,
 )
+from pysidtracker.testing import main as fetch_main
 
 _SID = b"PSID" + b"\x00" * 60
 
@@ -138,3 +141,64 @@ def test_resolve_tune_fetches_when_missing(monkeypatch, tmp_path):
 def test_make_tune_fixtures_returns_two_fixtures():
     tune_id, tune_path = make_tune_fixtures({"x": "A/x.sid"}, "/tmp/cache")
     assert tune_id is not None and tune_path is not None
+
+
+def test_download_success(monkeypatch):
+    _patch_urlopen(monkeypatch, lambda *a, **k: _FakeResp(b"blob"))
+    assert testing._download("http://x/f") == b"blob"
+
+
+def test_download_404_raises(monkeypatch):
+    def fake(*_a, **_k):
+        raise urllib.error.HTTPError("u", 404, "nf", {}, None)
+
+    _patch_urlopen(monkeypatch, fake)
+    with pytest.raises(TuneFetchError, match="not found"):
+        testing._download("http://x/f")
+
+
+def test_download_retries_then_fails(monkeypatch):
+    attempts = []
+
+    def fake(*_a, **_k):
+        attempts.append(1)
+        raise urllib.error.URLError("down")
+
+    _patch_urlopen(monkeypatch, fake)
+    with pytest.raises(TuneFetchError, match="unreachable"):
+        testing._download("http://x/f", retries=3)
+    assert len(attempts) == 3
+
+
+def test_default_tune_cache_default_and_env(monkeypatch, tmp_path):
+    monkeypatch.delenv("PYSID_TUNECACHE", raising=False)
+    assert default_tune_cache(tmp_path) == tmp_path / ".tunecache"
+    monkeypatch.setenv("PYSID_TUNECACHE", str(tmp_path / "c"))
+    assert default_tune_cache(tmp_path) == tmp_path / "c"
+
+
+def test_gather_tune_relpaths_from_ast(tmp_path):
+    (tmp_path / "t_a.py").write_text(
+        'TUNES = {"x": "A/x.sid"}\nOTHER = ["B/y.sid", "notme.txt"]\nZ = "C/z.sid"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "t_b.py").write_text('S = "A/x.sid"  # dup\n', encoding="utf-8")
+    assert gather_tune_relpaths([tmp_path]) == ["A/x.sid", "B/y.sid", "C/z.sid"]
+
+
+def test_fetch_main_caches_reachable_reports_missing(monkeypatch, tmp_path, capsys):
+    def fake(req, timeout=60):  # pylint: disable=unused-argument
+        if "good.sid" in req.full_url:
+            return _FakeResp(_SID)
+        raise urllib.error.HTTPError("u", 404, "nf", {}, None)
+
+    _patch_urlopen(monkeypatch, fake)
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "t.py").write_text(
+        'T = ["A/good.sid", "A/bad.sid"]\n', encoding="utf-8"
+    )
+    cache = tmp_path / "cache"
+    assert fetch_main(["--cache", str(cache), "--tests", str(tests_dir)]) == 0
+    assert (cache / "A" / "good.sid").read_bytes() == _SID
+    assert "A/bad.sid" in capsys.readouterr().err

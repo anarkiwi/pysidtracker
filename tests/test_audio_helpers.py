@@ -1,5 +1,7 @@
 """Tests for the audio device-resolution and timing helpers."""
 
+import sys
+
 import pytest
 
 from pysidtracker import (
@@ -10,13 +12,6 @@ from pysidtracker import (
     seconds_to_frames,
 )
 from pysidtracker.errors import AudioUnavailable
-
-try:
-    import pyresidfp  # noqa: F401  # pylint: disable=unused-import
-
-    HAVE_PYRESIDFP = True
-except ImportError:
-    HAVE_PYRESIDFP = False
 
 
 class _FakeSID:
@@ -33,8 +28,13 @@ def test_resolve_device_bad_model():
         resolve_device(_FakeSID(), model="9999")
 
 
-@pytest.mark.skipif(HAVE_PYRESIDFP, reason="pyresidfp installed")
-def test_resolve_device_default_unavailable():
+def test_resolve_device_default_unavailable(monkeypatch):
+    """Without a pyresidfp backend, the default device is unavailable.
+
+    Simulates the missing extra by hiding ``pyresidfp`` from ``sys.modules``, so
+    the fallback path is covered whether or not the extra is installed.
+    """
+    monkeypatch.setitem(sys.modules, "pyresidfp", None)
     with pytest.raises(AudioUnavailable):
         resolve_device(None, model="6581")
 

@@ -8,6 +8,7 @@ API.
 """
 
 from . import mos6502, notefreq, registers
+from .d64 import D64File, read_d64
 from .audio import (
     default_device,
     frames_to_seconds,
@@ -96,6 +97,7 @@ from .registers import (
     sustain_release,
 )
 from .reglog import (
+    DEFAULT_MAX_FRAMES,
     DEFAULT_WRITE_SPACING,
     REGLOG_HEADER,
     RegWrite,
@@ -108,7 +110,11 @@ from .source import Source, read_bytes
 from .testing import (
     DEFAULT_MIRROR,
     TuneFetchError,
+    default_tune_cache,
+    fetch_disk,
+    fetch_prgs,
     fetch_tune,
+    gather_tune_relpaths,
     make_oracle_fixtures,
     make_tune_fixtures,
     oracle_grid,
@@ -116,7 +122,7 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -124,6 +130,8 @@ __all__ = [
     "ByteCursor",
     "Cadence",
     "CodePattern",
+    "D64File",
+    "DEFAULT_MAX_FRAMES",
     "DEFAULT_MIRROR",
     "DEFAULT_WRITE_SPACING",
     "Detection",
@@ -169,6 +177,7 @@ __all__ = [
     "TuneFetchError",
     "__version__",
     "adc",
+    "default_tune_cache",
     "add_reglog_command",
     "add_wav_command",
     "aligned_match",
@@ -180,12 +189,15 @@ __all__ = [
     "default_device",
     "detect_playroutine",
     "encode_cstr",
+    "fetch_disk",
+    "fetch_prgs",
     "fetch_tune",
     "find_code_all",
     "find_code_first",
     "find_register_stores",
     "frame_writes",
     "frames_to_seconds",
+    "gather_tune_relpaths",
     "grid_from_writes",
     "is_jmp_vector",
     "locate_note_freq",
@@ -201,6 +213,7 @@ __all__ = [
     "playroutine_cadence",
     "print_info",
     "read_bytes",
+    "read_d64",
     "read_reglog",
     "read_sidtrace",
     "read_sidwr",

@@ -20,10 +20,15 @@ from pathlib import Path
 from typing import IO, Iterable, Iterator, NamedTuple, Tuple, Union
 
 from .errors import SidParseError
+from .registers import PAL_CYCLES_PER_FRAME
 
 # Cycles between consecutive writes within one frame, approximating the store
 # instructions of the 6502 playroutine.
 DEFAULT_WRITE_SPACING = 16
+
+# One minute at the 50 Hz PAL frame rate: the default register-log length for a
+# forever-looping playroutine.
+DEFAULT_MAX_FRAMES = 50 * 60
 
 # SID register file size ($D400..$D418): 25 registers.
 SID_REG_COUNT = 0x19
@@ -138,8 +143,8 @@ def frame_writes(
 
 def register_writes_from_player(
     player,
-    max_frames: int,
-    cycles_per_frame: int,
+    max_frames: int = DEFAULT_MAX_FRAMES,
+    cycles_per_frame: int = PAL_CYCLES_PER_FRAME,
     write_spacing: int = DEFAULT_WRITE_SPACING,
 ) -> Iterator[RegWrite]:
     """Frame a :class:`~pysidtracker.player.MemPlayer` into a :class:`RegWrite` log.
@@ -151,7 +156,8 @@ def register_writes_from_player(
     frame 0's baseline. ``player`` yields ``0..24`` register offsets, so the
     frames go straight through :func:`frame_writes` with ``sid_reg_base=0``.
 
-    Raises :class:`~pysidtracker.errors.SidParseError` if
+    Defaults frame one minute of PAL playback (a forever-looping playroutine
+    must be bounded). Raises :class:`~pysidtracker.errors.SidParseError` if
     ``write_spacing * SID_REG_COUNT >= cycles_per_frame``.
     """
     if write_spacing * SID_REG_COUNT >= cycles_per_frame:

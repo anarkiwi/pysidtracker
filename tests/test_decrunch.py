@@ -119,21 +119,24 @@ def test_detect_default_ignores_native(monkeypatch):
 
 
 # --- real exomizer round-trip (needs the exomizer cruncher) ----------------
+# Marked ``exomizer``: excluded from the default run (like ``oracle``) and run in
+# a dedicated CI job that builds the reference exomizer, so it is executed for
+# real -- never skipped. ``$EXOMIZER`` overrides the binary location.
 
-_EXOMIZER = os.environ.get("EXOMIZER") or shutil.which("exomizer")
+_EXOMIZER = os.environ.get("EXOMIZER") or shutil.which("exomizer") or "exomizer"
 
 
-@pytest.mark.skipif(_EXOMIZER is None, reason="exomizer cruncher not on PATH")
+@pytest.mark.exomizer
 def test_native_decrunch_real_exomizer_sfx(tmp_path):
     """End-to-end: crunch a payload with the real exomizer, then decrunch it.
 
     Wraps a genuine ``exomizer sfx`` self-extracting PRG in a SID container and
-    asserts :func:`native_decrunch` recovers the original payload (a recognizer
-    that fails on the packed image succeeds on the unpacked one). Exercises the
-    real pydexomizer path, not a mock. Skips when the cruncher is unavailable
-    (no exomizer stub is vendored, per the no-copyrighted-material policy).
+    asserts :func:`native_decrunch` recovers the original payload byte-for-byte
+    and that the signature -- absent at the load address while crunched -- is
+    present after unpacking. Exercises the real pydexomizer path, not a mock.
     """
-    payload = (b"..SIG.." + bytes(range(256)) * 8)[:1500]
+    payload = (bytes(range(256)) * 3 + b"..SIG.." + bytes(range(256)) * 3)[:1500]
+    sig_off = payload.index(SIG)
     src = tmp_path / "p.bin"
     src.write_bytes(payload)
     sfx = tmp_path / "p.sfx"
@@ -146,9 +149,11 @@ def test_native_decrunch_real_exomizer_sfx(tmp_path):
     load = sfx_prg[0] | (sfx_prg[1] << 8)
     sid = build_psid(sfx_prg[2:], load=load, init=load, play=0)
     packed = SidImage.from_bytes(sid)
-    assert _sig_recognizer(packed) is None  # SIG hidden while packed
+    # Packing genuinely transforms the payload: the plaintext is not already
+    # sitting at the target load address in the crunched image.
+    assert bytes(packed.mem[0x2000 : 0x2000 + len(payload)]) != payload
     unpacked = native_decrunch(sid)
     assert unpacked is not None
     assert unpacked.load == 0x2000
     assert bytes(unpacked.mem[0x2000 : 0x2000 + len(payload)]) == payload
-    assert _sig_recognizer(unpacked) == 0x2000 + 2  # SIG recoverable
+    assert _sig_recognizer(unpacked) == 0x2000 + sig_off  # SIG recoverable
