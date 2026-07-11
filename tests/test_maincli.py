@@ -157,6 +157,26 @@ def test_discover_formats_accepts_callable(monkeypatch):
     assert formats_mod.discover_formats() == [fmt]
 
 
+def test_cadence_uses_cia_timer_latch():
+    # init latches CIA #1 Timer-A ($DC04/$DC05) to 0x1234, so the play cadence is
+    # the timer period (latch + 1), not the nominal PAL video frame.
+    init = bytes(
+        [0xA9, 0x34, 0x8D, 0x04, 0xDC, 0xA9, 0x12, 0x8D, 0x05, 0xDC, 0x60]
+    )  # LDA #$34 STA $DC04 / LDA #$12 STA $DC05 / RTS
+    data = build_psid(init, load=0x1000, init=0x1000, play=0x1000)
+    cycles_per_frame, _clock = maincli._cadence(data)
+    assert cycles_per_frame == 0x1234 + 1
+
+
+def test_cadence_defaults_to_pal_video_frame():
+    from pysidtracker import PAL_CLOCK_HZ, PAL_CYCLES_PER_FRAME
+
+    data = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1000)
+    cycles_per_frame, clock_hz = maincli._cadence(data)
+    assert cycles_per_frame == PAL_CYCLES_PER_FRAME
+    assert clock_hz == float(PAL_CLOCK_HZ)
+
+
 def test_main_discovers_and_runs(monkeypatch, capsys, tune):
     monkeypatch.setattr(maincli, "discover_formats", lambda: [_fake_format()])
     rc = maincli.main(["info", str(tune)])
