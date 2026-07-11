@@ -66,6 +66,19 @@ NTSC_CYCLES_PER_FRAME = 17095
 PAL_CLOCK_HZ = 985248
 NTSC_CLOCK_HZ = 1022727
 
+
+def cycles_per_frame_for_flags(flags: int) -> int:
+    """PAL/NTSC CPU cycles per frame from PSID header ``flags`` (clock bits 2-3).
+
+    The two clock bits encode 1=PAL, 2=NTSC, 0=unknown, 3=PAL and NTSC; unknown
+    and both default to PAL (the HVSC-dominant clock). A player's frame cadence
+    follows the tune's clock, so an oracle grid must be framed at this rate.
+    """
+    return (
+        NTSC_CYCLES_PER_FRAME if ((flags >> 2) & 0b11) == 0b10 else PAL_CYCLES_PER_FRAME
+    )
+
+
 # --- CIA #1 ($DC00..$DC0F) --------------------------------------------------
 CIA1_BASE = 0xDC00
 CIA1_LAST = 0xDC0F

@@ -90,3 +90,15 @@ def test_hardware_timing_and_layout_constants():
     assert all(
         off + 0x03 == pw for off, pw in zip(reg.SID_VOICE_OFFSET, reg.PW_HI_REGS)
     )
+
+
+def test_cycles_per_frame_for_flags():
+    # PSID clock bits (2-3): 1=PAL, 2=NTSC, 0=unknown, 3=both.
+    assert reg.cycles_per_frame_for_flags(0b0100) == reg.PAL_CYCLES_PER_FRAME
+    assert reg.cycles_per_frame_for_flags(0b1000) == reg.NTSC_CYCLES_PER_FRAME
+    assert reg.cycles_per_frame_for_flags(0b0000) == reg.PAL_CYCLES_PER_FRAME
+    assert reg.cycles_per_frame_for_flags(0b1100) == reg.PAL_CYCLES_PER_FRAME
+    # unrelated bits are ignored
+    assert (
+        reg.cycles_per_frame_for_flags(0b100000 | 0b1000) == reg.NTSC_CYCLES_PER_FRAME
+    )

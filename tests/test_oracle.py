@@ -6,6 +6,7 @@ import pytest
 
 from pysidtracker import (
     PAL_CYCLES_PER_FRAME,
+    EmuPlayer,
     SidParseError,
     aligned_match,
     grid_from_writes,
@@ -91,6 +92,47 @@ def test_register_grid_no_header():
     image = SidImage.from_prg(build_prg(_SIMPLE, load=0x1000))
     with pytest.raises(SidParseError):
         register_grid(image, 1)
+
+
+def test_emuplayer_runs_tunes_own_code():
+    player = EmuPlayer(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
+    assert player.regs[0] == 0x0A  # init wrote $D400
+    grid = player.render_grid(3)
+    assert len(grid) == 3
+    for row in grid:
+        assert len(row) == 25 and row[0] == 0x0A and row[1] == 0x05
+
+
+def test_emuplayer_matches_register_grid():
+    tune = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
+    player = EmuPlayer(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
+    assert player.render_grid(3) == register_grid(tune, 3)
+
+
+def test_emuplayer_masks_pw_hi():
+    # play writes $7D to $D403 (a PW-high register); only the low nibble is real.
+    play = bytes([0xA9, 0x7D, 0x8D, 0x03, 0xD4, 0x60])
+    player = EmuPlayer(_SIMPLE[:6] + play, load=0x1000, init=0x1000, play=0x1006)
+    player.play_frame()
+    assert player.regs[3] == 0x0D
+
+
+def test_emuplayer_play_frame_diffs():
+    player = EmuPlayer(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
+    assert len(player.play_frame()) == 25  # first frame: full register file
+    assert player.play_frame() == []  # steady state: no register changed
+
+
+def test_emuplayer_illegal_opcodes():
+    player = EmuPlayer(
+        _SIMPLE[:6] + _ILLEGAL_PLAY,
+        load=0x1000,
+        init=0x1000,
+        play=0x1006,
+        illegal_opcodes=True,
+    )
+    assert player.regs[0] == 0x0A
+    assert len(player.render_grid(2)) == 2
 
 
 def test_grid_from_writes_empty():

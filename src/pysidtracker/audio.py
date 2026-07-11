@@ -1,14 +1,17 @@
-"""Render a per-frame SID write stream through an emulated SID to WAV/samples.
+"""Render a SID player (or write stream) through an emulated SID to WAV/samples.
 
-The emulated SID is `pyresidfp <https://pypi.org/project/pyresidfp/>`_ (install
-the ``audio`` extra). Any object exposing ``write_register(reg, value)``,
+The emulated SID is `pyresidfp <https://pypi.org/project/pyresidfp/>`_, a core
+dependency. Any object exposing ``write_register(reg, value)``,
 ``clock(timedelta) -> samples`` and a ``sampling_frequency`` attribute may be
 passed as ``device`` instead (e.g. a test double or a different emulator).
 
-Each register write is clocked individually at the same in-frame offset the
-register log uses, so renders line up with :mod:`pysidtracker.reglog` output.
-This consolidates the per-package ``audio.py`` (pygoattracker,
-pyfuturecomposer, pymusicassembler).
+:func:`render_player_wav` / :func:`render_player_samples` drive any
+:class:`~pysidtracker.player.MemPlayer` (the shared per-frame player surface)
+straight to WAV; the lower-level :func:`render_wav` / :func:`render_samples`
+take a bare per-frame ``(reg, val)`` write stream. Each register write is
+clocked individually at the same in-frame offset the register log uses, so
+renders line up with :mod:`pysidtracker.reglog` output. This is the one WAV
+render path every ``py*`` tracker shares.
 """
 
 from __future__ import annotations
@@ -19,13 +22,11 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Iterable, Tuple
 
-from .errors import AudioUnavailable
-from .reglog import DEFAULT_WRITE_SPACING
+import numpy as _np
 
-try:  # numpy is optional; a stdlib ``array`` fallback is used without it.
-    import numpy as _np
-except ImportError:  # pragma: no cover - exercised only without numpy
-    _np = None
+from .errors import AudioUnavailable
+from .registers import PAL_CLOCK_HZ, PAL_CYCLES_PER_FRAME
+from .reglog import DEFAULT_WRITE_SPACING
 
 CHIP_MODELS = ("6581", "8580")
 
@@ -47,11 +48,8 @@ def default_device(model: str, sampling_frequency=None, clock_frequency=None):
     try:
         from pyresidfp import SoundInterfaceDevice
         from pyresidfp.sound_interface_device import ChipModel
-    except ImportError as exc:  # pragma: no cover - optional audio extra
-        raise AudioUnavailable(
-            "pyresidfp is required to render audio; "
-            "install with: pip install pysidtracker[audio]"
-        ) from exc
+    except ImportError as exc:  # pragma: no cover - pyresidfp is a core dependency
+        raise AudioUnavailable("pyresidfp is required to render audio") from exc
     chip = {"6581": ChipModel.MOS6581, "8580": ChipModel.MOS8580}[model]
     kwargs = {"model": chip}
     if sampling_frequency:
@@ -143,9 +141,7 @@ def render_samples(
             remainder -= write_q
         if remainder > 0:
             samples.extend(device.clock(timedelta(seconds=remainder)))
-    if _np is not None:
-        return _np.frombuffer(samples.tobytes(), dtype=_np.int16)
-    return samples.tolist()
+    return _np.frombuffer(samples.tobytes(), dtype=_np.int16)
 
 
 def write_wav(dst, samples, sampling_frequency: float) -> None:
@@ -186,4 +182,58 @@ def render_wav(
         device=device,
     )
     write_wav(dst, samples, device_sampling_frequency(device))
+    return Path(dst)
+
+
+def render_player_samples(
+    player,
+    *,
+    seconds: float = 60.0,
+    model: str = "8580",
+    sampling_frequency=None,
+    device=None,
+    cycles_per_frame: "int | None" = None,
+    clock_frequency: "float | None" = None,
+    write_spacing: int = DEFAULT_WRITE_SPACING,
+):
+    """Render ``seconds`` of a :class:`~pysidtracker.player.MemPlayer` to samples.
+
+    Drives ``player.play_frame()`` for as many frames as span ``seconds`` and
+    renders them through :func:`render_samples`. ``cycles_per_frame`` defaults to
+    the player's own play-routine cadence (its ``cycles_per_frame`` attribute)
+    or the PAL video frame; ``clock_frequency`` defaults to the device's clock or
+    the PAL system clock. Returns ``(samples, sampling_frequency)``.
+    """
+    device = resolve_device(device, model, sampling_frequency)
+    if cycles_per_frame is None:
+        cycles_per_frame = getattr(player, "cycles_per_frame", None) or (
+            PAL_CYCLES_PER_FRAME
+        )
+    if clock_frequency is None:
+        clock_frequency = float(getattr(device, "clock_frequency", PAL_CLOCK_HZ))
+    nframes = seconds_to_frames(seconds, cycles_per_frame, clock_frequency)
+    frames = (player.play_frame() for _ in range(nframes))
+    samples = render_samples(
+        frames,
+        model=model,
+        sampling_frequency=sampling_frequency,
+        cycles_per_frame=cycles_per_frame,
+        clock_frequency=clock_frequency,
+        write_spacing=write_spacing,
+        device=device,
+    )
+    return samples, device_sampling_frequency(device)
+
+
+def render_player_wav(player, dst, *, seconds: float = 60.0, **options) -> Path:
+    """Render ``seconds`` of a :class:`~pysidtracker.player.MemPlayer` to WAV.
+
+    Keyword options are those of :func:`render_player_samples`. Returns the path
+    written. This is the shared player-to-WAV entry point for every ``py*``
+    tracker -- construct the format's player and hand it here.
+    """
+    samples, sampling_frequency = render_player_samples(
+        player, seconds=seconds, **options
+    )
+    write_wav(dst, samples, sampling_frequency)
     return Path(dst)

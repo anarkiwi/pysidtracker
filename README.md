@@ -67,9 +67,7 @@ API.
 ## Install
 
 ```bash
-pip install pysidtracker          # core (includes py65 for init emulation)
-pip install pysidtracker[fast]    # + numpy, to accelerate the image scan
-pip install pysidtracker[audio]   # + pyresidfp, for WAV/sample rendering
+pip install pysidtracker   # core: py65 (init emulation), numpy, pyresidfp (WAV render)
 ```
 
 py65 and pydexomizer are required core dependencies (detection runs a tune's
