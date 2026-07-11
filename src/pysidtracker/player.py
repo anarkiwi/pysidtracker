@@ -34,6 +34,9 @@ class MemPlayer(abc.ABC):
         self._mem = bytearray(MEM_SIZE)
         self._load = load & 0xFFFF
         self._mem[self._load : self._load + len(image)] = image
+        # The libsidplayfp PSID driver seeds maximum volume ($D418=$0F) before
+        # running init, so a tune that never sets volume is still audible.
+        self._mem[self.SID_BASE + 0x18] = 0x0F
         self.regs: List[int] = [0] * self.REG_COUNT
         self._last_regs: Optional[List[int]] = None
         self._init(subtune)

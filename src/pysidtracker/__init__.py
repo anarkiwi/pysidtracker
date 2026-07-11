@@ -66,7 +66,19 @@ from .notefreq import (
     NoteFreqTable,
     locate_note_freq,
 )
-from .oracle import aligned_match, grid_from_writes, read_sidwr, register_grid
+from .oracle import (
+    SIDTRACE_IMAGE,
+    SidtraceRow,
+    SidtraceUnavailable,
+    aligned_match,
+    grid_from_writes,
+    read_sidtrace,
+    read_sidwr,
+    register_grid,
+    run_sidtrace,
+    sidtrace_cadence,
+    sidtrace_grid,
+)
 from .player import MemPlayer
 from .registers import (
     NTSC_CLOCK_HZ,
@@ -97,12 +109,14 @@ from .testing import (
     DEFAULT_MIRROR,
     TuneFetchError,
     fetch_tune,
+    make_oracle_fixtures,
     make_tune_fixtures,
+    oracle_grid,
     resolve_tune,
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -139,6 +153,7 @@ __all__ = [
     "RegisterStore",
     "SID_BASE",
     "SID_REG_COUNT",
+    "SIDTRACE_IMAGE",
     "SID_VOICES",
     "SID_VOICE_OFFSET",
     "SidError",
@@ -147,6 +162,8 @@ __all__ = [
     "SidImage",
     "SidParseError",
     "SidWriteCapturingMemory",
+    "SidtraceRow",
+    "SidtraceUnavailable",
     "Source",
     "TriggerSource",
     "TuneFetchError",
@@ -172,17 +189,20 @@ __all__ = [
     "grid_from_writes",
     "is_jmp_vector",
     "locate_note_freq",
+    "make_oracle_fixtures",
     "make_package_errors",
     "make_tune_fixtures",
     "mos6502",
     "native_decrunch",
     "notefreq",
+    "oracle_grid",
     "parse_prg",
     "parse_sid_header",
     "playroutine_cadence",
     "print_info",
     "read_bytes",
     "read_reglog",
+    "read_sidtrace",
     "read_sidwr",
     "register_grid",
     "register_writes_from_player",
@@ -194,9 +214,12 @@ __all__ = [
     "resolve_tune",
     "run_cli",
     "run_init",
+    "run_sidtrace",
     "s8",
     "sbc",
     "seconds_to_frames",
+    "sidtrace_cadence",
+    "sidtrace_grid",
     "sustain_release",
     "trace_init",
     "walk_until",

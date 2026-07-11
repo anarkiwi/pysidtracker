@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.5.0"
+version = "0.6.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -42,6 +42,8 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4",
     "pytest-xdist>=3",
+    # Decompress the sidtrace oracle's zstd CSV traces (oracle comparison tests).
+    "zstandard>=0.21",
 ]
 
 [project.urls]
@@ -55,7 +57,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
-addopts = "-ra -n auto"
+# Oracle comparison tests need Docker + network; run them in a dedicated CI job
+# via ``-m oracle`` (they are excluded from the default coverage matrix run).
+addopts = "-ra -n auto -m 'not oracle'"
+markers = ["oracle: byte-exact comparison against the sidtrace Docker oracle"]
 
 [tool.coverage.run]
 branch = true

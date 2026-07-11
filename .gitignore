@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# sidtrace oracle test cache (HVSC tunes + CSV traces)
+.oracle-cache/
