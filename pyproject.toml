@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.6.0"
+version = "0.7.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -39,12 +39,27 @@ dev = [
     "py65>=1.1",
     "pydexomizer>=0.1",
     "pylint>=3",
+    # The audio render tests exercise the real backend (no skips), so pyresidfp
+    # is a test dependency, not just the optional `audio` extra.
+    "pyresidfp>=0.17",
     "pytest>=7",
     "pytest-cov>=4",
     "pytest-xdist>=3",
     # Decompress the sidtrace oracle's zstd CSV traces (oracle comparison tests).
     "zstandard>=0.21",
 ]
+
+[project.scripts]
+# Pre-cache HVSC tunes into the shared tune cache (CI populates a persisted
+# actions/cache before the suite runs).
+pysid-tune-fetch = "pysidtracker.testing:main"
+
+[project.entry-points.pytest11]
+# The `hvsc` / `sidtrace_oracle` / `disk_prgs` fixtures ship to every dependent
+# suite with no per-package conftest, just by installing pysidtracker. The plugin
+# is a standalone top-level module (not a pysidtracker submodule) so loading it
+# does not import the package before pytest-cov starts tracing.
+pysidtracker = "pysidtracker_pytest"
 
 [project.urls]
 Homepage = "https://github.com/anarkiwi/pysidtracker"
@@ -54,13 +69,20 @@ Issues = "https://github.com/anarkiwi/pysidtracker/issues"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools]
+# The pytest plugin is a standalone top-level module (see [pytest11] above).
+py-modules = ["pysidtracker_pytest"]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
 # Oracle comparison tests need Docker + network; run them in a dedicated CI job
 # via ``-m oracle`` (they are excluded from the default coverage matrix run).
-addopts = "-ra -n auto -m 'not oracle'"
-markers = ["oracle: byte-exact comparison against the sidtrace Docker oracle"]
+addopts = "-ra -n auto -m 'not oracle and not exomizer'"
+markers = [
+    "oracle: byte-exact comparison against the sidtrace Docker oracle",
+    "exomizer: real exomizer round-trip (needs the exomizer cruncher; own CI job)",
+]
 
 [tool.coverage.run]
 branch = true

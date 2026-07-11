@@ -1,5 +1,11 @@
-"""Tests for the pyresidfp WAV/sample render (audio extra)."""
+"""Tests for the pyresidfp WAV/sample render (audio extra).
 
+``pyresidfp`` is a dev/test dependency, so the real-backend tests always run;
+the "no backend" fallback tests hide ``pyresidfp`` from ``sys.modules`` to cover
+that path too -- neither branch is skipped.
+"""
+
+import sys
 import wave
 from datetime import timedelta
 
@@ -14,13 +20,6 @@ from pysidtracker import (
 )
 from pysidtracker import audio as audio_mod
 from pysidtracker.errors import AudioUnavailable
-
-try:  # the audio extra is optional
-    import pyresidfp  # noqa: F401  # pylint: disable=unused-import
-
-    HAVE_PYRESIDFP = True
-except ImportError:
-    HAVE_PYRESIDFP = False
 
 
 class FakeSID:
@@ -86,9 +85,8 @@ def test_render_wav(tmp_path):
         assert wav.getnframes() == 5
 
 
-def test_default_device_requires_pyresidfp():
-    if HAVE_PYRESIDFP:
-        pytest.skip("pyresidfp installed; default backend available")
+def test_default_device_requires_pyresidfp(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pyresidfp", None)
     with pytest.raises(AudioUnavailable):
         render_samples(
             _frames(),
@@ -97,9 +95,8 @@ def test_default_device_requires_pyresidfp():
         )
 
 
-def test_default_device_public_accessor_requires_pyresidfp():
-    if HAVE_PYRESIDFP:
-        pytest.skip("pyresidfp installed; default backend available")
+def test_default_device_public_accessor_requires_pyresidfp(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pyresidfp", None)
     with pytest.raises(AudioUnavailable):
         default_device("8580", 44100, PAL_CLOCK_HZ)
 
@@ -119,13 +116,11 @@ def test_device_sampling_frequency_accessor():
     assert audio_mod.device_sampling_frequency(dev) == 48000.0
 
 
-@pytest.mark.skipif(not HAVE_PYRESIDFP, reason="audio extra (pyresidfp) not installed")
 def test_default_device_returns_device_with_sampling_frequency():
     dev = default_device("8580", 44100, PAL_CLOCK_HZ)
     assert audio_mod.device_sampling_frequency(dev) > 0
 
 
-@pytest.mark.skipif(not HAVE_PYRESIDFP, reason="audio extra (pyresidfp) not installed")
 def test_render_with_real_pyresidfp(tmp_path):
     dst = render_wav(
         _frames(),

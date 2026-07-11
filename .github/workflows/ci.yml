@@ -22,9 +22,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: black --check
-        run: black --check src/pysidtracker tests
+        run: black --check src tests
       - name: pylint
-        run: pylint src/pysidtracker tests
+        run: pylint src tests
       - name: pytest + coverage (> 85%)
         run: pytest --cov=pysidtracker --cov-report=term-missing --cov-fail-under=85
 
@@ -62,6 +62,31 @@ jobs:
           key: oracle-csv-${{ steps.image.outputs.digest }}-${{ hashFiles('tests/test_oracle_hvsc.py') }}
       - name: Oracle comparison (never skipped)
         run: pytest -m oracle -n auto
+
+  exomizer:
+    # Real exomizer round-trip for the native (pydexomizer) decrunch path. Its
+    # own job builds the reference exomizer, so the test runs for real -- never
+    # skipped -- while the default matrix stays exomizer-free (`-m 'not exomizer'`).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build the reference exomizer cruncher
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential git bison flex
+          git clone https://bitbucket.org/magli143/exomizer.git /tmp/exomizer
+          make -C /tmp/exomizer/src exomizer
+          echo "EXOMIZER=/tmp/exomizer/src/exomizer" >> "$GITHUB_ENV"
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Real exomizer round-trip (never skipped)
+        run: pytest -m exomizer -o addopts='' -n auto
 
   build:
     runs-on: ubuntu-latest

@@ -19,13 +19,21 @@ Pure stdlib (plus an optional lazy pytest import), so it ships in the wheel.
 
 from __future__ import annotations
 
+import argparse
+import ast
+import io
 import os
+import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path
+from typing import Iterable, List, Optional
 
+from .d64 import D64File, read_d64
 from .errors import SidError
 from .oracle import (
     SIDTRACE_IMAGE,
@@ -38,6 +46,41 @@ from .oracle import (
 
 # Public HVSC mirror. Override with ``$HVSC_MIRROR``.
 DEFAULT_MIRROR = "https://hvsc.brona.dk/HVSC/C64Music"
+
+
+def default_tune_cache(root=None) -> Path:
+    """The tune-cache directory: ``$PYSID_TUNECACHE`` or ``<root>/.tunecache``.
+
+    ``root`` defaults to the current working directory. This is the location the
+    :mod:`pysidtracker.pytest_plugin` fixtures and the ``pysid-tune-fetch`` CLI
+    share, and what a GitHub ``actions/cache`` step persists across CI runs.
+    """
+    env = os.environ.get("PYSID_TUNECACHE")
+    if env:
+        return Path(env)
+    return Path(root if root is not None else Path.cwd()) / ".tunecache"
+
+
+def gather_tune_relpaths(paths: Iterable) -> List[str]:
+    """Every ``*.sid`` string literal in the Python files under ``paths``.
+
+    Parses each file with :mod:`ast` (no import, no side effects) and collects
+    every string constant ending in ``.sid`` -- so a suite declares the tunes it
+    needs as plain relpath literals (in dicts/lists/constants) and the fetch CLI
+    pre-caches exactly those, with no hand-maintained manifest.
+    """
+    files: List[Path] = []
+    for entry in paths:
+        path = Path(entry)
+        files.extend(sorted(path.rglob("*.py")) if path.is_dir() else [path])
+    rels = set()
+    for file in files:
+        tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if node.value.endswith(".sid"):
+                    rels.add(node.value)
+    return sorted(rels)
 
 
 class TuneFetchError(SidError):
@@ -106,6 +149,86 @@ def fetch_tune(
     raise TuneFetchError(
         f"{relpath}: mirror unreachable after {retries} attempts ({last_err})"
     )
+
+
+def _download(url: str, *, retries: int = 4) -> bytes:
+    """Download ``url``, retrying transient failures with exponential backoff."""
+    req = urllib.request.Request(url, headers={"User-Agent": "pysidtracker/fetch"})
+    last_err = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise TuneFetchError(f"{url}: not found") from exc
+            last_err = exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_err = exc
+        if attempt + 1 < retries:
+            time.sleep(min(2**attempt, 5))
+    raise TuneFetchError(f"{url}: unreachable after {retries} attempts ({last_err})")
+
+
+def _d64_from_zip(blob: bytes, member: Optional[str]) -> bytes:
+    """Extract a ``.d64`` from a zip ``blob`` (``member`` suffix, else the first)."""
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        names = zf.namelist()
+        if member is not None:
+            cands = [n for n in names if n.endswith(member)]
+        else:
+            cands = [n for n in names if n.lower().endswith(".d64")]
+        if not cands:
+            raise TuneFetchError(f"no {member or '.d64'} in zip (contents: {names})")
+        return zf.read(cands[0])
+
+
+def fetch_disk(
+    url: str,
+    *,
+    cache_dir,
+    member: Optional[str] = None,
+    name: Optional[str] = None,
+    force: bool = False,
+) -> Path:
+    """Fetch a ``.d64`` disk image into ``cache_dir``; return its cached path.
+
+    ``url`` may be a raw ``.d64`` or a ``.zip`` containing one (``member`` selects
+    the entry by filename suffix; with no ``member`` the first ``.d64`` is used).
+    Cached like a tune -- returned unchanged when present unless ``force`` -- so a
+    persisted CI cache avoids re-downloading. ``name`` overrides the cache filename.
+    """
+    cache_dir = Path(cache_dir)
+    is_zip = url.lower().endswith(".zip")
+    if name is None:
+        source = member if member else urllib.parse.urlparse(url).path
+        name = Path(source).name
+        if not name.lower().endswith(".d64"):
+            name = f"{Path(name).stem or 'disk'}.d64"
+    dest = cache_dir / name
+    if dest.exists() and not force:
+        return dest
+    blob = _download(url)
+    _atomic_write(dest, _d64_from_zip(blob, member) if is_zip else blob)
+    return dest
+
+
+def fetch_prgs(
+    url: str,
+    *,
+    cache_dir,
+    member: Optional[str] = None,
+    name: Optional[str] = None,
+    force: bool = False,
+) -> List[D64File]:
+    """Fetch a ``.d64`` (see :func:`fetch_disk`) and return its PRG files.
+
+    Convenience over :func:`fetch_disk` + :func:`pysidtracker.d64.read_d64`, so a
+    test suite gets ``[D64File(name, prg), ...]`` from a disk-image (or zipped
+    disk-image) URL with one call, cached the same way tunes are.
+    """
+    disk = fetch_disk(url, cache_dir=cache_dir, member=member, name=name, force=force)
+    return read_d64(disk.read_bytes())
 
 
 def resolve_tune(relpath: str, *, cache_dir, local_env: str = "HVSC"):
@@ -179,21 +302,28 @@ def oracle_grid(
     image: str = SIDTRACE_IMAGE,
     chip: int = 0,
     reg_count: int = 25,
+    cycles_per_frame: Optional[int] = None,
     force: bool = False,
 ):
     """Per-frame reference grid for ``tune_path`` from the sidtrace oracle.
 
     The oracle CSV is cached at ``oracle_cache/<stem>.csv.zst`` and reused on the
     next call (so a CI cache -- or a developer's local dir -- avoids re-running
-    Docker). Pass ``force=True`` to re-render. Returns the first ``frames`` rows
-    (all rows when ``frames`` is ``None``).
+    Docker). Pass ``force=True`` to re-render. ``cycles_per_frame`` frames at a
+    fixed cadence (e.g. PAL) instead of the sidtrace auto-cadence. Returns the
+    first ``frames`` rows (all rows when ``frames`` is ``None``).
     """
     tune_path = Path(tune_path)
     oracle_cache = Path(oracle_cache)
     csv_path = oracle_cache / f"{tune_path.stem}.csv.zst"
     if force or not csv_path.exists():
         run_sidtrace(tune_path, csv_path, seconds=seconds, image=image)
-    grid = sidtrace_grid(read_sidtrace(csv_path), chip=chip, reg_count=reg_count)
+    grid = sidtrace_grid(
+        read_sidtrace(csv_path),
+        chip=chip,
+        reg_count=reg_count,
+        cycles_per_frame=cycles_per_frame,
+    )
     return grid[:frames] if frames else grid
 
 
@@ -268,3 +398,50 @@ def make_oracle_fixtures(
         return _match
 
     return tune_id, oracle_match
+
+
+def main(argv=None) -> int:
+    """``pysid-tune-fetch``: pre-cache HVSC tunes into the shared tune cache.
+
+    Fetches the given HVSC relpaths (and every ``*.sid`` literal found under any
+    ``--tests`` path) from the mirror into the cache, so a CI job can populate a
+    persisted ``actions/cache`` before the suite runs. Best-effort: an
+    unreachable tune is warned about, not fatal (the test that needs it fails).
+    """
+    parser = argparse.ArgumentParser(
+        prog="pysid-tune-fetch", description=main.__doc__.splitlines()[0]
+    )
+    parser.add_argument("relpaths", nargs="*", help="HVSC relative paths to fetch")
+    parser.add_argument(
+        "--tests",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="scan this dir/file for '*.sid' relpaths to fetch (repeatable)",
+    )
+    parser.add_argument(
+        "--cache", help="cache dir (default: $PYSID_TUNECACHE or ./.tunecache)"
+    )
+    parser.add_argument("--force", action="store_true", help="re-download cached tunes")
+    args = parser.parse_args(argv)
+
+    cache = Path(args.cache) if args.cache else default_tune_cache()
+    rels = set(args.relpaths)
+    if args.tests:
+        rels.update(gather_tune_relpaths(args.tests))
+    got, missing = 0, []
+    for rel in sorted(rels):
+        try:
+            fetch_tune(rel, cache_dir=cache, force=args.force)
+            got += 1
+        except TuneFetchError as exc:
+            missing.append(rel)
+            print(f"WARN: {rel}: {exc}", file=sys.stderr)
+    print(f"tune cache: fetched/cached {got}/{len(rels)} tunes into {cache}")
+    if missing:
+        print(f"unreachable: {len(missing)} ({', '.join(missing)})", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
