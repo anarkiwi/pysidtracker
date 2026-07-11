@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.7.0"
+version = "0.8.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -24,24 +24,15 @@ classifiers = [
 # their 6502 init routine (run_init / trace_init / playroutine_cadence), and
 # every dependent parser relies on that path. pydexomizer: native pure-Python
 # exomizer decrunch (native_decrunch), the init-free alternative unpack path.
-dependencies = ["py65>=1.1", "pydexomizer>=0.1"]
+# pyresidfp: the emulated SID every tracker's WAV render (pysidtracker.audio)
+# drives -- core, not an extra, because rendering audio is core functionality.
+# numpy: sample buffers and the image anchor scan.
+dependencies = ["py65>=1.1", "pydexomizer>=0.1", "pyresidfp>=0.17", "numpy>=1.23"]
 
 [project.optional-dependencies]
-# numpy accelerates the image anchor scan; a pure-stdlib fallback is used
-# when it is not installed.
-fast = ["numpy>=1.23"]
-# Audio rendering (pysidtracker.audio) drives an emulated SID via pyresidfp;
-# everything else works without it.
-audio = ["pyresidfp>=0.17"]
 dev = [
     "black>=24",
-    "numpy>=1.23",
-    "py65>=1.1",
-    "pydexomizer>=0.1",
     "pylint>=3",
-    # The audio render tests exercise the real backend (no skips), so pyresidfp
-    # is a test dependency, not just the optional `audio` extra.
-    "pyresidfp>=0.17",
     "pytest>=7",
     "pytest-cov>=4",
     "pytest-xdist>=3",

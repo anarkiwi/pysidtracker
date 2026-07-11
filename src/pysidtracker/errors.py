@@ -30,11 +30,11 @@ class EmulatorUnavailable(SidError):
 
 
 class AudioUnavailable(SidError):
-    """The optional SID audio backend (``pyresidfp``) is needed but missing.
+    """The SID audio backend (``pyresidfp``) is needed but not importable.
 
-    Raised by :mod:`pysidtracker.audio` when a WAV/sample render needs an
-    emulated SID and ``pyresidfp`` is not installed. Install the extra with
-    ``pip install pysidtracker[audio]``.
+    ``pyresidfp`` is a core dependency, so this only fires on a broken install;
+    raised by :mod:`pysidtracker.audio` when a WAV/sample render needs an
+    emulated SID and it cannot be imported.
     """
 
 

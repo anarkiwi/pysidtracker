@@ -3,16 +3,6 @@
 import pytest
 
 from pysidtracker import CodePattern, SidImage, find_code_all, find_code_first
-from pysidtracker import codescan
-
-
-@pytest.fixture(params=["numpy", "python"])
-def scan_backend(request, monkeypatch):
-    if request.param == "python":
-        monkeypatch.setattr(codescan, "_np", None)
-    elif codescan._np is None:  # pragma: no cover - numpy present in dev deps
-        pytest.skip("numpy not installed")
-    return request.param
 
 
 def _image(payload, load=0x1000):
@@ -35,7 +25,7 @@ def test_pattern_bad_token():
         CodePattern("   ")
 
 
-def test_literal_wildcard_and_captures(scan_backend):  # pylint: disable=unused-argument
+def test_literal_wildcard_and_captures():
     img = _image([0xA9, 0x2A, 0x8D, 0x05, 0xD4, 0xBD, 0x34, 0x12, 0x85, 0xFA])
     imm = find_code_first(img, "A9 {imm} 8D 05 D4")
     assert imm.addr == 0x1000
@@ -49,7 +39,7 @@ def test_literal_wildcard_and_captures(scan_backend):  # pylint: disable=unused-
     assert wild.captures == {}
 
 
-def test_multiple_matches_and_none(scan_backend):  # pylint: disable=unused-argument
+def test_multiple_matches_and_none():
     payload = [0xA9, 0x01, 0x60, 0xA9, 0x02, 0x60, 0xA9, 0x03, 0x60]
     img = _image(payload)
     hits = find_code_all(img, "A9 {v} 60")
@@ -59,7 +49,7 @@ def test_multiple_matches_and_none(scan_backend):  # pylint: disable=unused-argu
     assert find_code_all(img, "A9 FF 60") == []
 
 
-def test_all_wildcard_no_literals(scan_backend):  # pylint: disable=unused-argument
+def test_all_wildcard_no_literals():
     img = _image([0x11, 0x22, 0x33])
     hits = find_code_all(img, "{a} {b}")
     # every start position in the searched window yields a match.
@@ -67,7 +57,7 @@ def test_all_wildcard_no_literals(scan_backend):  # pylint: disable=unused-argum
     assert hits[0].captures == {"a": 0x11, "b": 0x22}
 
 
-def test_start_end_bounds(scan_backend):  # pylint: disable=unused-argument
+def test_start_end_bounds():
     img = _image([0xA9, 0x01, 0x60, 0xA9, 0x02, 0x60])
     assert find_code_first(img, "A9 {v} 60", start=0x1003).captures["v"] == 2
     assert find_code_first(img, "A9 {v} 60", end=0x1003).captures["v"] == 1
@@ -76,7 +66,7 @@ def test_start_end_bounds(scan_backend):  # pylint: disable=unused-argument
     assert find_code_all(img, "A9 {v} 60", start=0x1004, end=0x1006) == []
 
 
-def test_image_convenience_methods(scan_backend):  # pylint: disable=unused-argument
+def test_image_convenience_methods():
     img = _image([0xA9, 0x2A, 0x8D, 0x05, 0xD4])
     assert img.find_code("A9 {imm} 8D 05 D4").captures == {"imm": 0x2A}
     assert len(img.find_code_all("A9 {imm} 8D 05 D4")) == 1
@@ -85,9 +75,7 @@ def test_image_convenience_methods(scan_backend):  # pylint: disable=unused-argu
 # --- re-expressing real parser fingerprints as CodePatterns ----------------
 
 
-def test_reexpress_futurecomposer_signature(
-    scan_backend,
-):  # pylint: disable=unused-argument
+def test_reexpress_futurecomposer_signature():
     # pyfuturecomposer _FC_SIGNATURES[1]: the $D417 filter-store fragment. The
     # spec uses the SAME ?? wildcard tokens the parser hand-rolled as None.
     spec = "8D 17 D4 A0 06 88 88 88 88 88 88 B1 ??"
@@ -97,9 +85,7 @@ def test_reexpress_futurecomposer_signature(
     assert match.addr == 0x1004
 
 
-def test_reexpress_musicassembler_order_sig(
-    scan_backend,
-):  # pylint: disable=unused-argument
+def test_reexpress_musicassembler_order_sig():
     # pymusicassembler _SIG_ORDER = rb"\xbd(..)\x85\xfa\xbd(..)\x85\xfb":
     # LDA order_lo,X ; STA $fa ; LDA order_hi,X ; STA $fb, bases captured.
     frag = [0xBD, 0x00, 0x20, 0x85, 0xFA, 0xBD, 0x80, 0x20, 0x85, 0xFB]
@@ -108,7 +94,7 @@ def test_reexpress_musicassembler_order_sig(
     assert match.captures == {"order_lo": 0x2000, "order_hi": 0x2080}
 
 
-def test_reexpress_defmon_signature(scan_backend):  # pylint: disable=unused-argument
+def test_reexpress_defmon_signature():
     # pydefmon SIGNATURE tokens are already a masked skeleton; feed them verbatim.
     spec = (
         "A2 ?? A9 ?? 8E 02 D4 8D 03 D4 A2 ?? A9 ?? 8E 00 D4 8D 01 D4 "
@@ -120,7 +106,7 @@ def test_reexpress_defmon_signature(scan_backend):  # pylint: disable=unused-arg
     assert find_code_first(img, spec).addr == 0x1002
 
 
-def test_reexpress_jch_immediate_idiom(scan_backend):  # pylint: disable=unused-argument
+def test_reexpress_jch_immediate_idiom():
     # pyjch _one_operand(LDA #imm, STA $D405): A9 <imm> 8D 05 D4.
     img = _image([0xA9, 0x11, 0x8D, 0x05, 0xD4])
     assert find_code_first(img, "A9 {ad} 8D 05 D4").captures == {"ad": 0x11}

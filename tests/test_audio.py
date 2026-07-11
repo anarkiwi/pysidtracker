@@ -1,8 +1,8 @@
-"""Tests for the pyresidfp WAV/sample render (audio extra).
+"""Tests for the pyresidfp WAV/sample render.
 
-``pyresidfp`` is a dev/test dependency, so the real-backend tests always run;
-the "no backend" fallback tests hide ``pyresidfp`` from ``sys.modules`` to cover
-that path too -- neither branch is skipped.
+``pyresidfp`` is a core dependency, so the real-backend tests always run; the
+"no backend" tests hide ``pyresidfp`` from ``sys.modules`` to cover the
+broken-install error path too -- neither branch is skipped.
 """
 
 import sys
@@ -130,4 +130,49 @@ def test_render_with_real_pyresidfp(tmp_path):
         clock_frequency=PAL_CLOCK_HZ,
     )
     with wave.open(str(dst), "rb") as wav:
+        assert wav.getnframes() > 0
+
+
+class _FakePlayer:
+    """A minimal MemPlayer stand-in: one changed register per frame."""
+
+    def __init__(self, cycles_per_frame=None):
+        self.calls = 0
+        if cycles_per_frame is not None:
+            self.cycles_per_frame = cycles_per_frame
+
+    def play_frame(self):
+        self.calls += 1
+        return [(0, self.calls & 0xFF)]
+
+
+def test_render_player_samples_uses_player_cadence():
+    dev = FakeSID()
+    player = _FakePlayer(cycles_per_frame=PAL_CYCLES_PER_FRAME)
+    samples, sampling_frequency = audio_mod.render_player_samples(
+        player, seconds=0.05, device=dev
+    )
+    assert sampling_frequency == dev.sampling_frequency
+    # One frame per play_frame call, each contributing exactly one write.
+    assert player.calls > 0
+    assert dev.writes == [(0, (i + 1) & 0xFF) for i in range(player.calls)]
+    assert len(samples) == len(dev.clock_seconds)
+
+
+def test_render_player_samples_default_cadence_without_attr():
+    # A player without a cycles_per_frame attribute falls back to the PAL frame.
+    dev = FakeSID()
+    player = _FakePlayer()
+    audio_mod.render_player_samples(player, seconds=0.05, device=dev)
+    assert player.calls > 0
+
+
+def test_render_player_wav_writes_file(tmp_path):
+    dst = tmp_path / "player.wav"
+    out = audio_mod.render_player_wav(
+        _FakePlayer(), dst, seconds=0.02, device=FakeSID()
+    )
+    assert out == dst
+    with wave.open(str(dst), "rb") as wav:
+        assert wav.getnchannels() == 1
         assert wav.getnframes() > 0

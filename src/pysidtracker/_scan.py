@@ -3,18 +3,14 @@
 The static playroutine-recognition step scans the loaded image for known byte
 signatures and for anchor tables (a low half immediately followed by a matching
 high half, e.g. the split note-frequency table many players embed). Both are
-numpy-accelerated when numpy is importable and fall back to pure-stdlib
-scanning otherwise, so the base install stays dependency-free.
+numpy-accelerated.
 """
 
 from __future__ import annotations
 
 from typing import List, Optional, Sequence
 
-try:  # numpy is an optional accelerator, never required.
-    import numpy as _np
-except ImportError:  # pragma: no cover - exercised only without numpy
-    _np = None
+import numpy as _np
 
 
 def find_all(mem: Sequence[int], needle: bytes, start: int = 0) -> List[int]:
@@ -57,33 +53,7 @@ def find_split_table(
     if n == 0 or len(hi) != n:
         return None
     limit = min(limit, len(mem))
-    if _np is not None:
-        return _find_split_table_np(mem, lo, hi, n, min_length, limit)
-    return _find_split_table_py(mem, lo, hi, n, min_length, limit)
-
-
-def _find_split_table_py(mem, lo, hi, n, min_length, limit):
-    best = None
-    # A table needs 2*min_length bytes, so the last viable start is
-    # ``limit - 2 * min_length`` inclusive (a table ending exactly at ``limit``).
-    for addr in range(0, limit - 2 * min_length + 1):
-        first = mem[addr]
-        for fn in range(n):
-            if lo[fn] != first:
-                continue
-            length = 0
-            while (
-                fn + length < n
-                and addr + length < limit
-                and mem[addr + length] == lo[fn + length]
-            ):
-                length += 1
-            if length < min_length or addr + 2 * length > limit:
-                continue
-            if all(mem[addr + length + i] == hi[fn + i] for i in range(length)):
-                if best is None or length > best[2]:
-                    best = (addr, fn, length)
-    return best
+    return _find_split_table_np(mem, lo, hi, n, min_length, limit)
 
 
 def _find_split_table_np(mem, lo, hi, n, min_length, limit):

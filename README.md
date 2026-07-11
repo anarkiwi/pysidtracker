@@ -43,8 +43,10 @@ API.
   `resolve_tune`, `make_tune_fixtures`), and `make_oracle_fixtures` /
   `oracle_grid` — a reusable byte-exact player-vs-`sidtrace`-oracle test
   ([docs/oracle-testing.md](docs/oracle-testing.md)).
-- `audio` — `render_samples` / `render_wav` through an emulated SID (pyresidfp,
-  `audio` extra), plus `resolve_device` / `seconds_to_frames`.
+- `audio` — `render_player_wav` / `render_player_samples` drive a `MemPlayer`
+  straight to WAV through an emulated SID (pyresidfp, a core dependency); the
+  lower-level `render_wav` / `render_samples` take a bare write stream, plus
+  `resolve_device` / `seconds_to_frames`.
 - Writers — `SidHeader.to_bytes` / `write_psid` / `SidImage.to_prg` (the inverse
   of the parsers), `parse_prg`, and `encode_cstr` / `decode_cstr`.
 - `SidImage` absolute-address accessors — `byte_at` / `word_at` / `contains` /
@@ -67,14 +69,13 @@ API.
 ## Install
 
 ```bash
-pip install pysidtracker          # core (includes py65 for init emulation)
-pip install pysidtracker[fast]    # + numpy, to accelerate the image scan
-pip install pysidtracker[audio]   # + pyresidfp, for WAV/sample rendering
+pip install pysidtracker   # core: py65 (init emulation), numpy, pyresidfp (WAV render)
 ```
 
-py65 and pydexomizer are required core dependencies (detection runs a tune's
-6502 init, and `native_decrunch` unpacks exomizer-packed images natively).
-numpy is optional; a pure-stdlib scan is used when it is absent.
+All dependencies are core: py65 (detection runs a tune's 6502 init), pydexomizer
+(`native_decrunch` unpacks exomizer-packed images natively), pyresidfp (the
+emulated SID the WAV render drives), and numpy (sample buffers and the image
+anchor scan).
 
 ## Usage
 

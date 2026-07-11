@@ -16,10 +16,7 @@ from typing import Dict, Iterable, List, Sequence, Set
 
 from .image import SidImage
 
-try:  # numpy is an optional accelerator, never required.
-    import numpy as _np
-except ImportError:  # pragma: no cover - exercised only without numpy
-    _np = None
+import numpy as _np
 
 # --- SID (MOS 6581/8580) ----------------------------------------------------
 # The SID occupies $D400..$D41F and is mirrored every $20 up to $D7FF.
@@ -65,6 +62,19 @@ PAL_CYCLES_PER_FRAME = 19656
 NTSC_CYCLES_PER_FRAME = 17095
 PAL_CLOCK_HZ = 985248
 NTSC_CLOCK_HZ = 1022727
+
+
+def cycles_per_frame_for_flags(flags: int) -> int:
+    """PAL/NTSC CPU cycles per frame from PSID header ``flags`` (clock bits 2-3).
+
+    The two clock bits encode 1=PAL, 2=NTSC, 0=unknown, 3=PAL and NTSC; unknown
+    and both default to PAL (the HVSC-dominant clock). A player's frame cadence
+    follows the tune's clock, so an oracle grid must be framed at this rate.
+    """
+    return (
+        NTSC_CYCLES_PER_FRAME if ((flags >> 2) & 0b11) == 0b10 else PAL_CYCLES_PER_FRAME
+    )
+
 
 # --- CIA #1 ($DC00..$DC0F) --------------------------------------------------
 CIA1_BASE = 0xDC00
@@ -206,20 +216,12 @@ class RegisterStore:
 
 def _store_sites(buf: bytes, opcode: int) -> Dict[int, int]:
     """Map ``{site_addr: target}`` for every ``opcode lo hi`` in ``buf``."""
-    if _np is not None:
-        arr = _np.frombuffer(buf, dtype=_np.uint8)
-        sites = _np.nonzero(arr[:-2] == opcode)[0]
-        lo = arr[sites + 1].astype(_np.int32)
-        hi = arr[sites + 2].astype(_np.int32)
-        targets = (lo | (hi << 8)).tolist()
-        return dict(zip(sites.tolist(), targets))
-    out: Dict[int, int] = {}
-    pos = buf.find(opcode)
-    while pos != -1:
-        if pos + 2 < len(buf):
-            out[pos] = buf[pos + 1] | (buf[pos + 2] << 8)
-        pos = buf.find(opcode, pos + 1)
-    return out
+    arr = _np.frombuffer(buf, dtype=_np.uint8)
+    sites = _np.nonzero(arr[:-2] == opcode)[0]
+    lo = arr[sites + 1].astype(_np.int32)
+    hi = arr[sites + 2].astype(_np.int32)
+    targets = (lo | (hi << 8)).tolist()
+    return dict(zip(sites.tolist(), targets))
 
 
 def find_register_stores(image: SidImage, addrs: Iterable[int]) -> List[RegisterStore]:

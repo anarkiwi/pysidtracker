@@ -1,17 +1,6 @@
 """Tests for the low-level scan helpers, both numpy and pure-python paths."""
 
-import pytest
-
 from pysidtracker import _scan
-
-
-@pytest.fixture(params=["numpy", "python"])
-def scan_backend(request, monkeypatch):
-    if request.param == "python":
-        monkeypatch.setattr(_scan, "_np", None)
-    elif _scan._np is None:  # pragma: no cover - numpy present in dev deps
-        pytest.skip("numpy not installed")
-    return request.param
 
 
 def test_find_all_and_first():
@@ -23,7 +12,7 @@ def test_find_all_and_first():
     assert _scan.find_first(mem, b"zz") == -1
 
 
-def test_find_split_table(scan_backend):  # pylint: disable=unused-argument
+def test_find_split_table():
     lo = bytes(range(0x40, 0x50))
     hi = bytes(range(0x90, 0xA0))
     mem = bytearray(0x200)
@@ -35,9 +24,7 @@ def test_find_split_table(scan_backend):  # pylint: disable=unused-argument
     assert length == 16
 
 
-def test_find_split_table_partial_slice(
-    scan_backend,
-):  # pylint: disable=unused-argument
+def test_find_split_table_partial_slice():
     # Only lo[4:12] / hi[4:12] are present in memory (a contiguous sub-slice).
     lo = bytes(range(0x00, 0x10))
     hi = bytes(range(0x80, 0x90))
@@ -52,13 +39,11 @@ def test_find_split_table_partial_slice(
     assert length == 8
 
 
-def test_find_split_table_none(scan_backend):  # pylint: disable=unused-argument
+def test_find_split_table_none():
     assert _scan.find_split_table(bytearray(0x40), b"\x01" * 8, b"\x02" * 8) is None
 
 
-def test_find_split_table_top_of_memory(
-    scan_backend,
-):  # pylint: disable=unused-argument
+def test_find_split_table_top_of_memory():
     # A table whose hi column ends exactly at the memory limit must still match
     # (regression: the pure-python scan used to stop one start address short).
     lo = bytes(range(0x40, 0x48))

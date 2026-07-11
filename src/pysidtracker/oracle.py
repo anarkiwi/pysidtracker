@@ -34,6 +34,7 @@ from typing import Iterable, List, NamedTuple, Optional, Sequence, Tuple
 from . import registers as reg
 from .errors import EmulatorUnavailable, SidError, SidParseError
 from .image import SidImage
+from .player import MemPlayer
 from .trace import _run_to_rts
 
 # preframr-sidtrace ``.sidwr.bin`` record: (clock, addr, reg, val).
@@ -171,6 +172,48 @@ def _patch_illegals(mpu) -> None:
         _set(op, lambda s: setattr(s, "pc", s.pc + 2), 4)
 
 
+def _wire_mpu(subject, illegal_opcodes: bool = False):
+    """Build a py65 MPU over ``subject`` with the SID-replay read hooks.
+
+    ``subject`` is a 64 KiB mutable buffer with the tune image mounted. Returns
+    ``(mpu, mem)`` -- the CPU and its :class:`ObservableMemory`. VIC raster
+    ($D011/$D012) and SID osc3/env3 reads ($D41B/$D41C) are synthesised from the
+    cycle counter: a replay only needs plausible, monotonic values, not a full
+    VIC/SID model. ``illegal_opcodes`` installs the NMOS illegal opcodes some
+    replays execute.
+
+    Requires py65; raises :class:`~pysidtracker.errors.EmulatorUnavailable` if
+    it is missing.
+    """
+    try:
+        from py65.devices.mpu6502 import MPU
+        from py65.memory import ObservableMemory
+    except ImportError as exc:  # pragma: no cover - py65 is a core dependency
+        raise EmulatorUnavailable(
+            "py65 is required to run a tune: pip install pysidtracker"
+        ) from exc
+
+    mem = ObservableMemory(subject=subject)
+    holder: dict = {}
+
+    def _on_raster(addr):
+        line = (holder["mpu"].processorCycles // 63) % 312
+        if addr == reg.VIC_RASTER:
+            return line & 0xFF
+        return (subject[reg.VIC_CONTROL_1] & 0x7F) | (((line >> 8) & 1) << 7)
+
+    def _on_sidread(addr):  # pylint: disable=unused-argument
+        return (holder["mpu"].processorCycles >> 3) & 0xFF
+
+    mem.subscribe_to_read([reg.VIC_CONTROL_1, reg.VIC_RASTER], _on_raster)
+    mem.subscribe_to_read([0xD41B, 0xD41C], _on_sidread)
+    mpu = MPU(memory=mem)
+    holder["mpu"] = mpu
+    if illegal_opcodes:
+        _patch_illegals(mpu)
+    return mpu, mem
+
+
 def register_grid(
     image_or_bytes,
     nframes: int,
@@ -201,32 +244,10 @@ def register_grid(
         image = image_or_bytes
     if image.header is None:
         raise SidParseError("cannot build a register grid: image has no SID header")
-    try:
-        from py65.devices.mpu6502 import MPU
-        from py65.memory import ObservableMemory
-    except ImportError as exc:  # pragma: no cover - py65 is a core dependency
-        raise EmulatorUnavailable(
-            "py65 is required for register_grid: pip install pysidtracker"
-        ) from exc
 
     subject = image.mem
     subject[SID_VOLUME] = DRIVER_VOLUME  # PSID driver cold-start: maximum volume
-    mem = ObservableMemory(subject=subject)
-
-    def _on_raster(addr):
-        line = (mpu.processorCycles // 63) % 312
-        if addr == reg.VIC_RASTER:
-            return line & 0xFF
-        return (subject[reg.VIC_CONTROL_1] & 0x7F) | (((line >> 8) & 1) << 7)
-
-    def _on_sidread(addr):  # pylint: disable=unused-argument
-        return (mpu.processorCycles >> 3) & 0xFF
-
-    mem.subscribe_to_read([reg.VIC_CONTROL_1, reg.VIC_RASTER], _on_raster)
-    mem.subscribe_to_read([0xD41B, 0xD41C], _on_sidread)
-    mpu = MPU(memory=mem)
-    if illegal_opcodes:
-        _patch_illegals(mpu)
+    mpu, mem = _wire_mpu(subject, illegal_opcodes)
 
     init_address = image.header.init_address or image.header.real_load_address
     _run_to_rts(mpu, mem, init_address, subtune, max_cycles)
@@ -237,6 +258,59 @@ def register_grid(
         _run_to_rts(mpu, mem, play_address, 0, max_cycles)
         rows.append([subject[reg.SID_BASE + i] for i in range(reg.SID_REG_COUNT)])
     return rows
+
+
+class EmuPlayer(MemPlayer):
+    """A :class:`~pysidtracker.player.MemPlayer` that runs the tune's OWN driver.
+
+    Where a native transcription models one specific playroutine in Python, this
+    plays *any* driver version byte-exactly by executing the tune's real 6502
+    ``init`` + ``play`` code on py65 (the same mechanic as :func:`register_grid`),
+    one ``play`` call per :meth:`~pysidtracker.player.MemPlayer.play_frame`. Use
+    it for driver versions that have no native transcription.
+
+    ``snapshot`` masks the pulse-width-high registers to a nibble (the SID
+    ignores their upper bits, see :data:`~pysidtracker.registers.PW_HI_REGS`), so
+    the per-frame grid matches the reference-grid convention. The frame *cadence*
+    (PAL/NTSC) is the caller's concern -- one ``play`` call is one frame; an
+    oracle grid it is compared against is framed at the tune's clock (see
+    :func:`~pysidtracker.registers.cycles_per_frame_for_flags`).
+
+    Requires py65 (a core dependency).
+    """
+
+    def __init__(
+        self,
+        image: bytes,
+        load: int,
+        init: int,
+        play: int,
+        subtune: int = 0,
+        *,
+        illegal_opcodes: bool = False,
+        max_cycles: int = 8_000_000,
+    ):
+        self._init_addr = init & 0xFFFF
+        self._play_addr = play & 0xFFFF
+        self._illegal = illegal_opcodes
+        self._max_cycles = max_cycles
+        self._mpu = None
+        self._obs = None
+        super().__init__(image, load, subtune)
+
+    def _init(self, subtune: int) -> None:
+        self._mpu, self._obs = _wire_mpu(self._mem, self._illegal)
+        _run_to_rts(self._mpu, self._obs, self._init_addr, subtune, self._max_cycles)
+
+    def _frame(self) -> None:
+        _run_to_rts(self._mpu, self._obs, self._play_addr, 0, self._max_cycles)
+
+    def snapshot(self) -> List[int]:
+        base = self.SID_BASE
+        return [
+            (self._mem[base + i] & 0x0F) if i in reg.PW_HI_REGS else self._mem[base + i]
+            for i in range(self.REG_COUNT)
+        ]
 
 
 def grid_from_writes(

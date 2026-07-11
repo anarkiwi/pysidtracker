@@ -12,6 +12,8 @@ from .d64 import D64File, read_d64
 from .audio import (
     default_device,
     frames_to_seconds,
+    render_player_samples,
+    render_player_wav,
     render_samples,
     render_wav,
     resolve_device,
@@ -69,6 +71,7 @@ from .notefreq import (
 )
 from .oracle import (
     SIDTRACE_IMAGE,
+    EmuPlayer,
     SidtraceRow,
     SidtraceUnavailable,
     aligned_match,
@@ -93,6 +96,7 @@ from .registers import (
     SID_VOICES,
     RegisterStore,
     attack_decay,
+    cycles_per_frame_for_flags,
     find_register_stores,
     sustain_release,
 )
@@ -121,7 +125,7 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -133,6 +137,7 @@ __all__ = [
     "DEFAULT_MIRROR",
     "DEFAULT_WRITE_SPACING",
     "Detection",
+    "EmuPlayer",
     "EmulatorUnavailable",
     "InitTrace",
     "MEM_SIZE",
@@ -180,6 +185,7 @@ __all__ = [
     "add_wav_command",
     "aligned_match",
     "attack_decay",
+    "cycles_per_frame_for_flags",
     "byte_range",
     "cadence_from_latch",
     "check",
@@ -218,6 +224,8 @@ __all__ = [
     "register_grid",
     "register_writes_from_player",
     "registers",
+    "render_player_samples",
+    "render_player_wav",
     "render_samples",
     "render_wav",
     "resolve_device",
