@@ -50,13 +50,13 @@ jobs:
           digest=$(docker inspect --format '{{index .RepoDigests 0}}' anarkiwi/sidtrace:latest)
           echo "digest=${digest##*@}" >> "$GITHUB_OUTPUT"
       - name: Cache HVSC tunes
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .oracle-cache/hvsc
           key: hvsc-${{ hashFiles('tests/test_oracle_hvsc.py') }}
           restore-keys: hvsc-
       - name: Cache oracle CSVs
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .oracle-cache/csv
           key: oracle-csv-${{ steps.image.outputs.digest }}-${{ hashFiles('tests/test_oracle_hvsc.py') }}
