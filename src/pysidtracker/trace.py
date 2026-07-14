@@ -69,6 +69,14 @@ class InitTrace:
         tune reschedules its own cadence -- a dynamic/variable-tempo player).
         ``None`` when unknown (no play calls) or unchanged.
       cia2_latch_rewritten: same for CIA #2 Timer-A.
+      cia1_control: last value written to CIA #1 control register A ($DC0E),
+        or ``None`` if unwritten (KERNAL default: Timer-A continuous + running).
+        Bit0 is START, bit3 selects one-shot mode.
+      cia1_icr: last value written to CIA #1 interrupt control ($DC0D), or
+        ``None`` if unwritten. Bit7 is the set/clear select; bit0 is the
+        Timer-A interrupt mask.
+      cia2_control: same as ``cia1_control`` for CIA #2 control A ($DD0E).
+      cia2_icr: same as ``cia1_icr`` for CIA #2 interrupt control ($DD0D).
     """
 
     cia1_timer_latch: Optional[int] = None
@@ -81,6 +89,10 @@ class InitTrace:
     sid_writes: Dict[int, int] = field(default_factory=dict)
     cia1_latch_rewritten: Optional[int] = None
     cia2_latch_rewritten: Optional[int] = None
+    cia1_control: Optional[int] = None
+    cia1_icr: Optional[int] = None
+    cia2_control: Optional[int] = None
+    cia2_icr: Optional[int] = None
 
 
 def _word(writes: Dict[int, int], lo_addr: int, hi_addr: int) -> Optional[int]:
@@ -115,6 +127,10 @@ def _build_trace(
         sid_writes=sid_writes,
         cia1_latch_rewritten=cia1_rewritten,
         cia2_latch_rewritten=cia2_rewritten,
+        cia1_control=writes.get(reg.CIA1_CRA),
+        cia1_icr=writes.get(reg.CIA1_ICR),
+        cia2_control=writes.get(reg.CIA2_CRA),
+        cia2_icr=writes.get(reg.CIA2_ICR),
     )
 
 

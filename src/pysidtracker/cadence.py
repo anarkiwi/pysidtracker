@@ -24,6 +24,24 @@ underflows are therefore ``L + 1`` cycles apart, so
 ``cycles_per_call = latch + 1``. This is validated against a real defMON tune:
 its init latches ``0x5BF9`` (23545), which yields the documented defMON cadence
 of ``23546`` cycles per call.
+
+CIA arming
+----------
+A plausible latch alone does not make the timer the play trigger: a tune can
+load a Timer-A latch while leaving the timer stopped or its underflow interrupt
+masked, so the real trigger stays the video frame. On a real C64 the KERNAL
+leaves CIA1 Timer-A running in continuous mode with its underflow IRQ enabled,
+and tunes typically just reprogram the latch, so the latch is the cadence
+*unless the tune disarms the timer*:
+
+* **control register** (``$DC0E``/``$DD0E``): START bit (bit0) cleared, or
+  one-shot mode (bit3 set) -- no periodic underflow interrupt;
+* **interrupt control** (``$DC0D``/``$DD0D``): a write with bit7=0 and the
+  Timer-A mask bit (bit0) set -- clears the Timer-A interrupt enable.
+
+An unwritten control/ICR is the armed KERNAL default. When a plausible latch is
+present but the timer is disarmed, the cadence falls through to the PAL/NTSC
+video frame. This is applied symmetrically to CIA #1 (IRQ) and CIA #2 (NMI).
 """
 
 from __future__ import annotations
@@ -100,17 +118,42 @@ def _resolve_standard(image: SidImage, clock: Optional[str]) -> bool:
     return False  # PAL default (also for %00 unknown and %11 both)
 
 
-def _cia_latch(trace) -> tuple[Optional[int], Optional[int]]:
-    """The plausible CIA Timer-A play latch and its mid-play rewrite, if any.
+def _cia_armed(control: Optional[int], icr: Optional[int]) -> bool:
+    """True if a CIA Timer-A is armed as a periodic play-interrupt source.
 
-    Prefers CIA #1 over CIA #2. Returns ``(latch, rewritten_latch)`` where
-    either may be ``None``.
+    An unwritten control/ICR (``None``) is the armed KERNAL default. A cleared
+    control START bit (bit0), one-shot mode (control bit3), or an ICR write
+    clearing the Timer-A enable (bit7=0, mask bit0 set) disarms it.
     """
-    for latch, rewritten in (
-        (trace.cia1_timer_latch, trace.cia1_latch_rewritten),
-        (trace.cia2_timer_latch, trace.cia2_latch_rewritten),
+    if control is not None and (not control & 0x01 or control & 0x08):
+        return False
+    if icr is not None and not icr & 0x80 and icr & 0x01:
+        return False
+    return True
+
+
+def _cia_latch(trace) -> tuple[Optional[int], Optional[int]]:
+    """The plausible, *armed* CIA Timer-A play latch and its mid-play rewrite.
+
+    Prefers CIA #1 over CIA #2. A latch counts only when its timer is armed
+    (:func:`_cia_armed`); a disarmed latch is ignored so the cadence falls
+    through to the video frame. Returns ``(latch, rewritten_latch)``.
+    """
+    for latch, rewritten, control, icr in (
+        (
+            trace.cia1_timer_latch,
+            trace.cia1_latch_rewritten,
+            trace.cia1_control,
+            trace.cia1_icr,
+        ),
+        (
+            trace.cia2_timer_latch,
+            trace.cia2_latch_rewritten,
+            trace.cia2_control,
+            trace.cia2_icr,
+        ),
     ):
-        if latch is not None and latch >= _MIN_CIA_LATCH:
+        if latch is not None and latch >= _MIN_CIA_LATCH and _cia_armed(control, icr):
             return latch, rewritten
     return None, None
 
@@ -125,9 +168,10 @@ def playroutine_cadence(
 
     Resolves the video standard (explicit ``clock``, else the header clock-bit
     hint, else PAL), then traces the tune's init (and ``play_calls`` play calls)
-    to observe the real trigger. If init programs a plausible CIA Timer-A latch,
-    the cadence is CIA-driven (``cycles_per_call = latch + 1``); otherwise it is
-    video-timed (one PAL/NTSC frame). ``dynamic`` is set when a play call
+    to observe the real trigger. If init programs a plausible CIA Timer-A latch
+    *and leaves the timer armed* (see :func:`_cia_armed`), the cadence is
+    CIA-driven (``cycles_per_call = latch + 1``); a disarmed timer or no latch
+    is video-timed (one PAL/NTSC frame). ``dynamic`` is set when a play call
     rewrites the latch to a different value.
 
     Requires the ``py65`` emulator (a core dependency); raises

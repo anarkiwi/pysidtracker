@@ -9,7 +9,8 @@ from pysidtracker import (
     playroutine_cadence,
 )
 from pysidtracker import registers as reg
-from pysidtracker.testing import TuneFetchError, fetch_tune
+from pysidtracker.cadence import _cia_armed
+from pysidtracker.testing import TuneFetchError, fetch_tune, resolve_tune
 from pysidtracker.trace import trace_init
 
 from .helpers import build_psid
@@ -117,6 +118,52 @@ def test_lo_only_cia_write_is_not_a_cadence():
     assert cad.source is TriggerSource.PAL_VIDEO
 
 
+def _cia_image(control_icr=b""):
+    """Init that latches an armed CIA cadence plus optional control/ICR writes."""
+    code = (
+        _lda_sta(0xF9, reg.CIA1_TIMER_A_LO)
+        + _lda_sta(0x5B, reg.CIA1_TIMER_A_HI)
+        + control_icr
+        + RTS
+    )
+    return build_psid(code, load=0x1000, init=0x1000, play=0x1000)
+
+
+@pytest.mark.parametrize(
+    "control,icr,armed",
+    [
+        (None, None, True),  # KERNAL default (unwritten) is armed
+        (0x11, None, True),  # START set, continuous
+        (0x10, None, False),  # START clear
+        (0x09, None, False),  # one-shot mode (bit3) even while running
+        (None, 0x81, True),  # ICR set Timer-A enable (bit7=1, bit0=1)
+        (None, 0x01, False),  # ICR clear Timer-A enable (bit7=0, bit0=1)
+        (None, 0x80, True),  # ICR set with no Timer-A bit leaves it armed
+    ],
+)
+def test_cia_armed(control, icr, armed):
+    assert _cia_armed(control, icr) is armed
+
+
+def test_disarmed_cia_latch_falls_back_to_video():
+    # A plausible latch whose timer START bit is cleared is not the trigger.
+    cad = playroutine_cadence(_cia_image(_lda_sta(0x10, reg.CIA1_CRA)))
+    assert cad.source is TriggerSource.PAL_VIDEO
+    assert cad.latch is None
+
+
+def test_icr_masked_cia_latch_falls_back_to_video():
+    # A plausible latch whose Timer-A interrupt enable is cleared is not the trigger.
+    cad = playroutine_cadence(_cia_image(_lda_sta(0x01, reg.CIA1_ICR)))
+    assert cad.source is TriggerSource.PAL_VIDEO
+
+
+def test_armed_cia_latch_is_cia_timer():
+    cad = playroutine_cadence(_cia_image(_lda_sta(0x11, reg.CIA1_CRA)))
+    assert cad.source is TriggerSource.CIA_TIMER
+    assert cad.cycles_per_call == 23546
+
+
 def test_accepts_sidimage_instance():
     img = SidImage.from_bytes(_raster_image())
     cad = playroutine_cadence(img)
@@ -152,3 +199,33 @@ def test_real_defmon_tune_is_cia_timer(tmp_path):
     assert cad.source is TriggerSource.CIA_TIMER
     assert cad.latch == latch
     assert cad.cycles_per_call == latch + 1
+
+
+# Real tunes pinning the arming gate: armed CIA latch vs. video-timed non-CIA.
+_ARMING_TUNES = {
+    "MUSICIANS/H/Honey/8_Bit-Maerchenland_V2.sid": (
+        TriggerSource.CIA_TIMER,
+        16641,
+    ),
+    "MUSICIANS/F/Fern_Eric/Goldberg_Variations_parts_1-7.sid": (
+        TriggerSource.NTSC_VIDEO,
+        reg.NTSC_CYCLES_PER_FRAME,
+    ),
+}
+
+
+@pytest.mark.parametrize("relpath,expected", list(_ARMING_TUNES.items()))
+def test_real_tune_arming_gate(relpath, expected, tmp_path):
+    """The CIA arming gate resolves the real trigger on two HVSC tunes.
+
+    ``8_Bit-Maerchenland`` latches an armed CIA timer (16640 -> 16641 cycles);
+    ``Goldberg_Variations`` is NTSC-video-timed and its CIA latch must not be
+    read as the cadence. Skips only if the HVSC mirror is unreachable.
+    """
+    source, cycles = expected
+    path = resolve_tune(relpath, cache_dir=tmp_path)
+    if path is None:
+        pytest.skip("HVSC mirror unreachable")
+    cad = playroutine_cadence(path.read_bytes())
+    assert cad.source is source
+    assert cad.cycles_per_call == cycles
