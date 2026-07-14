@@ -58,6 +58,30 @@ def test_trace_play_calls_and_sid_writes():
     assert trace.cia1_timer_latch is None
 
 
+def test_trace_captures_cia_control_and_icr():
+    code = (
+        _lda_sta(0x11, 0xDC0E)  # CIA1 control A (START set, continuous)
+        + _lda_sta(0x81, 0xDC0D)  # CIA1 ICR (set Timer-A enable)
+        + _lda_sta(0x08, 0xDD0E)  # CIA2 control A (one-shot)
+        + _lda_sta(0x01, 0xDD0D)  # CIA2 ICR (clear Timer-A enable)
+        + bytes([0x60])
+    )
+    data = build_psid(code, load=0x1000, init=0x1000, play=0x1000)
+    trace = trace_init(SidImage.from_bytes(data))
+    assert trace.cia1_control == 0x11
+    assert trace.cia1_icr == 0x81
+    assert trace.cia2_control == 0x08
+    assert trace.cia2_icr == 0x01
+
+
+def test_trace_cia_control_and_icr_default_none():
+    trace = trace_init(SidImage.from_bytes(build_psid(bytes([0x60]), load=0x1000)))
+    assert trace.cia1_control is None
+    assert trace.cia1_icr is None
+    assert trace.cia2_control is None
+    assert trace.cia2_icr is None
+
+
 def test_trace_requires_header():
     img = SidImage.from_bytes(build_prg(bytes([0x60]), load=0x1000))
     with pytest.raises(SidParseError):
