@@ -28,6 +28,9 @@ API.
   vectors) with predicates and `find_register_stores`.
 - `trace_init` / `InitTrace` — run a tune's init under a write observer to
   report CIA timer cadence and the IRQ/NMI vectors an IRQ-driven header hides.
+- `emu` — the shared py65 host every init/replay path runs on: `wire_mpu`
+  (NMOS illegal opcodes + cycle-derived VIC/SID reads), `patch_illegals`,
+  `run_to_rts`.
 - `playroutine_cadence` / `Cadence` / `TriggerSource` — derive the play-routine
   cadence (PAL/NTSC video frame vs CIA-timer latch) from what init programs, not
   the header.

@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 
 from . import registers as reg
-from .errors import EmulatorUnavailable, SidParseError
+from .emu import run_to_rts, wire_mpu
+from .errors import SidParseError
 from .image import SidImage
 
 # Addresses the write observer watches: the full SID mirror band, the VIC and
@@ -134,27 +135,6 @@ def _build_trace(
     )
 
 
-def _run_to_rts(mpu, mem, pc: int, acc: int, max_cycles: int) -> None:
-    """Run a subroutine at ``pc`` until its final RTS (or the cycle cap).
-
-    Mirrors :func:`pysidtracker.detect.run_init`: a two-byte return address is
-    pushed so the routine's final RTS climbs the stack pointer back above its
-    start, terminating the step loop.
-    """
-    start_sp = mpu.sp
-    mem[0x0100 + mpu.sp] = 0x00
-    mpu.sp = (mpu.sp - 1) & 0xFF
-    mem[0x0100 + mpu.sp] = 0x01
-    mpu.sp = (mpu.sp - 1) & 0xFF
-    mpu.a = acc & 0xFF
-    mpu.pc = pc
-    start_cycles = mpu.processorCycles
-    while mpu.sp < start_sp:
-        mpu.step()
-        if mpu.processorCycles - start_cycles > max_cycles:
-            break
-
-
 def trace_init(
     image: SidImage,
     *,
@@ -175,13 +155,6 @@ def trace_init(
     """
     if image.header is None:
         raise SidParseError("cannot trace init: image has no SID header")
-    try:
-        from py65.devices.mpu6502 import MPU
-        from py65.memory import ObservableMemory
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise EmulatorUnavailable(
-            "py65 is required to trace init: pip install pysidtracker"
-        ) from exc
 
     writes: Dict[int, int] = {}
 
@@ -189,12 +162,11 @@ def trace_init(
         writes[address] = value & 0xFF
         return None
 
-    mem = ObservableMemory(subject=image.mem)
+    mpu, mem = wire_mpu(image.mem)
     mem.subscribe_to_write(_WATCH_ADDRS, _record)
-    mpu = MPU(memory=mem)
 
     init_address = image.header.init_address or image.header.real_load_address
-    _run_to_rts(mpu, mem, init_address, subtune, max_cycles)
+    run_to_rts(mpu, mem, init_address, subtune, max_cycles)
 
     # Post-init CIA Timer-A latch values, to detect a mid-play reschedule.
     init_cia1 = _word(writes, reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI)
@@ -205,7 +177,7 @@ def trace_init(
     play_address = image.header.play_address
     if play_address:
         for _ in range(play_calls):
-            _run_to_rts(mpu, mem, play_address, 0, max_cycles)
+            run_to_rts(mpu, mem, play_address, 0, max_cycles)
             play_cia1 = _word(writes, reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI)
             play_cia2 = _word(writes, reg.CIA2_TIMER_A_LO, reg.CIA2_TIMER_A_HI)
             if play_cia1 is not None and play_cia1 != init_cia1:

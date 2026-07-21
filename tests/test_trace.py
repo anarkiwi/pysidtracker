@@ -82,6 +82,42 @@ def test_trace_cia_control_and_icr_default_none():
     assert trace.cia2_icr is None
 
 
+def test_trace_executes_illegal_opcodes():
+    """An NMOS illegal (SBX) in init computes the real latch, not a NOP drift.
+
+    py65's stock 6502 decodes ``SBX #imm`` ($CB) as a one-byte NOP, which shifts
+    the whole following instruction stream; the traced latch is then garbage.
+    """
+    code = (
+        bytes([0xA9, 0xFF])  # LDA #$FF
+        + bytes([0xA2, 0x5C])  # LDX #$5C
+        + bytes([0xCB, 0x01])  # SBX #$01 -> X = (A & X) - 1 = $5B
+        + bytes([0x8E, 0x05, 0xDC])  # STX $DC05 (Timer-A hi)
+        + _lda_sta(0xF9, 0xDC04)  # Timer-A lo
+        + bytes([0x60])
+    )
+    data = build_psid(code, load=0x1000, init=0x1000, play=0x1000)
+    assert trace_init(SidImage.from_bytes(data)).cia1_timer_latch == 0x5BF9
+
+
+def test_trace_raster_spin_terminates():
+    """A raster-sync spin before the timer writes must complete, not hit the cap.
+
+    Without a VIC read model $D012 reads back RAM, so the loop never exits and
+    init never reaches its ``$DC04``/``$DC05`` writes.
+    """
+    code = (
+        bytes([0xAD, 0x12, 0xD0])  # loop: LDA $D012
+        + bytes([0xC9, 0x30])  # CMP #$30
+        + bytes([0xD0, 0xF9])  # BNE loop
+        + _lda_sta(0x98, 0xDC04)
+        + _lda_sta(0x09, 0xDC05)
+        + bytes([0x60])
+    )
+    data = build_psid(code, load=0x1000, init=0x1000, play=0x1000)
+    assert trace_init(SidImage.from_bytes(data)).cia1_timer_latch == 0x0998
+
+
 def test_trace_requires_header():
     img = SidImage.from_bytes(build_prg(bytes([0x60]), load=0x1000))
     with pytest.raises(SidParseError):

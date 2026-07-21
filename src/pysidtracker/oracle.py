@@ -32,10 +32,10 @@ from pathlib import Path
 from typing import Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 from . import registers as reg
-from .errors import EmulatorUnavailable, SidError, SidParseError
+from .emu import run_to_rts, wire_mpu
+from .errors import SidError, SidParseError
 from .image import SidImage
 from .player import MemPlayer
-from .trace import _run_to_rts
 
 # preframr-sidtrace ``.sidwr.bin`` record: (clock, addr, reg, val).
 _SIDWR_REC = struct.Struct("<qHBB")
@@ -63,155 +63,6 @@ DRIVER_VOLUME = 0x0F
 
 class SidtraceUnavailable(SidError):
     """The sidtrace oracle could not be run (Docker missing or the render failed)."""
-
-
-def _patch_illegals(mpu) -> None:
-    """Install the NMOS illegal opcodes some replays (e.g. defMON) execute.
-
-    Implemented from documented NMOS 6502 behaviour: SBX/ANC/ALR/ARR/SBC/LAX/SAX
-    plus the multi-byte NOP illegals a data-adjacent code stream can drift
-    through.
-    """
-    mpu.instruct = list(mpu.instruct)
-    mpu.cycletime = list(mpu.cycletime)
-    mpu.extracycles = list(mpu.extracycles)
-
-    def _set(op, fn, cyc=2):
-        mpu.instruct[op] = fn
-        mpu.cycletime[op] = cyc
-        mpu.extracycles[op] = 0
-
-    def i_sbx(self):  # SBX/AXS #imm: X = (A & X) - imm, CMP-style carry
-        v = self.ByteAt(self.ProgramCounter())
-        t = (self.a & self.x) - v
-        self.x = t & 0xFF
-        self.p &= ~(self.CARRY | self.ZERO | self.NEGATIVE)
-        if t >= 0:
-            self.p |= self.CARRY
-        self.FlagsNZ(self.x)
-        self.pc += 1
-
-    def i_anc(self):  # ANC #imm: A &= imm; C = bit7
-        self.a &= self.ByteAt(self.ProgramCounter())
-        self.FlagsNZ(self.a)
-        self.p = (self.p & ~self.CARRY) | (1 if self.a & 0x80 else 0)
-        self.pc += 1
-
-    def i_alr(self):  # ALR #imm: A = (A & imm) >> 1
-        self.a &= self.ByteAt(self.ProgramCounter())
-        self.p = (self.p & ~self.CARRY) | (self.a & 1)
-        self.a >>= 1
-        self.FlagsNZ(self.a)
-        self.pc += 1
-
-    def i_arr(self):  # ARR #imm
-        self.a &= self.ByteAt(self.ProgramCounter())
-        c = 1 if self.p & self.CARRY else 0
-        self.a = (self.a >> 1) | (c << 7)
-        self.FlagsNZ(self.a)
-        self.p &= ~(self.CARRY | self.OVERFLOW)
-        if self.a & 0x40:
-            self.p |= self.CARRY
-        if bool(self.a & 0x40) ^ bool(self.a & 0x20):
-            self.p |= self.OVERFLOW
-        self.pc += 1
-
-    def i_sbc(self):  # SBC #imm alias ($EB)
-        self.opSBC(self.ProgramCounter)
-        self.pc += 1
-
-    def i_lax_imm(self):  # LAX #imm -> A = X = imm
-        v = self.ByteAt(self.ProgramCounter())
-        self.a = self.x = v
-        self.FlagsNZ(v)
-        self.pc += 1
-
-    def _sax(meth, pcadd):  # SAX: store A & X
-        def f(self):
-            self.memory[getattr(self, meth)()] = self.a & self.x
-            self.pc += pcadd
-
-        return f
-
-    def _lax(meth, pcadd):  # LAX: A = X = mem
-        def f(self):
-            v = self.ByteAt(getattr(self, meth)())
-            self.a = self.x = v
-            self.FlagsNZ(v)
-            self.pc += pcadd
-
-        return f
-
-    _set(0xCB, i_sbx)
-    _set(0x0B, i_anc)
-    _set(0x2B, i_anc)
-    _set(0x4B, i_alr)
-    _set(0x6B, i_arr)
-    _set(0xEB, i_sbc)
-    _set(0xAB, i_lax_imm)
-    _set(0x83, _sax("IndirectXAddr", 1), 6)
-    _set(0x87, _sax("ZeroPageAddr", 1), 3)
-    _set(0x8F, _sax("AbsoluteAddr", 2), 4)
-    _set(0x97, _sax("ZeroPageYAddr", 1), 4)
-    _set(0xA3, _lax("IndirectXAddr", 1), 6)
-    _set(0xA7, _lax("ZeroPageAddr", 1), 3)
-    _set(0xAF, _lax("AbsoluteAddr", 2), 4)
-    _set(0xB3, _lax("IndirectYAddr", 1), 5)
-    _set(0xB7, _lax("ZeroPageYAddr", 1), 4)
-    _set(0xBF, _lax("AbsoluteYAddr", 2), 4)
-    for op in (0x1A, 0x3A, 0x5A, 0x7A, 0xDA, 0xFA):
-        _set(op, lambda s: setattr(s, "pc", s.pc), 2)
-    for op in (0x80, 0x82, 0x89, 0xC2, 0xE2):
-        _set(op, lambda s: setattr(s, "pc", s.pc + 1), 2)
-    for op in (0x04, 0x44, 0x64):
-        _set(op, lambda s: setattr(s, "pc", s.pc + 1), 3)
-    for op in (0x14, 0x34, 0x54, 0x74, 0xD4, 0xF4):
-        _set(op, lambda s: setattr(s, "pc", s.pc + 1), 4)
-    _set(0x0C, lambda s: setattr(s, "pc", s.pc + 2), 4)
-    for op in (0x1C, 0x3C, 0x5C, 0x7C, 0xDC, 0xFC):
-        _set(op, lambda s: setattr(s, "pc", s.pc + 2), 4)
-
-
-def _wire_mpu(subject, illegal_opcodes: bool = False):
-    """Build a py65 MPU over ``subject`` with the SID-replay read hooks.
-
-    ``subject`` is a 64 KiB mutable buffer with the tune image mounted. Returns
-    ``(mpu, mem)`` -- the CPU and its :class:`ObservableMemory`. VIC raster
-    ($D011/$D012) and SID osc3/env3 reads ($D41B/$D41C) are synthesised from the
-    cycle counter: a replay only needs plausible, monotonic values, not a full
-    VIC/SID model. ``illegal_opcodes`` installs the NMOS illegal opcodes some
-    replays execute.
-
-    Requires py65; raises :class:`~pysidtracker.errors.EmulatorUnavailable` if
-    it is missing.
-    """
-    try:
-        from py65.devices.mpu6502 import MPU
-        from py65.memory import ObservableMemory
-    except ImportError as exc:  # pragma: no cover - py65 is a core dependency
-        raise EmulatorUnavailable(
-            "py65 is required to run a tune: pip install pysidtracker"
-        ) from exc
-
-    mem = ObservableMemory(subject=subject)
-    holder: dict = {}
-
-    def _on_raster(addr):
-        line = (holder["mpu"].processorCycles // 63) % 312
-        if addr == reg.VIC_RASTER:
-            return line & 0xFF
-        return (subject[reg.VIC_CONTROL_1] & 0x7F) | (((line >> 8) & 1) << 7)
-
-    def _on_sidread(addr):  # pylint: disable=unused-argument
-        return (holder["mpu"].processorCycles >> 3) & 0xFF
-
-    mem.subscribe_to_read([reg.VIC_CONTROL_1, reg.VIC_RASTER], _on_raster)
-    mem.subscribe_to_read([0xD41B, 0xD41C], _on_sidread)
-    mpu = MPU(memory=mem)
-    holder["mpu"] = mpu
-    if illegal_opcodes:
-        _patch_illegals(mpu)
-    return mpu, mem
 
 
 def register_grid(
@@ -247,15 +98,15 @@ def register_grid(
 
     subject = image.mem
     subject[SID_VOLUME] = DRIVER_VOLUME  # PSID driver cold-start: maximum volume
-    mpu, mem = _wire_mpu(subject, illegal_opcodes)
+    mpu, mem = wire_mpu(subject, illegal_opcodes)
 
     init_address = image.header.init_address or image.header.real_load_address
-    _run_to_rts(mpu, mem, init_address, subtune, max_cycles)
+    run_to_rts(mpu, mem, init_address, subtune, max_cycles)
 
     play_address = image.header.play_address or init_address
     rows: List[List[int]] = []
     for _ in range(nframes):
-        _run_to_rts(mpu, mem, play_address, 0, max_cycles)
+        run_to_rts(mpu, mem, play_address, 0, max_cycles)
         rows.append([subject[reg.SID_BASE + i] for i in range(reg.SID_REG_COUNT)])
     return rows
 
@@ -299,11 +150,11 @@ class EmuPlayer(MemPlayer):
         super().__init__(image, load, subtune)
 
     def _init(self, subtune: int) -> None:
-        self._mpu, self._obs = _wire_mpu(self._mem, self._illegal)
-        _run_to_rts(self._mpu, self._obs, self._init_addr, subtune, self._max_cycles)
+        self._mpu, self._obs = wire_mpu(self._mem, self._illegal)
+        run_to_rts(self._mpu, self._obs, self._init_addr, subtune, self._max_cycles)
 
     def _frame(self) -> None:
-        _run_to_rts(self._mpu, self._obs, self._play_addr, 0, self._max_cycles)
+        run_to_rts(self._mpu, self._obs, self._play_addr, 0, self._max_cycles)
 
     def snapshot(self) -> List[int]:
         base = self.SID_BASE

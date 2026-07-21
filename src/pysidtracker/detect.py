@@ -28,7 +28,8 @@ import enum
 from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
-from .errors import EmulatorUnavailable, SidParseError
+from .emu import run_to_rts, wire_mpu
+from .errors import SidParseError
 from .header import SidHeader
 from .image import MEM_SIZE, SidImage
 
@@ -229,25 +230,5 @@ def run_init(image: SidImage, subtune: int = 0, max_cycles: int = 8_000_000) -> 
     if image.header is None:
         raise SidParseError("cannot run init: image has no SID header")
     init_address = image.header.init_address or image.header.real_load_address
-    try:
-        from py65.devices.mpu6502 import MPU
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise EmulatorUnavailable(
-            "py65 is required to unpack this tune (packed/relocating): "
-            "pip install pysidtracker"
-        ) from exc
-    mpu = MPU(memory=image.mem)
-    start_sp = mpu.sp
-    # Push a return address so the routine's final RTS lands back in our stub
-    # and the loop below (sp climbing back above start_sp) terminates.
-    image.mem[0x0100 + mpu.sp] = 0x00
-    mpu.sp = (mpu.sp - 1) & 0xFF
-    image.mem[0x0100 + mpu.sp] = 0x01
-    mpu.sp = (mpu.sp - 1) & 0xFF
-    mpu.a = subtune & 0xFF
-    mpu.pc = init_address
-    start_cycles = mpu.processorCycles
-    while mpu.sp < start_sp:
-        mpu.step()
-        if mpu.processorCycles - start_cycles > max_cycles:
-            break
+    mpu, mem = wire_mpu(image.mem)
+    run_to_rts(mpu, mem, init_address, subtune, max_cycles)
