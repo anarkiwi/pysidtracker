@@ -69,8 +69,8 @@ hardware facts, not player code.
 
 ### `trace_init` — py65 init/vector tracer
 
-`trace_init(image, play_calls=N)` runs the tune's init (the `run_init`
-mechanics) in py65 with an `ObservableMemory` write observer over the
+`trace_init(image, play_calls=N)` runs the tune's init on the shared `emu`
+host (see below) with an `ObservableMemory` write observer over the
 hardware-register and interrupt-vector addresses, optionally calls play `N`
 times, and returns an `InitTrace`: the CIA timer latches (`cia1_timer_latch` /
 `cia2_timer_latch`, the play cadence), the installed `irq_vector`
@@ -79,6 +79,18 @@ times, and returns an `InitTrace`: the CIA timer latches (`cia1_timer_latch` /
 This reveals the play address and cadence that an IRQ-driven header hides
 (e.g. Soundmonitor's CIA-timed cohort). Requires the core `py65` dependency;
 raises `EmulatorUnavailable` if py65 is missing.
+
+### `emu` — the shared py65 6502 host
+
+`wire_mpu(subject, illegal_opcodes=True)` builds the MPU that `run_init`,
+`trace_init` and `register_grid` all run on: `patch_illegals` installs the
+stable NMOS illegal set (SLO/RLA/SRE/RRA/SAX/LAX/DCP/ISC, ANC/ALR/ARR/SBX/SBC/
+LAX#/ANE, SHY/SHX/AHX/TAS/LAS and the multi-byte NOPs), and cycle-derived VIC
+raster (`$D011`/`$D012`) and SID osc3/env3 (`$D41B`/`$D41C`) reads let sync spin
+loops terminate. Stock py65 has neither, so an init that raster-syncs or uses an
+illegal never reaches its `$DC04`/`$DC05` writes and its cadence silently falls
+back to the video frame. `run_to_rts(mpu, mem, pc, acc, max_cycles)` is the
+shared push-a-return-address-and-step mechanic.
 
 ## What each format supplies
 
@@ -123,12 +135,11 @@ line (`#` comments allowed, first line `REGLOG_HEADER`).
 ### `oracle` — register-grid ground truth
 
 - `register_grid(image_or_bytes, nframes, *, subtune=0, illegal_opcodes=False)`
-  — runs `init` (accumulator `= subtune`) then `nframes` `play` calls on py65
-  (reusing `trace._run_to_rts`), sampling `$D400..$D418` (25 registers) per
-  frame. A minimal VIC raster (`$D011`/`$D012`) + SID-read (`$D41B`/`$D41C`)
-  read model lets init loops terminate. `illegal_opcodes=True` installs the
-  NMOS illegal opcodes (SBX/ANC/ALR/ARR/SBC/LAX/SAX + NOP illegals) defMON
-  needs (default off). Requires py65; raises `EmulatorUnavailable` if missing.
+  — runs `init` (accumulator `= subtune`) then `nframes` `play` calls on the
+  shared `emu` host, sampling `$D400..$D418` (25 registers) per frame.
+  `illegal_opcodes=True` installs the NMOS illegal opcodes defMON needs
+  (default off here, on everywhere else). Requires py65; raises
+  `EmulatorUnavailable` if missing.
 - `grid_from_writes(writes, *, cycles_per_frame=19656, reg_count=25,
   pw_hi_regs=(0x03,0x0A,0x11), gap=10000)` — pure-stdlib framer: anchor frame 0
   to the first play call (first write after a `>gap`-cycle gap), forward-fill,

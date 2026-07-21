@@ -33,6 +33,7 @@ from .detect import (
     run_init,
 )
 from .decrunch import native_decrunch
+from .emu import patch_illegals, run_to_rts, wire_mpu
 from .errors import (
     AudioUnavailable,
     EmulatorUnavailable,
@@ -131,7 +132,7 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.9.1"
+__version__ = "0.10.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -223,6 +224,7 @@ __all__ = [
     "oracle_grid",
     "parse_prg",
     "parse_sid_header",
+    "patch_illegals",
     "playroutine_cadence",
     "print_info",
     "read_bytes",
@@ -243,6 +245,7 @@ __all__ = [
     "resolve_tune",
     "run_cli",
     "run_init",
+    "run_to_rts",
     "run_sidtrace",
     "s8",
     "sbc",
@@ -252,6 +255,7 @@ __all__ = [
     "sustain_release",
     "trace_init",
     "walk_until",
+    "wire_mpu",
     "write_psid",
     "write_reglog",
 ]

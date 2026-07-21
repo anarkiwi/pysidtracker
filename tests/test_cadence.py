@@ -229,3 +229,27 @@ def test_real_tune_arming_gate(relpath, expected, tmp_path):
     cad = playroutine_cadence(path.read_bytes())
     assert cad.source is source
     assert cad.cycles_per_call == cycles
+
+
+# An 8x-multispeed defMON tune whose depacker raster-syncs and whose replay uses
+# NMOS illegals: init latches $0998, so the cadence is 2457 cycles (confirmed
+# against a cycle-stamped sidtrace render: the CIA-IRQ delta mode is 2457).
+_MULTISPEED_TUNE = "MUSICIANS/G/Goto80/Automatas.sid"
+_MULTISPEED_LATCH = 0x0998
+
+
+def test_multispeed_defmon_cadence_is_latch_plus_one(tmp_path):
+    """A multispeed tune reports its CIA latch + 1, not the PAL video frame.
+
+    Without the full NMOS/C64 init host, init runs to the cycle cap, the
+    ``$DC04``/``$DC05`` writes are never seen and the cadence silently falls
+    through to 19656 -- 8x wrong for this tune.
+    """
+    path = resolve_tune(_MULTISPEED_TUNE, cache_dir=tmp_path)
+    if path is None:
+        pytest.skip("HVSC mirror unreachable")
+    data = path.read_bytes()
+    assert trace_init(SidImage.from_bytes(data)).cia1_timer_latch == _MULTISPEED_LATCH
+    cad = playroutine_cadence(data)
+    assert cad.source is TriggerSource.CIA_TIMER
+    assert cad.cycles_per_call == _MULTISPEED_LATCH + 1
