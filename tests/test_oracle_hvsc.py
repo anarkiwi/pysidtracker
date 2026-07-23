@@ -1,4 +1,4 @@
-"""Byte-exact comparison of the py65 render against the sidtrace oracle.
+"""Byte-exact comparison of the jennings render against the sidtrace oracle.
 
 Marked ``oracle``: these tests need Docker (the ``anarkiwi/sidtrace`` image) and
 network access to HVSC, so the default suite excludes them (see ``pyproject``);
@@ -23,7 +23,7 @@ from pysidtracker import make_oracle_fixtures, register_grid
 _CACHE = Path(os.environ.get("PYSIDTRACKER_ORACLE_CACHE", ".oracle-cache"))
 
 # HVSC tunes verified to render byte-exactly against the deterministic oracle
-# with the base py65 renderer. NMOS illegal opcodes are enabled (harmless for
+# with the base jennings renderer. NMOS illegal opcodes are enabled (harmless for
 # tunes that do not use them).
 TUNES = {
     "monty": "MUSICIANS/H/Hubbard_Rob/Monty_on_the_Run.sid",

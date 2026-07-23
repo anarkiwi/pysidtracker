@@ -15,7 +15,7 @@ from pysidtracker.trace import trace_init
 
 from .helpers import build_psid
 
-py65 = pytest.importorskip("py65")
+jennings = pytest.importorskip("jennings")
 
 
 def _lda_sta(value, addr):

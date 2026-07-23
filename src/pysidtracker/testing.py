@@ -356,7 +356,7 @@ def make_oracle_fixtures(
             oracle_match()
 
     ``render`` is ``render(tune_bytes, nframes) -> grid`` and defaults to
-    :func:`~pysidtracker.oracle.register_grid` (the base py65 renderer); a format
+    :func:`~pysidtracker.oracle.register_grid` (the base jennings renderer); a format
     package passes its own :class:`~pysidtracker.player.MemPlayer` renderer.
 
     These tests are never skipped: an unavailable tune raises

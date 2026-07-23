@@ -1,4 +1,4 @@
-"""Trace where a tune's init programs the timer/IRQ vectors, via py65.
+"""Trace where a tune's init programs the timer/IRQ vectors, via jennings.
 
 A relocated or IRQ-driven tune does not describe its real play routine or play
 cadence in the header: it installs its own IRQ handler at the RAM vector
@@ -6,14 +6,14 @@ cadence in the header: it installs its own IRQ handler at the RAM vector
 its init routine (Soundmonitor's CIA-timed cohort is the canonical example).
 Reading the header's ``playAddress`` misses this entirely.
 
-:func:`trace_init` runs the init routine in py65 (reusing the same stack-return
+:func:`trace_init` runs the init routine in jennings (reusing the same stack-return
 mechanics as :func:`pysidtracker.detect.run_init`) with a write observer over the
 hardware-register and interrupt-vector addresses, optionally calls the play
 address a few times, and returns an :class:`InitTrace` recording *where* the
 vectors were programmed and *to what*: the CIA timer latches (the cadence), the
 installed IRQ vector (the real play routine), the NMI vector, the VIC raster
 compare, the set of registers touched, and the SID writes. Requires the core
-``py65`` dependency; raises
+``jennings`` dependency; raises
 :class:`~pysidtracker.errors.EmulatorUnavailable` if it is missing, consistent
 with :func:`run_init`.
 """
@@ -144,12 +144,12 @@ def trace_init(
 ) -> InitTrace:
     """Run ``image``'s init under a write observer and return an :class:`InitTrace`.
 
-    Runs the init routine in py65, capturing writes to the hardware-register and
+    Runs the init routine in jennings, capturing writes to the hardware-register and
     interrupt-vector addresses, then calls the header's play address
     ``play_calls`` times (each also observed). ``subtune`` is passed to init in
     the accumulator (the SID calling convention).
 
-    Requires the core ``py65`` dependency; raises
+    Requires the core ``jennings`` dependency; raises
     :class:`~pysidtracker.errors.EmulatorUnavailable` if it is missing and
     :class:`~pysidtracker.errors.SidParseError` if the image has no init address.
     """

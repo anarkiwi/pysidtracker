@@ -174,7 +174,7 @@ def playroutine_cadence(
     is video-timed (one PAL/NTSC frame). ``dynamic`` is set when a play call
     rewrites the latch to a different value.
 
-    Requires the ``py65`` emulator (a core dependency); raises
+    Requires the ``jennings`` emulator (a core dependency); raises
     :class:`~pysidtracker.errors.EmulatorUnavailable` if it is missing.
     """
     image = (

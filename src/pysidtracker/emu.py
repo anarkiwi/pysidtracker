@@ -1,8 +1,8 @@
-"""The py65 6502 host every init/replay path in this package runs on.
+"""The jennings 6502 host every init/replay path in this package runs on.
 
-py65's ``mpu6502`` is a documented-opcode 6502 with no C64 around it: illegals
-decode as one-byte NOPs (a defMON-style replay drifts into garbage) and hardware
-reads return RAM (a raster spin never exits). :func:`wire_mpu` fixes both.
+jennings' ``mpu6502`` is a py65-compatible 6510 that decodes every NMOS illegal
+opcode natively (stock py65 stubbed them as NOPs, wrecking a defMON-style replay).
+It is a bare CPU, so :func:`wire_mpu` synthesises the C64 hardware reads.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ _RMW_MODES = (
 
 
 def patch_illegals(mpu):
-    """Install the stable NMOS illegal opcodes on a py65 MPU *instance*.
+    """Install the stable NMOS illegal opcodes on an MPU *instance*.
 
     SLO/RLA/SRE/RRA/SAX/LAX/DCP/ISC, immediate ANC/ALR/ARR/SBX/SBC($EB)/LAX#/ANE,
     the unstable high-byte stores (SHY/SHX/AHX/TAS/LAS, ``reg & (hi+1)``) and the
@@ -280,21 +280,22 @@ def patch_illegals(mpu):
 
 
 def wire_mpu(subject, illegal_opcodes: bool = True):
-    """Build a py65 MPU over the 64 KiB buffer ``subject``; return ``(mpu, mem)``.
+    """Build a jennings MPU over the 64 KiB buffer ``subject``; return ``(mpu, mem)``.
 
     VIC raster ($D011/$D012) and SID osc3/env3 ($D41B/$D41C) reads are synthesised
     from the cycle counter -- plausible and monotonic, so sync spin loops exit.
-    ``illegal_opcodes`` (default on, as on real NMOS) applies :func:`patch_illegals`.
+    ``illegal_opcodes`` (default on, as on real NMOS) applies :func:`patch_illegals`;
+    jennings decodes the illegals natively either way, so the flag is a no-op on it.
 
     Raises:
-      EmulatorUnavailable: py65 (a core dependency) is not installed.
+      EmulatorUnavailable: jennings (a core dependency) is not installed.
     """
     try:
-        from py65.devices.mpu6502 import MPU
-        from py65.memory import ObservableMemory
-    except ImportError as exc:  # pragma: no cover - py65 is a core dependency
+        from jennings.devices.mpu6502 import MPU
+        from jennings.memory import ObservableMemory
+    except ImportError as exc:  # pragma: no cover - jennings is a core dependency
         raise EmulatorUnavailable(
-            "py65 is required to run a tune: pip install pysidtracker"
+            "jennings is required to run a tune: pip install pysidtracker"
         ) from exc
 
     mem = ObservableMemory(subject=subject)

@@ -21,7 +21,7 @@ the header fields as if they pointed at song data mis-parses these tunes.
 1. **Static recognition.** The format's `recognize(image)` callback looks for
    its signature/anchor in the freshly loaded image. Found → `DIRECT`.
 2. **Emulated init.** Otherwise run the init routine in a 6502 emulator
-   (`py65`), then recognise again. Classify by what init did to memory:
+   (`jennings`), then recognise again. Classify by what init did to memory:
    - wrote more *outside* the original load region than it changed *inside* →
      `PACKED` (decompression expands memory);
    - otherwise → `RELOCATED` (moved/rewrote the existing image).
@@ -67,7 +67,7 @@ plus predicates (`is_sid_reg`, `is_cia_timer`, `is_vic_reg`, …) and
 (`8D`/`8E`/`8C`/`9D`/`99`) targeting a set of addresses. These are public
 hardware facts, not player code.
 
-### `trace_init` — py65 init/vector tracer
+### `trace_init` — jennings init/vector tracer
 
 `trace_init(image, play_calls=N)` runs the tune's init on the shared `emu`
 host (see below) with an `ObservableMemory` write observer over the
@@ -77,19 +77,20 @@ times, and returns an `InitTrace`: the CIA timer latches (`cia1_timer_latch` /
 (`$0314`/`$0315`) and `hw_irq_vector` (`$FFFE`/`$FFFF`, the real play routine),
 `nmi_vector`, `vic_raster`, the `registers_touched` set and the `sid_writes`.
 This reveals the play address and cadence that an IRQ-driven header hides
-(e.g. Soundmonitor's CIA-timed cohort). Requires the core `py65` dependency;
-raises `EmulatorUnavailable` if py65 is missing.
+(e.g. Soundmonitor's CIA-timed cohort). Requires the core `jennings` dependency;
+raises `EmulatorUnavailable` if jennings is missing.
 
-### `emu` — the shared py65 6502 host
+### `emu` — the shared jennings 6502 host
 
 `wire_mpu(subject, illegal_opcodes=True)` builds the MPU that `run_init`,
 `trace_init` and `register_grid` all run on: `patch_illegals` installs the
 stable NMOS illegal set (SLO/RLA/SRE/RRA/SAX/LAX/DCP/ISC, ANC/ALR/ARR/SBX/SBC/
 LAX#/ANE, SHY/SHX/AHX/TAS/LAS and the multi-byte NOPs), and cycle-derived VIC
 raster (`$D011`/`$D012`) and SID osc3/env3 (`$D41B`/`$D41C`) reads let sync spin
-loops terminate. Stock py65 has neither, so an init that raster-syncs or uses an
-illegal never reaches its `$DC04`/`$DC05` writes and its cadence silently falls
-back to the video frame. `run_to_rts(mpu, mem, pc, acc, max_cycles)` is the
+loops terminate. jennings decodes the illegals natively but has no C64 reads, and
+stock py65 had neither, so an init that raster-syncs or uses an illegal never
+reaches its `$DC04`/`$DC05` writes and its cadence silently falls back to the
+video frame. `run_to_rts(mpu, mem, pc, acc, max_cycles)` is the
 shared push-a-return-address-and-step mechanic.
 
 ## What each format supplies
@@ -138,7 +139,7 @@ line (`#` comments allowed, first line `REGLOG_HEADER`).
   — runs `init` (accumulator `= subtune`) then `nframes` `play` calls on the
   shared `emu` host, sampling `$D400..$D418` (25 registers) per frame.
   `illegal_opcodes=True` installs the NMOS illegal opcodes defMON needs
-  (default off here, on everywhere else). Requires py65; raises
+  (default off here, on everywhere else). Requires jennings; raises
   `EmulatorUnavailable` if missing.
 - `grid_from_writes(writes, *, cycles_per_frame=19656, reg_count=25,
   pw_hi_regs=(0x03,0x0A,0x11), gap=10000)` — pure-stdlib framer: anchor frame 0
@@ -204,7 +205,7 @@ guaranteed constant.
 1. Resolve the video standard — explicit `clock` (`"PAL"`/`"NTSC"`) wins, else
    the PSID/RSID v2+ header `flags` clock bits (bits 2–3: `%01`=PAL, `%10`=NTSC)
    as a hint, else PAL.
-2. `trace_init` observes what init installs (reusing the py65 plumbing, not
+2. `trace_init` observes what init installs (reusing the jennings plumbing, not
    duplicating it): the CIA Timer-A latch(es), the IRQ/NMI vectors, the VIC
    raster compare, and — via a small extension — whether a play call rewrites a
    Timer-A latch (`cia{1,2}_latch_rewritten`).
@@ -238,7 +239,7 @@ Packed tunes ship an exomizer-crunched payload; `detect.run_init` materialises
 it by emulating the tune's whole init. `native_decrunch(image_or_bytes) ->
 Optional[SidImage]` is the targeted alternative: it runs *only* the exomizer
 decruncher via [`pydexomizer`](https://pypi.org/project/pydexomizer/) (a core
-dependency, like py65) — trying the self-extracting `sfx` format (bounded step
+dependency, like jennings) — trying the self-extracting `sfx` format (bounded step
 cap so a non-exomizer image fails fast), then the `mem` format
 (`decrunch_mem_auto`) — and returns the unpacked image, or `None` when the image
 is not exomizer-packed. It never raises for the not-packed case, so it is safe

@@ -3,9 +3,9 @@
 Two ways to build the reference grid every format package validates its player
 against, plus the readers/aligner around them:
 
-* :func:`register_grid` -- run a tune's ``init`` then ``play`` on a py65 6502
+* :func:`register_grid` -- run a tune's ``init`` then ``play`` on a jennings 6502
   (reusing :mod:`pysidtracker.trace`'s run-to-RTS mechanic) and sample the 25
-  SID registers ``$D400..$D418`` per frame. Requires py65 (a core dependency).
+  SID registers ``$D400..$D418`` per frame. Requires jennings (a core dependency).
 * :func:`grid_from_writes` -- the pure-stdlib framer that turns a
   ``(clock, reg, val)`` write stream (e.g. a ``preframr-sidtrace`` capture read
   by :func:`read_sidwr`, or a :mod:`pysidtracker.reglog` log) into the same
@@ -13,7 +13,7 @@ against, plus the readers/aligner around them:
   nibble-mask the pulse-width-high registers.
 
 :func:`aligned_match` compares a rendered grid to an oracle grid, tolerating a
-few leading silent frames. This consolidates the py65 oracle (pydefmon,
+few leading silent frames. This consolidates the jennings oracle (pydefmon,
 pyjch) and the sidtrace framer (pyjch/pymusicassembler/pyfuturecomposer
 conftests, pydmcsid helpers).
 """
@@ -73,7 +73,7 @@ def register_grid(
     illegal_opcodes: bool = False,
     max_cycles: int = 8_000_000,
 ) -> List[List[int]]:
-    """Per-frame SID register grid from running a tune on py65.
+    """Per-frame SID register grid from running a tune on jennings.
 
     ``image_or_bytes`` is a :class:`~pysidtracker.image.SidImage` or PSID/RSID
     (or ``.prg``) bytes. Runs ``init`` (accumulator = ``subtune``), then
@@ -85,7 +85,7 @@ def register_grid(
     driver's cold-start default, so a tune that relies on the driver's maximum
     volume (rather than setting it itself) matches the sidtrace oracle.
 
-    Requires py65; raises :class:`~pysidtracker.errors.EmulatorUnavailable` if
+    Requires jennings; raises :class:`~pysidtracker.errors.EmulatorUnavailable` if
     it is missing and :class:`~pysidtracker.errors.SidParseError` if the image
     has no init address.
     """
@@ -116,7 +116,7 @@ class EmuPlayer(MemPlayer):
 
     Where a native transcription models one specific playroutine in Python, this
     plays *any* driver version byte-exactly by executing the tune's real 6502
-    ``init`` + ``play`` code on py65 (the same mechanic as :func:`register_grid`),
+    ``init`` + ``play`` code on jennings (the same mechanic as :func:`register_grid`),
     one ``play`` call per :meth:`~pysidtracker.player.MemPlayer.play_frame`. Use
     it for driver versions that have no native transcription.
 
@@ -127,7 +127,7 @@ class EmuPlayer(MemPlayer):
     oracle grid it is compared against is framed at the tune's clock (see
     :func:`~pysidtracker.registers.cycles_per_frame_for_flags`).
 
-    Requires py65 (a core dependency).
+    Requires jennings (a core dependency).
     """
 
     def __init__(

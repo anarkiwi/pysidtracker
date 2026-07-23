@@ -21,7 +21,7 @@ from typing import Optional, Union
 
 from .image import SidImage
 
-try:  # pydexomizer is a core dependency (like py65).
+try:  # pydexomizer is a core dependency (like jennings).
     import pydexomizer as _pdx
 except ImportError:  # pragma: no cover - core dep, present in practice
     _pdx = None

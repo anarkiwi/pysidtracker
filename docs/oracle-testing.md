@@ -46,7 +46,7 @@ def test_render_matches_oracle(oracle_match):
     oracle_match()
 ```
 
-`render(tune_bytes, nframes) -> grid` defaults to `register_grid` (the base py65
+`render(tune_bytes, nframes) -> grid` defaults to `register_grid` (the base jennings
 renderer) when omitted.
 
 ## Never skipped
