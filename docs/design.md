@@ -83,15 +83,15 @@ raises `EmulatorUnavailable` if jennings is missing.
 ### `emu` — the shared jennings 6502 host
 
 `wire_mpu(subject, illegal_opcodes=True)` builds the MPU that `run_init`,
-`trace_init` and `register_grid` all run on: `patch_illegals` installs the
-stable NMOS illegal set (SLO/RLA/SRE/RRA/SAX/LAX/DCP/ISC, ANC/ALR/ARR/SBX/SBC/
-LAX#/ANE, SHY/SHX/AHX/TAS/LAS and the multi-byte NOPs), and cycle-derived VIC
-raster (`$D011`/`$D012`) and SID osc3/env3 (`$D41B`/`$D41C`) reads let sync spin
-loops terminate. jennings decodes the illegals natively but has no C64 reads, and
-stock py65 had neither, so an init that raster-syncs or uses an illegal never
-reaches its `$DC04`/`$DC05` writes and its cadence silently falls back to the
-video frame. `run_to_rts(mpu, mem, pc, acc, max_cycles)` is the
-shared push-a-return-address-and-step mechanic.
+`trace_init` and `register_grid` all run on. jennings decodes the full NMOS
+illegal set (SLO/RLA/SRE/RRA/SAX/LAX/DCP/ISC, ANC/ALR/ARR/SBX/SBC/LAX#/ANE,
+SHY/SHX/AHX/TAS/LAS and the multi-byte NOPs) natively, byte/cycle-exact, but has
+no C64 reads, so `wire_mpu` synthesises cycle-derived VIC raster (`$D011`/`$D012`)
+and SID osc3/env3 (`$D41B`/`$D41C`) reads to let sync spin loops terminate.
+Without them an init that raster-syncs never reaches its `$DC04`/`$DC05` writes and
+its cadence silently falls back to the video frame. The `illegal_opcodes` flag is
+kept for API compatibility only (jennings is always native). `run_to_rts(mpu, mem,
+pc, acc, max_cycles)` is the shared push-a-return-address-and-step mechanic.
 
 ## What each format supplies
 

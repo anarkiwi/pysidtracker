@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.10.1"
+version = "0.11.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -29,7 +29,7 @@ classifiers = [
 # init-free alternative unpack path. pyresidfp: the emulated SID every tracker's
 # WAV render (pysidtracker.audio) drives -- core, not an extra, because rendering
 # audio is core functionality. numpy: sample buffers and the image anchor scan.
-dependencies = ["jennings>=0.1", "pydexomizer>=0.1", "pyresidfp>=0.17", "numpy>=1.23"]
+dependencies = ["jennings>=0.1.1", "pydexomizer>=0.1", "pyresidfp>=0.17", "numpy>=1.23"]
 
 [project.optional-dependencies]
 dev = [

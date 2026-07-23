@@ -33,7 +33,7 @@ from .detect import (
     run_init,
 )
 from .decrunch import native_decrunch
-from .emu import patch_illegals, run_to_rts, wire_mpu
+from .emu import run_to_rts, wire_mpu
 from .errors import (
     AudioUnavailable,
     EmulatorUnavailable,
@@ -224,7 +224,6 @@ __all__ = [
     "oracle_grid",
     "parse_prg",
     "parse_sid_header",
-    "patch_illegals",
     "playroutine_cadence",
     "print_info",
     "read_bytes",
