@@ -29,7 +29,7 @@ jobs:
         run: pytest --cov=pysidtracker --cov-report=term-missing --cov-fail-under=85
 
   oracle:
-    # Byte-exact comparison of the py65 render against the sidtrace sidplayfp
+    # Byte-exact comparison of the jennings render against the sidtrace sidplayfp
     # oracle over real HVSC tunes. Never skipped: a failed HVSC download or
     # oracle render fails the job. HVSC tunes and oracle CSVs are cached.
     runs-on: ubuntu-latest

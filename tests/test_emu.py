@@ -1,11 +1,11 @@
-"""Tests for the shared py65 host: NMOS illegal opcodes and the C64 read model."""
+"""Tests for the shared jennings host: NMOS illegal opcodes and the C64 read model."""
 
 import pytest
 
 from pysidtracker import run_to_rts, wire_mpu
 from pysidtracker.errors import EmulatorUnavailable
 
-py65 = pytest.importorskip("py65")
+jennings = pytest.importorskip("jennings")
 
 CODE = 0x1000
 TARGET = 0x0080  # zero-page operand for the read-modify-write illegals
@@ -95,10 +95,11 @@ def test_arr_rotates_in_carry():
 
 
 def test_sbc_alias_and_lax_immediate_and_ane():
-    assert _run([0xEB, 0x01], a=0x05, p=0x21)[0].a == 0x04
-    mpu, _ = _run([0xAB, 0x77])
-    assert mpu.a == mpu.x == 0x77
-    assert _run([0x8B, 0x0F], x=0x33)[0].a == 0x03
+    # LXA ($AB) and ANE ($8B) are the unstable magic-constant group: jennings models (A | 0xEE) & ... (NMS).
+    assert _run([0xEB, 0x01], a=0x05, p=0x21)[0].a == 0x04  # SBC alias: stable
+    mpu, _ = _run([0xAB, 0x77])  # LXA: (A | 0xEE) & imm = 0xEE & 0x77
+    assert mpu.a == mpu.x == 0x66
+    assert _run([0x8B, 0x0F], x=0x33)[0].a == 0x02  # ANE: (A | 0xEE) & X & imm
 
 
 def test_high_byte_stores_and_stack_illegals():
@@ -115,10 +116,11 @@ def test_high_byte_stores_and_stack_illegals():
 
 
 def test_ahx_indirect_y():
+    # SHA/AHX ($93) ANDs with high(pointer $1FFF)+1 = $20, not the effective address $2000.
     _, subject = _run(
         [0x93, 0x10], a=0xFF, x=0xFF, y=0x01, mem_at={0x10: 0xFF, 0x11: 0x1F}
     )
-    assert subject[0x2000] == 0x21
+    assert subject[0x2000] == 0x20
 
 
 @pytest.mark.parametrize(
@@ -137,10 +139,11 @@ def test_multi_byte_nops_advance_pc(code, length):
     assert mpu.pc == CODE + length
 
 
-def test_illegal_opcodes_off_leaves_py65_defaults():
-    # Stock py65 decodes SBX as a one-byte NOP, leaving X untouched.
+def test_illegals_off_still_decoded_natively_by_jennings():
+    # jennings runs SBX natively even with the pysidtracker patch withheld: X = (A & X) - imm.
     mpu, _ = _run([0xCB, 0x01], a=0xFF, x=0x5C, illegals=False)
-    assert mpu.x == 0x5C
+    assert mpu.x == 0x5B
+    assert mpu.p & mpu.CARRY
 
 
 def test_hardware_reads_are_synthesised_not_ram():
@@ -167,16 +170,16 @@ def test_run_to_rts_honours_cycle_cap():
     assert mpu.processorCycles > 1000
 
 
-def test_wire_mpu_reports_missing_py65(monkeypatch):
+def test_wire_mpu_reports_missing_jennings(monkeypatch):
     import builtins
 
     real_import = builtins.__import__
 
-    def _no_py65(name, *args, **kwargs):
-        if name.startswith("py65"):
+    def _no_jennings(name, *args, **kwargs):
+        if name.startswith("jennings"):
             raise ImportError(name)
         return real_import(name, *args, **kwargs)
 
-    monkeypatch.setattr(builtins, "__import__", _no_py65)
+    monkeypatch.setattr(builtins, "__import__", _no_jennings)
     with pytest.raises(EmulatorUnavailable):
         wire_mpu(bytearray(0x10000))

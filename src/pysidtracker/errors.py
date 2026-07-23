@@ -22,9 +22,9 @@ class SidFormatError(SidParseError):
 
 
 class EmulatorUnavailable(SidError):
-    """The 6502 emulator (``py65``) is needed but not importable.
+    """The 6502 emulator (``jennings``) is needed but not importable.
 
-    ``py65`` is a core dependency, so this only fires on a broken install;
+    ``jennings`` is a core dependency, so this only fires on a broken install;
     ``pip install pysidtracker`` restores it.
     """
 

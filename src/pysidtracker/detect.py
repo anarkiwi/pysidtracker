@@ -93,7 +93,7 @@ def detect_playroutine(
     ``recognize`` inspects the (possibly unpacked) image and returns a truthy
     anchor when it finds the format, else ``None``. When static recognition
     fails and ``init`` is true, the init routine is emulated (requires the core
-    ``py65`` dependency) and recognition retried.
+    ``jennings`` dependency) and recognition retried.
 
     When ``native`` is true, an exomizer-packed image is first decrunched
     natively (:func:`pysidtracker.decrunch.native_decrunch`, no init emulated);
@@ -103,7 +103,7 @@ def detect_playroutine(
     below when the image is not exomizer-packed or stays unrecognised, so the
     default behaviour is unchanged.
 
-    Raises :class:`EmulatorUnavailable` if emulation is needed but ``py65`` is
+    Raises :class:`EmulatorUnavailable` if emulation is needed but ``jennings`` is
     not installed.
     """
     anchor = recognize(image)
@@ -223,7 +223,7 @@ def run_init(image: SidImage, subtune: int = 0, max_cycles: int = 8_000_000) -> 
     """Run the tune's init routine in a 6502 emulator so data lands in place.
 
     Mutates ``image.mem`` directly. ``subtune`` is passed to init in the
-    accumulator (the SID calling convention). Requires the optional ``py65``
+    accumulator (the SID calling convention). Requires the optional ``jennings``
     dependency; raises :class:`EmulatorUnavailable` if it is missing and
     :class:`SidParseError` if the image has no init address to call.
     """

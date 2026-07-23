@@ -1,4 +1,4 @@
-"""Tests for the py65 init/timer-vector tracer."""
+"""Tests for the jennings init/timer-vector tracer."""
 
 import pytest
 
@@ -6,7 +6,7 @@ from pysidtracker import InitTrace, SidImage, SidParseError, trace_init
 
 from .helpers import build_prg, build_psid
 
-py65 = pytest.importorskip("py65")
+jennings = pytest.importorskip("jennings")
 
 
 def _lda_sta(value, addr):
@@ -85,8 +85,9 @@ def test_trace_cia_control_and_icr_default_none():
 def test_trace_executes_illegal_opcodes():
     """An NMOS illegal (SBX) in init computes the real latch, not a NOP drift.
 
-    py65's stock 6502 decodes ``SBX #imm`` ($CB) as a one-byte NOP, which shifts
-    the whole following instruction stream; the traced latch is then garbage.
+    Stock py65 decoded ``SBX #imm`` ($CB) as a one-byte NOP, shifting the whole
+    following instruction stream; jennings decodes it natively, so the traced
+    latch is correct.
     """
     code = (
         bytes([0xA9, 0xFF])  # LDA #$FF

@@ -28,7 +28,7 @@ API.
   vectors) with predicates and `find_register_stores`.
 - `trace_init` / `InitTrace` — run a tune's init under a write observer to
   report CIA timer cadence and the IRQ/NMI vectors an IRQ-driven header hides.
-- `emu` — the shared py65 host every init/replay path runs on: `wire_mpu`
+- `emu` — the shared jennings host every init/replay path runs on: `wire_mpu`
   (NMOS illegal opcodes + cycle-derived VIC/SID reads), `patch_illegals`,
   `run_to_rts`.
 - `playroutine_cadence` / `Cadence` / `TriggerSource` — derive the play-routine
@@ -38,7 +38,7 @@ API.
   alternative depack path; opt-in via `detect_playroutine(..., native=True)`.
 - `reglog` — `RegWrite` register-log format (`read_reglog` / `write_reglog`) and
   `frame_writes`, the shared per-frame SID-write framing loop.
-- `oracle` — per-frame SID register grids: `register_grid` (py65), the stdlib
+- `oracle` — per-frame SID register grids: `register_grid` (jennings), the stdlib
   `grid_from_writes` framer, `read_sidwr` (`preframr-sidtrace` `.sidwr.bin`),
   `aligned_match`, and the `sidtrace` (sidplayfp) oracle bridge — `run_sidtrace`,
   `read_sidtrace`, `sidtrace_cadence`, `sidtrace_grid`.
@@ -76,10 +76,10 @@ API.
 ## Install
 
 ```bash
-pip install pysidtracker   # core: py65 (init emulation), numpy, pyresidfp (WAV render)
+pip install pysidtracker   # core: jennings (init emulation), numpy, pyresidfp (WAV render)
 ```
 
-All dependencies are core: py65 (detection runs a tune's 6502 init), pydexomizer
+All dependencies are core: jennings (detection runs a tune's 6502 init), pydexomizer
 (`native_decrunch` unpacks exomizer-packed images natively), pyresidfp (the
 emulated SID the WAV render drives), and numpy (sample buffers and the image
 anchor scan).
