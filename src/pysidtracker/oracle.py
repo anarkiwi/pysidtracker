@@ -78,8 +78,8 @@ def register_grid(
     ``image_or_bytes`` is a :class:`~pysidtracker.image.SidImage` or PSID/RSID
     (or ``.prg``) bytes. Runs ``init`` (accumulator = ``subtune``), then
     ``nframes`` ``play`` calls, sampling ``$D400..$D418`` (25 registers) after
-    each play. ``illegal_opcodes=True`` installs the NMOS illegal opcodes that
-    replays such as defMON need (default off, so other callers are unaffected).
+    each play. ``illegal_opcodes`` is retained for API compatibility; jennings
+    decodes the NMOS illegals natively regardless (replays such as defMON need them).
 
     ``$D418`` (volume) is pre-seeded to ``$0F``, mirroring the libsidplayfp PSID
     driver's cold-start default, so a tune that relies on the driver's maximum
