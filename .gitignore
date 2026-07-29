@@ -219,3 +219,6 @@ __marimo__/
 
 # sidtrace oracle test cache (HVSC tunes + CSV traces)
 .oracle-cache/
+
+# HVSC tune / C64 ROM fetch cache (never committed: copyright works)
+.tunecache/
