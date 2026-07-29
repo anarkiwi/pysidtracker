@@ -75,10 +75,11 @@ minversion = "7.0"
 testpaths = ["tests"]
 # Oracle comparison tests need Docker + network; run them in a dedicated CI job
 # via ``-m oracle`` (they are excluded from the default coverage matrix run).
-addopts = "-ra -n auto -m 'not oracle and not exomizer'"
+addopts = "-ra -n auto -m 'not oracle and not exomizer and not roms'"
 markers = [
     "oracle: byte-exact comparison against the sidtrace Docker oracle",
     "exomizer: real exomizer round-trip (needs the exomizer cruncher; own CI job)",
+    "roms: real C64 ROM download + checksum (needs network; own CI job)",
 ]
 
 [tool.coverage.run]

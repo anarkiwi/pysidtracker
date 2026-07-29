@@ -1,4 +1,4 @@
-"""The ``hvsc`` / ``sidtrace_oracle`` / ``disk_prgs`` fixtures ship via pytest11.
+"""The ``hvsc`` / ``sidtrace_oracle`` / ``disk_prgs`` / ``c64_roms`` pytest11 fixtures.
 
 Exercised end to end with ``pytester``, so a dependent suite gets the retriever
 fixtures with no conftest of its own -- just by installing pysidtracker.
@@ -83,3 +83,42 @@ def test_hvsc_local_envs_ini_option(pytester, tmp_path):
         """)
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1)
+
+
+def test_c64_roms_fixture_resolves_local(pytester, tmp_path):
+    local = tmp_path / "vice"
+    local.mkdir()
+    (local / "kernal-901227-03.bin").write_bytes(b"\xea" * 0x2000)
+    pytester.makepyfile(f"""
+        import hashlib, os
+        os.environ["C64_ROMS"] = {str(local)!r}
+        os.environ["PYSID_TUNECACHE"] = {str(tmp_path / "cache")!r}
+        from pysidtracker.roms import ROMS
+        ROMS["kernal"] = ROMS["kernal"]._replace(
+            sha256=hashlib.sha256(b"\\xea" * 0x2000).hexdigest())
+
+        def test_it(c64_roms):
+            assert c64_roms.available(("kernal",))
+            assert c64_roms("kernal").read_bytes() == b"\\xea" * 0x2000
+            assert bytes(c64_roms.image(("kernal",))[0xE000:]) == b"\\xea" * 0x2000
+        """)
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+
+
+def test_c64_roms_fixture_skips_when_unavailable(pytester, tmp_path):
+    pytester.makepyfile(f"""
+        import os, pytest
+        os.environ.pop("C64_ROMS", None)
+        os.environ["PYSID_TUNECACHE"] = {str(tmp_path / "cache")!r}
+        import pysidtracker.roms as r
+        r._download = lambda url, **k: (_ for _ in ()).throw(
+            r.TuneFetchError("offline"))
+
+        def test_it(c64_roms):
+            if not c64_roms.available():
+                pytest.skip("C64 ROMs unavailable (offline, not cached)")
+            assert False, "should have skipped"
+        """)
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(skipped=1)
