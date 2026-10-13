@@ -59,7 +59,10 @@ jennings and raises and takes interrupts as the C64 does:
   NMI is taken on each new edge. With the KERNAL banked in (`$01` bit 1) the
   CPU goes through `$0314` (after the KERNAL's `A`/`X`/`Y` push) or `$0318`,
   else through `$FFFE`/`$FFFA` in RAM. Code that leaves a handler into KERNAL
-  ROM (e.g. `JMP $EA31`) gets the KERNAL's register pull and `RTI`.
+  ROM gets what sidplayfp's ROM-less KERNAL (`SystemROMBanks.h`, NOPs sliding
+  into a few stubs) does: up to `$EA7E` (e.g. `JMP $EA31`) it reads `$DC0D`,
+  acknowledging CIA #1, then pulls the registers and returns; `$FE47` just
+  returns; elsewhere (e.g. `JMP $EA81`, `JMP $FEBC`) it pulls and returns.
 
 Every SID write is attributed to the innermost running interrupt handler: each
 taken interrupt pushes the raise it serves (an NMI's own, or for an IRQ the

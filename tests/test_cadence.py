@@ -304,3 +304,13 @@ def test_a_brk_inside_a_handler_runs_on_its_behalf():
     machine.execute(4)
     assert {wrote for *_, wrote, _ in machine.events[1:]} == {0b11}
     assert machine.handlers == [None]
+
+
+@pytest.mark.parametrize(
+    "exit_to,source", [(0xEA31, TriggerSource.CIA_TIMER), (0xEA81, None)]
+)
+def test_the_romless_kernal_acknowledges_cia1_only_up_to_ea7e(exit_to, source):
+    init = latch(PAL - 1) + vector(reg.RAM_IRQ_VECTOR_LO, LOAD + 0x80) + CLI + RTS
+    handler = PLAY_SID[:-1] + bytes((0x4C, exit_to & 0xFF, exit_to >> 8))
+    cad = _cad(rsid(image(init_00=init, irq_80=handler)))
+    assert cad.source is source

@@ -22,7 +22,8 @@ _MIN_CIA_LATCH = 0x100
 # psiddrv.a65 ``irqjob``/``irqret`` offsets from the relocated driver's first byte.
 _IRQJOB, _IRQRET = 0xA8, 0xBB
 _RET, _EXCEPTION = 0xA0, 0xC4
-_KERNAL_ROM, _KERNAL_NMI = 0xE000, 0xFE47
+# sidplayfp's ROM-less KERNAL slides NOPs up to `NOP $DC0D` at $EA7E (an ack).
+_KERNAL_ROM, _KERNAL_ACK, _KERNAL_NMI = 0xE000, 0xEA7E, 0xFE47
 _BRK, _RTI, _I_FLAG = 0x00, 0x40, 0x04
 _VIC = (-1, 0)
 _RMW = frozenset(
@@ -116,6 +117,17 @@ def _driver_base(image: SidImage) -> int:
             if not first <= p <= last and not 0xA0 <= p <= 0xBF
         )
     return page << 8
+
+
+def _kernal_exit(pc: int) -> int:
+    """The ``irqret`` offset matching where a jump into the ROM-less KERNAL ends.
+
+    Up to ``$EA7E`` it acknowledges CIA #1, pulls and returns (``irqret``),
+    ``$FE47`` saves then restores the registers (``RTI``), else it pulls and returns.
+    """
+    if pc <= _KERNAL_ACK:
+        return 0
+    return 8 if pc == _KERNAL_NMI else 3
 
 
 def _word(value: int) -> bytes:
@@ -425,7 +437,7 @@ class _Machine:
                 continue
             pc, sp = mpu.pc, mpu.sp
             if len(handlers) > 1 and ram[1] & 2 and pc >= _KERNAL_ROM:
-                mpu.pc = self.base + _IRQRET + (8 if pc == _KERNAL_NMI else 3)
+                mpu.pc = self.base + _IRQRET + _kernal_exit(pc)
                 continue
             if ram[pc] == _RTI and len(handlers) > 1:
                 handlers.pop()
