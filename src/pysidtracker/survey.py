@@ -1,7 +1,8 @@
 """Whole-song HVSC survey of a format's renderer against the sidplayfp oracle.
 
 ``find`` lists tunes by SIDId signature, ``run`` compares every subtune's oracle
-and ``module:function`` renderer grids, ``report`` tallies, ``diff`` shows frames.
+and ``module:function`` renderer grids, ``report`` tallies, ``diff`` shows frames,
+``triage`` classifies first differences and renderer ``info`` exact rates.
 """
 
 import argparse
@@ -33,10 +34,18 @@ from .oracle import (
     sidtrace_cadence,
     sidtrace_grid,
 )
+from .sidid import identify, sidid_signatures
 
 LEAD = 8
 NREGS = registers.SID_REG_COUNT
+VOICE_ROLES = ("freq", "freq", "pw", "pw", "ctrl", "ad", "sr")
 GATE_COLS = [off + registers.CTRL for off in registers.SID_VOICE_OFFSET]
+ROLES = [n for _ in range(registers.SID_VOICES) for n in VOICE_ROLES] + [
+    "fc",
+    "fc",
+    "res",
+    "vol",
+]
 REG_NAMES = [
     f"v{v + 1}_{n}"
     for v in range(registers.SID_VOICES)
@@ -44,6 +53,8 @@ REG_NAMES = [
 ] + ["fc_lo", "fc_hi", "res_filt", "mode_vol"]
 ORACLE_ARGS = ("-f8000", "--sidlite")
 THREAD_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+TRIAGE_FIELDS = ["key", "path", "player", "song", "first_diff", "when", "kind"]
+TRIAGE_FIELDS += ["roles", "diffs"]
 TUNE_FIELDS = ["path", "md5", "player", "songs", "clock", "lengths"]
 RESULT_FIELDS = [
     "key",
@@ -62,33 +73,7 @@ RESULT_FIELDS = [
     "library_gated",
     "error",
 ]
-_HEX = re.compile(r"[0-9A-Fa-f]{2}")
-_WILD = {"??": b".", "AND": b".*?"}
 _FIND = {}
-
-
-def sidid_signatures(cfg):
-    """SIDId ``cfg`` players in file order, as ``[(name, [signature regex])]``."""
-    players, regs, sig = [], None, []
-    for tok in Path(cfg).read_text(encoding="latin-1").split():
-        up = tok.upper()
-        if _HEX.fullmatch(tok):
-            sig.append(re.escape(bytes([int(tok, 16)])))
-        elif up in _WILD:
-            sig.append(_WILD[up])
-        elif up == "END":
-            if sig and regs is not None:
-                regs.append(re.compile(b"".join(sig), re.S))
-            sig = []
-        else:
-            regs, sig = [], []
-            players.append((tok, regs))
-    return [(name, regs) for name, regs in players if regs]
-
-
-def identify(data, sigs):
-    """SIDId's report: the first player in cfg order with any signature in ``data``."""
-    return next((n for n, regs in sigs if any(r.search(data) for r in regs)), None)
 
 
 def songlengths(hvsc_root):
@@ -105,7 +90,7 @@ def songlengths(hvsc_root):
     return out
 
 
-def _pool(jobs, initializer=None, initargs=()):
+def pool(jobs, initializer=None, initargs=()):
     """A spawn-context process pool whose workers start with one BLAS thread."""
     for var in THREAD_VARS:
         os.environ.setdefault(var, "1")
@@ -118,6 +103,7 @@ def _pool(jobs, initializer=None, initargs=()):
 
 
 def _find_init(cfg, player_regex):
+    """Worker state for :func:`find`: the signatures and player filter."""
     _FIND.update(
         sigs=sidid_signatures(cfg), player=re.compile(player_regex or "", re.I)
     )
@@ -133,14 +119,17 @@ def _find_one(path):
     return hashlib.md5(data).hexdigest(), name, hdr.songs, clock
 
 
-def find(hvsc, cfg, out_csv, player_regex=None, jobs=None):
-    """Write the tunes SIDId names a ``player_regex`` player; return player tallies."""
+def find(hvsc, out_csv, cfg=None, player_regex=None, jobs=None):
+    """Write the tunes SIDId names a ``player_regex`` player; return player tallies.
+
+    ``cfg`` defaults to the bundled ``sidid.cfg`` (see :mod:`pysidtracker.sidid`).
+    """
     hvsc = Path(hvsc)
     lengths = songlengths(hvsc)
     paths = sorted(hvsc.rglob("*.sid"))
     tally = Counter()
     with (
-        _pool(jobs, _find_init, (cfg, player_regex)) as ex,
+        pool(jobs, _find_init, (cfg, player_regex)) as ex,
         open(out_csv, "w", newline="", encoding="utf-8") as f,
     ):
         w = csv.writer(f)
@@ -181,12 +170,15 @@ def read_grid(path, nframes):
     return np.take_along_axis(grid, src, 0)
 
 
-def oracle_frames(ocsv, seconds, clock):
-    """``(nframes, grid)`` of a cached sidtrace CSV over ``seconds`` at ``clock``."""
+def oracle_frames(ocsv, seconds=0.0, clock="PAL", nframes=None):
+    """``(nframes, grid)`` of a cached sidtrace CSV over ``seconds`` at ``clock``.
+
+    ``nframes`` overrides the frame count derived from ``seconds``.
+    """
     rows = read_sidtrace(ocsv)
     cpf = sidtrace_cadence(rows) or registers.PAL_CYCLES_PER_FRAME
     hz = registers.NTSC_CLOCK_HZ if clock == "NTSC" else registers.PAL_CLOCK_HZ
-    nframes = int(seconds * hz / cpf)
+    nframes = int(seconds * hz / cpf) if nframes is None else nframes
     grid = np.asarray(sidtrace_grid(rows, cycles_per_frame=cpf), np.int16)
     grid = grid.reshape(-1, NREGS) if grid.size else np.zeros((1, NREGS), np.int16)
     return nframes, grid[np.minimum(np.arange(nframes), len(grid) - 1)]
@@ -306,7 +298,7 @@ def run(
     jobs_ = list(jobs_for(hvsc, tunes[:limit], work, render, default_seconds))
     tally = Counter()
     with (
-        _pool(jobs) as ex,
+        pool(jobs) as ex,
         open(work / "results.csv", "w", newline="", encoding="utf-8") as f,
     ):
         w = csv.DictWriter(f, RESULT_FIELDS)
@@ -355,13 +347,111 @@ def diff(hvsc, tunes_csv, key, work, render, context=3):
     return row
 
 
+def first_difference(work, row):
+    """``(frame, [(reg, oracle, renderer)])`` at a ``differs`` row's first mismatch."""
+    nframes, first = int(row["frames"]), int(row["first_diff"])
+    _, oracle = oracle_frames(
+        Path(work) / "oracle" / f"{row['key']}.csv.zst", nframes=nframes
+    )
+    lib = read_grid(Path(work) / "library" / f"{row['key']}.csv.zst", nframes + LEAD)
+    o, l = (g[first] for g in aligned(oracle, lib, int(row["lead"])))
+    return first, [(int(r), int(o[r]), int(l[r])) for r in np.flatnonzero(o != l)]
+
+
+def classify(frame, diffs, row):
+    """``(when, kind, roles)`` of a first difference (see docs/survey.md)."""
+    when = (
+        "frame0"
+        if frame == 0
+        else "early" if frame < 10 else "mid" if frame < 250 else "late"
+    )
+    roles = " ".join(sorted({ROLES[r] for r, _, _ in diffs}))
+    wrong = {r: (o, l) for r, o, l in diffs}
+    deltas = {l - o for o, l in wrong.values()}
+    if row.get("library_gated") == "False" and row.get("oracle_gated") == "True":
+        kind = "silent"
+    elif any(
+        o and any(l2 == o for r2, (_, l2) in wrong.items() if r2 != r)
+        for r, (o, _) in wrong.items()
+    ):
+        kind = "misplaced"
+    elif len(wrong) > 1 and len(deltas) == 1:
+        kind = f"offset{deltas.pop():+#x}"
+    elif all(not l for _, l in wrong.values()):
+        kind = "missing"
+    elif all(not o for o, _ in wrong.values()):
+        kind = "extra"
+    else:
+        kind = "value"
+    return when, kind, roles
+
+
+def _triage_one(args):
+    work, row = args
+    frame, diffs = first_difference(work, row)
+    when, kind, roles = classify(frame, diffs, row)
+    out = {k: row[k] for k in ("key", "path", "player", "song")}
+    return dict(out, first_diff=frame, when=when, kind=kind, roles=roles, diffs=diffs)
+
+
+def info_rates(rows, max_values=20):
+    """``{(key, value): (rendered, exact)}`` over each renderer ``info`` field."""
+    tally = Counter()
+    for r in rows:
+        if r["verdict"] in ("exact", "differs"):
+            for k, v in json.loads(r["info"] or "{}").items():
+                tally[k, json.dumps(v), r["verdict"] == "exact"] += 1
+    values = Counter(k for k, _ in {(k, v) for k, v, _ in tally})
+    rates = {}
+    for (k, v, exact), n in tally.items():
+        if values[k] <= max_values:
+            done, hit = rates.get((k, v), (0, 0))
+            rates[k, v] = (done + n, hit + n * exact)
+    return rates
+
+
+def triage(work, jobs=None, top=15, max_values=20):
+    """Classify every ``differs`` first mismatch into ``triage.csv``; print tables."""
+    work = Path(work)
+    with open(work / "results.csv", newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    differs = [r for r in rows if r["verdict"] == "differs"]
+    with (
+        pool(jobs) as ex,
+        open(work / "triage.csv", "w", newline="", encoding="utf-8") as f,
+    ):
+        w = csv.DictWriter(f, TRIAGE_FIELDS)
+        w.writeheader()
+        out = []
+        hits = ex.map(_triage_one, ((work, r) for r in differs), chunksize=8)
+        for t in tqdm(hits, total=len(differs), unit="song"):
+            w.writerow(dict(t, diffs=json.dumps(t["diffs"])))
+            out.append(t)
+    print("verdicts:", Counter(r["verdict"] for r in rows).most_common())
+    print("when:", Counter(t["when"] for t in out).most_common())
+    print("kind:", Counter(t["kind"] for t in out).most_common(top))
+    examples = {}
+    for t in out:
+        examples.setdefault((t["kind"], t["roles"]), []).append(t["path"])
+    print("kind / roles at the first difference:")
+    for (kind, roles), paths in sorted(examples.items(), key=lambda kv: -len(kv[1]))[
+        :top
+    ]:
+        print(f"{len(paths):7d} {kind:14} {roles:28} e.g. {', '.join(paths[:2])}")
+    rates = info_rates(rows, max_values)
+    print("renderer info vs exact rate:")
+    for (k, v), (n, hit) in sorted(rates.items(), key=lambda kv: -kv[1][0])[:top]:
+        print(f"{n:7d} {100 * hit / n:5.1f}% exact  {k}={v}")
+    return out, rates
+
+
 def main(argv=None):
-    """``python -m pysidtracker.survey {find,run,report,diff}``."""
+    """``python -m pysidtracker.survey {find,run,report,diff,triage}``."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("find", help=find.__doc__)
     p.add_argument("hvsc")
-    p.add_argument("--sidid-cfg", required=True)
+    p.add_argument("--sidid-cfg", help="sidid.cfg (default: the bundled one)")
     p.add_argument("--out", required=True)
     p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
     p.add_argument("--jobs", type=int, default=os.cpu_count())
@@ -380,9 +470,13 @@ def main(argv=None):
     p.add_argument("--jobs", type=int, default=os.cpu_count())
     p = sub.add_parser("report", help=report.__doc__)
     p.add_argument("results")
+    p = sub.add_parser("triage", help=triage.__doc__)
+    p.add_argument("work")
+    p.add_argument("--jobs", type=int, default=os.cpu_count())
+    p.add_argument("--top", type=int, default=15)
     a = ap.parse_args(argv)
     if a.cmd == "find":
-        out = find(a.hvsc, a.sidid_cfg, a.out, a.player, a.jobs)
+        out = find(a.hvsc, a.out, a.sidid_cfg, a.player, a.jobs)
     elif a.cmd == "run":
         out = run(
             a.hvsc,
@@ -396,6 +490,8 @@ def main(argv=None):
         )
     elif a.cmd == "diff":
         out = diff(a.hvsc, a.tunes, a.key, a.work, load_render(a.render), a.context)
+    elif a.cmd == "triage":
+        triage(a.work, a.jobs, a.top)
     else:
         out = report(a.results)
     if a.cmd in ("find", "run"):

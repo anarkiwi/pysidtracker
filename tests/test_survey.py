@@ -31,35 +31,6 @@ SECONDS = NFRAMES * CPF / registers.PAL_CLOCK_HZ + 1e-6
 GT_CODE = b"\xbd\x12\x34\xd0\x00\x00\xc9\xff"
 
 
-def _cfg(tmp_path):
-    cfg = tmp_path / "sidid.cfg"
-    cfg.write_bytes(CFG.encode())
-    return survey.sidid_signatures(cfg)
-
-
-def test_sidid_signatures_keep_cfg_order(tmp_path):
-    sigs = _cfg(tmp_path)
-    assert [(n, len(r)) for n, r in sigs] == [
-        ("Other_Player", 1),
-        ("GoatTracker_V2.x", 2),
-        ("(GT_Editor)", 1),
-    ]
-    gt2 = sigs[1][1][0]
-    assert gt2.search(b"\x00\xbd\x12\x0a\xd0\x01\x02\xc9\xff")
-    assert not gt2.search(b"\xbd\x12\x34\xd1\xc9\xff")
-    assert not sigs[2][1][0].search(b"\x4c\x00\x20")
-
-
-def test_identify_first_match_wins(tmp_path):
-    sigs = _cfg(tmp_path)
-    assert survey.identify(GT_CODE, sigs) == "GoatTracker_V2.x"
-    assert survey.identify(b"\xee\x20\xd0", sigs) == "GoatTracker_V2.x"
-    assert survey.identify(GT_CODE + b"\xa9\x00\x8d", sigs) == "Other_Player"
-    assert survey.identify(b"\x4c\x00\x10" + GT_CODE, sigs) == "GoatTracker_V2.x"
-    assert survey.identify(b"\x4c\x00\x10", sigs) == "(GT_Editor)"
-    assert survey.identify(b"\x00" * 16, sigs) is None
-
-
 def _songlengths(root, text):
     docs = root / "DOCUMENTS"
     docs.mkdir(parents=True, exist_ok=True)
@@ -104,7 +75,7 @@ def test_find_filters_first_match_by_player(tmp_path):
         ("MUSICIANS/C/edit.sid", "(GT_Editor)", "1", "PAL", ""),
     ]
     assert rows[0]["md5"] == md5
-    tally = survey.find(hvsc, cfg, out, jobs=1)
+    tally = survey.find(hvsc, out, cfg, jobs=1)
     assert tally == {"GoatTracker_V2.x": 1, "Other_Player": 1, "(GT_Editor)": 1}
 
 
@@ -321,6 +292,57 @@ def test_run_report_cli(survey_tree, capsys):
     out = capsys.readouterr().out
     assert "('GoatTracker_V2.x', 'exact'), 1)" in out and "AssertionError" in out
     assert survey.run(hvsc, tunes, work, render_exact, player="nomatch", jobs=1) == {}
+
+
+@pytest.mark.parametrize(
+    "frame,diffs,row,expect",
+    [
+        (0, [(4, 0x41, 0x51), (11, 0x81, 0x91)], {}, ("frame0", "offset+0x10", "ctrl")),
+        (3, [(2, 0x20, 0), (22, 0, 0x20)], {}, ("early", "misplaced", "fc pw")),
+        (20, [(5, 0x0F, 0), (6, 0xF0, 0)], {}, ("mid", "missing", "ad sr")),
+        (300, [(24, 0, 0x0F), (23, 0, 1)], {}, ("late", "extra", "res vol")),
+        (5, [(0, 3, 4), (1, 9, 7)], {}, ("early", "value", "freq")),
+        (5, [(4, 0x41, 0x51)], {}, ("early", "value", "ctrl")),
+        (
+            0,
+            [(4, 0x41, 0)],
+            {"library_gated": "False", "oracle_gated": "True"},
+            ("frame0", "silent", "ctrl"),
+        ),
+    ],
+)
+def test_classify(frame, diffs, row, expect):
+    assert survey.classify(frame, diffs, row) == expect
+
+
+def test_info_rates():
+    rows = [
+        {"verdict": v, "info": json.dumps(i)}
+        for v, i in [
+            ("exact", {"opt": True, "n": 1}),
+            ("differs", {"opt": True, "n": 2}),
+            ("differs", {"opt": False, "n": 3}),
+            ("library_error", {"opt": False}),
+        ]
+    ]
+    assert survey.info_rates(rows, max_values=2) == {
+        ("opt", "true"): (2, 1),
+        ("opt", "false"): (1, 0),
+    }
+
+
+def test_triage_cli(survey_tree, capsys):
+    hvsc, tunes, work, tune = survey_tree
+    survey.run(hvsc, tunes, work, render_differs, jobs=1)
+    capsys.readouterr()
+    assert survey.main(["triage", str(work), "--jobs", "1"]) == 0
+    out = capsys.readouterr().out
+    rows = survey.load_tunes(work / "triage.csv")
+    assert [
+        (r["key"], r["first_diff"], r["when"], r["kind"], r["roles"]) for r in rows
+    ] == [(f"{tune['md5']}_2", "10", "mid", "extra", "ctrl")]
+    assert json.loads(rows[0]["diffs"]) == [[11, 0, 1]]
+    assert "extra" in out and '0.0% exact  variant="test"' in out
 
 
 def test_diff_cli_reports_failure(survey_tree, capsys):

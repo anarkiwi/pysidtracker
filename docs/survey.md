@@ -7,9 +7,10 @@ full HVSC song length (`DOCUMENTS/Songlengths.md5`).
 
 ```bash
 pip install "pysidtracker[survey]"
-python -m pysidtracker.survey find $HVSC --sidid-cfg sidid.cfg --player 'goattracker|^\(gt' --out tunes.csv
+python -m pysidtracker.survey find $HVSC --player 'goattracker|^\(gt' --out tunes.csv
 python -m pysidtracker.survey run $HVSC tunes.csv --work .hvsc-survey --render mypkg.survey:render
 python -m pysidtracker.survey report .hvsc-survey/results.csv
+python -m pysidtracker.survey triage .hvsc-survey
 python -m pysidtracker.survey diff $HVSC tunes.csv <md5>_<song> --work .hvsc-survey --render mypkg.survey:render
 ```
 
@@ -33,12 +34,12 @@ means the tune was not recognised; any other exception is a library error.
 
 ## `find`
 
-Identifies every `.sid` with [SIDId](https://github.com/cadaver/sidid)
-semantics: players are tried in `sidid.cfg` order and the first with any
-matching signature names the tune, which is then kept if `--player` matches
-that name. `tunes.csv` columns: `path` (relative to the HVSC root), `md5`,
-`player`, `songs`, `clock` (`PAL`/`NTSC` from header flag bits 2-3), `lengths`
-(seconds per song, space-separated).
+Identifies every `.sid` with `pysidtracker.sidid` (below): players are tried
+in `sidid.cfg` order and the first with any matching signature names the tune,
+which is then kept if `--player` matches that name. `--sidid-cfg` overrides the
+bundled `sidid.cfg`. `tunes.csv` columns: `path` (relative to the HVSC root),
+`md5`, `player`, `songs`, `clock` (`PAL`/`NTSC` from header flag bits 2-3),
+`lengths` (seconds per song, space-separated).
 
 ## `run`
 
@@ -63,3 +64,35 @@ The lead is the shift (up to `LEAD` frames either way) with the latest first
 mismatch. `diff` prints the oracle (`O`) and render (`L`) register rows around
 a subtune's first difference. The work directory derives from copyright tunes:
 keep it untracked.
+
+## `triage`
+
+Classifies each `differs` subtune's first mismatch into `triage.csv` and
+prints the tallies, so a format package's failure classes come from the tool
+rather than ad-hoc scripts:
+
+| column | meaning |
+| --- | --- |
+| `first_diff`, `when` | first differing frame: `frame0`, `early` (< 10), `mid` (< 250), `late` |
+| `kind` | `silent` (the render never gates a voice the oracle gates), `misplaced` (an oracle value appears in another differing register), `offset±N` (two or more registers off by the same delta), `missing` (render zero), `extra` (oracle zero), else `value` |
+| `roles` | voice-agnostic registers involved: `freq`, `pw`, `ctrl`, `ad`, `sr`, `fc`, `res`, `vol` |
+| `diffs` | `[[reg, oracle, render], ...]` at that frame |
+
+It also prints the exact rate for every renderer `info` key=value (keys with at
+most 20 distinct values). A renderer that reports the playroutine options it
+decoded therefore shows which options the player does not model yet.
+
+## `pysidtracker.sidid`
+
+A pure-Python [SIDId](https://github.com/cadaver/sidid): players are tried in
+`sidid.cfg` order, `??` matches any byte and `AND` skips any bytes. SIDId's
+`sidid.cfg` is bundled (BSD-3, see `src/pysidtracker/data/SIDID-LICENSE`).
+
+```bash
+pysidid $HVSC                       # path<TAB>player, tallies on stderr
+pysidid $HVSC --player goattracker  # only matching players
+pysidid tune.sid -m                 # every matching player (SIDId -m)
+```
+
+`identify(data)` / `identify_all(data)` return the first / every matching
+player name for bytes, using the bundled signatures unless `sigs` are passed.
