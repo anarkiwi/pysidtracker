@@ -253,3 +253,23 @@ def test_multispeed_defmon_cadence_is_latch_plus_one(tmp_path):
     cad = playroutine_cadence(data)
     assert cad.source is TriggerSource.CIA_TIMER
     assert cad.cycles_per_call == _MULTISPEED_LATCH + 1
+
+
+def test_psid_cia_speed_without_a_latch_is_the_kernal_timer():
+    data = build_psid(RTS, load=0x1000, init=0x1000, play=0x1000, speed=0b10)
+    assert playroutine_cadence(data).source is TriggerSource.PAL_VIDEO
+    cad = playroutine_cadence(data, subtune=1)
+    assert (cad.source, cad.latch) == (TriggerSource.CIA_TIMER, 0x4025)
+    assert playroutine_cadence(data, subtune=1, clock="NTSC").latch == 0x4295
+
+
+def _cia2_image(magic):
+    code = (
+        _lda_sta(0x40, reg.CIA2_TIMER_A_LO) + _lda_sta(0x28, reg.CIA2_TIMER_A_HI) + RTS
+    )
+    return build_psid(code, load=0x1000, init=0x1000, play=0x1000, magic=magic, speed=1)
+
+
+def test_a_psid_driver_never_plays_on_the_nmi_timer():
+    assert playroutine_cadence(_cia2_image(b"PSID")).cycles_per_call == 0x4026
+    assert playroutine_cadence(_cia2_image(b"RSID")).cycles_per_call == 0x2841

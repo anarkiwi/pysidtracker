@@ -62,6 +62,9 @@ PAL_CYCLES_PER_FRAME = 19656
 NTSC_CYCLES_PER_FRAME = 17095
 PAL_CLOCK_HZ = 985248
 NTSC_CLOCK_HZ = 1022727
+# CIA #1 Timer-A latch the KERNAL leaves for its 60 Hz IRQ, per video standard.
+KERNAL_CIA1_LATCH_PAL = 0x4025
+KERNAL_CIA1_LATCH_NTSC = 0x4295
 
 
 def cycles_per_frame_for_flags(flags: int) -> int:

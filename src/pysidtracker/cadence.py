@@ -132,12 +132,13 @@ def _cia_armed(control: Optional[int], icr: Optional[int]) -> bool:
     return True
 
 
-def _cia_latch(trace) -> tuple[Optional[int], Optional[int]]:
+def _cia_latch(trace, cia2: bool = True) -> tuple[Optional[int], Optional[int]]:
     """The plausible, *armed* CIA Timer-A play latch and its mid-play rewrite.
 
-    Prefers CIA #1 over CIA #2. A latch counts only when its timer is armed
-    (:func:`_cia_armed`); a disarmed latch is ignored so the cadence falls
-    through to the video frame. Returns ``(latch, rewritten_latch)``.
+    Prefers CIA #1 over CIA #2 (considered only when ``cia2``). A latch counts
+    only when its timer is armed (:func:`_cia_armed`); a disarmed latch is
+    ignored so the cadence falls through to the video frame. Returns
+    ``(latch, rewritten_latch)``.
     """
     for latch, rewritten, control, icr in (
         (
@@ -152,7 +153,7 @@ def _cia_latch(trace) -> tuple[Optional[int], Optional[int]]:
             trace.cia2_control,
             trace.cia2_icr,
         ),
-    ):
+    )[: 2 if cia2 else 1]:
         if latch is not None and latch >= _MIN_CIA_LATCH and _cia_armed(control, icr):
             return latch, rewritten
     return None, None
@@ -163,6 +164,7 @@ def playroutine_cadence(
     *,
     clock: Optional[str] = None,
     play_calls: int = 8,
+    subtune: int = 0,
 ) -> Cadence:
     """Derive the play-routine :class:`Cadence` of a tune.
 
@@ -185,8 +187,11 @@ def playroutine_cadence(
     ntsc = _resolve_standard(image, clock)
     clock_hz = reg.NTSC_CLOCK_HZ if ntsc else reg.PAL_CLOCK_HZ
 
-    trace = trace_init(image, play_calls=play_calls)
-    latch, rewritten = _cia_latch(trace)
+    trace = trace_init(image, play_calls=play_calls, subtune=subtune)
+    psid = image.header is not None and image.header.is_psid
+    latch, rewritten = _cia_latch(trace, cia2=not psid)
+    if latch is None and psid and image.header.cia_speed(subtune):
+        latch = reg.KERNAL_CIA1_LATCH_NTSC if ntsc else reg.KERNAL_CIA1_LATCH_PAL
 
     if latch is not None:
         # CIA/NMI timer drives the play interrupt: the latch IS the cadence.

@@ -30,6 +30,7 @@ _INIT_ADDRESS_POS = 0x0A
 _PLAY_ADDRESS_POS = 0x0C
 _SONGS_POS = 0x0E
 _START_SONG_POS = 0x10
+_SPEED_POS = 0x12
 _NAME_POS = 0x16
 _AUTHOR_POS = 0x36
 _RELEASED_POS = 0x56
@@ -91,6 +92,12 @@ class SidHeader:
     third_sid: int
     real_load_address: int
     data_start: int
+    speed: int = 0
+
+    def cia_speed(self, song: int) -> bool:
+        """True when song ``song`` (0-based) plays on a CIA timer rather than the
+        video frame: its bit of ``speed``, the last bit standing for songs 32 on."""
+        return bool(self.speed >> min(song, 31) & 1)
 
     @property
     def is_psid(self) -> bool:
@@ -127,6 +134,7 @@ class SidHeader:
             flags=self.flags,
             second_sid=self.second_sid,
             third_sid=self.third_sid,
+            speed=self.speed,
         )
 
 
@@ -153,6 +161,7 @@ def parse_sid_header(data: bytes) -> SidHeader:
     play_address = _u16be(data, _PLAY_ADDRESS_POS)
     songs = _u16be(data, _SONGS_POS)
     start_song = _u16be(data, _START_SONG_POS)
+    speed = int.from_bytes(data[_SPEED_POS : _SPEED_POS + 4], "big")
     name = _decode_str(data[_NAME_POS : _NAME_POS + _STR_LEN])
     author = _decode_str(data[_AUTHOR_POS : _AUTHOR_POS + _STR_LEN])
     released = _decode_str(data[_RELEASED_POS : _RELEASED_POS + _STR_LEN])
@@ -190,6 +199,7 @@ def parse_sid_header(data: bytes) -> SidHeader:
         third_sid=third_sid,
         real_load_address=real_load,
         data_start=data_start,
+        speed=speed,
     )
 
 
@@ -214,6 +224,7 @@ def _pack_header(
     flags: int,
     second_sid: int = 0,
     third_sid: int = 0,
+    speed: int = 0,
 ) -> bytes:
     if magic not in (PSID_MAGIC, RSID_MAGIC):
         raise SidFormatError(f"container magic must be PSID or RSID, got {magic!r}")
@@ -226,6 +237,7 @@ def _pack_header(
     _pack_u16be(hdr, _PLAY_ADDRESS_POS, play)
     _pack_u16be(hdr, _SONGS_POS, songs)
     _pack_u16be(hdr, _START_SONG_POS, start_song)
+    hdr[_SPEED_POS : _SPEED_POS + 4] = speed.to_bytes(4, "big")
     hdr[_NAME_POS : _NAME_POS + _STR_LEN] = encode_cstr(name, _STR_LEN)
     hdr[_AUTHOR_POS : _AUTHOR_POS + _STR_LEN] = encode_cstr(author, _STR_LEN)
     hdr[_RELEASED_POS : _RELEASED_POS + _STR_LEN] = encode_cstr(released, _STR_LEN)
@@ -253,6 +265,7 @@ def write_psid(
     flags: int = 0,
     version: int = 2,
     kind: str = "PSID",
+    speed: int = 0,
 ) -> bytes:
     """Assemble a PSID/RSID v2 container (the inverse of :func:`parse_sid_header`).
 
@@ -275,5 +288,6 @@ def write_psid(
         author=author,
         released=released,
         flags=flags,
+        speed=speed,
     )
     return header + bytes(image)
