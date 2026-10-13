@@ -221,7 +221,7 @@ def oracle_cache(work):
     cache.mkdir(parents=True, exist_ok=True)
     image = sidtrace_image_id()
     stamp = cache / "STAMP"
-    want = json.dumps({"image": image, "args": ORACLE_ARGS})
+    want = json.dumps({"image": image, "args": ORACLE_ARGS, "interrupts": True})
     if image is None or (stamp.exists() and stamp.read_text("utf-8") == want):
         return cache
     stale = list(cache.glob("*.csv.zst"))
@@ -265,6 +265,7 @@ def check(job):
                 song=song,
                 user=f"{os.getuid()}:{os.getgid()}",
                 extra_args=ORACLE_ARGS,
+                interrupts=True,
             )
         nframes, oracle = oracle_frames(ocsv, seconds, tune["clock"])
         row["frames"] = nframes

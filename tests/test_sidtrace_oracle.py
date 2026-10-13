@@ -16,7 +16,7 @@ from pysidtracker import (
     sidtrace_cadence,
     sidtrace_grid,
 )
-from pysidtracker import oracle, testing
+from pysidtracker import oracle, registers, testing
 from pysidtracker.testing import make_oracle_fixtures, oracle_grid
 
 from .helpers import build_psid
@@ -212,3 +212,42 @@ def test_make_oracle_fixtures_returns_two_fixtures():
         {"x": "A/x.sid"}, hvsc_cache="/tmp/h", oracle_cache="/tmp/o"
     )
     assert tune_id is not None and oracle_match is not None
+
+
+def _jch_rows(irq_rows):
+    """VIC-timed calls every PAL frame; only every third call writes."""
+    frame = registers.PAL_CYCLES_PER_FRAME
+    rows = []
+    for n in range(1, 13):
+        at = n * frame + 64
+        if irq_rows:
+            rows.append(SidtraceRow(at, None, 0, None, None, None, "video_irq"))
+        if n % 3 == 0:
+            rows.append(SidtraceRow(at + 40, None, 40, None, 0, 0, n))
+    return rows
+
+
+def test_read_sidtrace_interrupt_rows(tmp_path):
+    path = tmp_path / "t.csv"
+    path.write_text(_HEADER + "\n100,,0,,,,video_irq\n140,,40,,0,24,15\n")
+    assert read_sidtrace(path) == [
+        SidtraceRow(100, None, 0, None, None, None, "video_irq"),
+        SidtraceRow(140, None, 40, None, 0, 24, 15),
+    ]
+
+
+def test_interrupt_rows_frame_every_call():
+    frame = registers.PAL_CYCLES_PER_FRAME
+    assert sidtrace_cadence(_jch_rows(False)) == 3 * frame
+    assert sidtrace_cadence(_jch_rows(True)) == frame
+    grid = sidtrace_grid(_jch_rows(True), reg_count=1)
+    assert [g[0] for g in grid] == [0, 0, 3, 3, 3, 6, 6, 6, 9, 9, 9, 12]
+
+
+def test_interrupt_rows_ignore_other_source():
+    rows = _jch_rows(True) + [
+        SidtraceRow(n * 7000, None, None, 0, None, None, "cia_irq")
+        for n in range(1, 30)
+    ]
+    rows.sort(key=lambda r: r.cycle)
+    assert sidtrace_cadence(rows) == registers.PAL_CYCLES_PER_FRAME
