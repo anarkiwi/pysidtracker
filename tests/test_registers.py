@@ -91,3 +91,10 @@ def test_cycles_per_frame_for_flags():
     assert (
         reg.cycles_per_frame_for_flags(0b100000 | 0b1000) == reg.NTSC_CYCLES_PER_FRAME
     )
+
+
+def test_sid_model_for_flags():
+    assert reg.sid_model_for_flags(0b10_0000) == "8580"
+    assert reg.sid_model_for_flags(0b01_0000) == "6581"
+    assert reg.sid_model_for_flags(0b11_0000) == "6581"  # both: the default model
+    assert reg.sid_model_for_flags(0) == "6581"

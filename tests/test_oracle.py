@@ -195,3 +195,24 @@ def test_aligned_match_mismatch_and_empty():
     assert not aligned_match([[1]], [])
     # Too short to align.
     assert not aligned_match([[1], [2], [3]], [[1]])
+
+
+def test_emuplayer_loses_the_interrupt_a_call_outlasts():
+    # play: INC $D400, then a ~1280-cycle delay loop -- longer than the period.
+    play = bytes([0xEE, 0x00, 0xD4, 0xA2, 0x00, 0xCA, 0xD0, 0xFD, 0x60])
+    player = EmuPlayer(
+        _SIMPLE[:6] + play, load=0x1000, init=0x1000, play=0x1006, cycles_per_frame=1000
+    )
+    assert [row[0] for row in player.render_grid(6)] == [11, 11, 12, 12, 13, 13]
+
+
+def test_emuplayer_calls_play_a_period_apart():
+    # play: LDA $D012 / STA $D400 -- the raster line at the call.
+    play = bytes([0xAD, 0x12, 0xD0, 0x8D, 0x00, 0xD4, 0x60])
+    image = _SIMPLE[:6] + play
+    paced = EmuPlayer(
+        image, load=0x1000, init=0x1000, play=0x1006, cycles_per_frame=19656
+    )
+    assert len({row[0] for row in paced.render_grid(4)}) == 1
+    free = EmuPlayer(image, load=0x1000, init=0x1000, play=0x1006)
+    assert len({row[0] for row in free.render_grid(100)}) > 1
