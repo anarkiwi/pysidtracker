@@ -84,9 +84,45 @@ def test_sidtrace_cadence_prefers_video_over_cia():
     assert sidtrace_cadence(rows) == 19656
 
 
-def test_sidtrace_grid_matches_grid_from_writes():
-    writes = [(r.cycle, r.reg, r.value) for r in _ROWS]
-    assert sidtrace_grid(_ROWS) == grid_from_writes(writes, cycles_per_frame=19656)
+def _row(cycle, since, register, value):
+    return SidtraceRow(cycle, None, None, since, 0, register, value)
+
+
+def test_sidtrace_grid_frames_by_interrupt():
+    assert [row[0] for row in sidtrace_grid(_ROWS)] == [10, 20, 30]
+
+
+def test_init_writes_are_the_baseline_however_close_the_first_interrupt():
+    rows = [_row(100, None, 1, 7), _row(6000, 200, 0, 10), _row(25856, 200, 0, 20)]
+    assert sidtrace_grid(rows, reg_count=2, cycles_per_frame=19656) == [
+        [10, 7],
+        [20, 7],
+    ]
+
+
+def test_each_interrupt_is_a_frame_and_a_silent_gap_counts_its_calls():
+    rows = [
+        _row(1000, 0, 0, 1),
+        _row(2000, 0, 0, 2),  # an early first period: still its own frame
+        _row(2000 + 3 * 19656, 0, 0, 3),  # two silent calls in between
+    ]
+    assert sidtrace_grid(rows, reg_count=1, cycles_per_frame=19656) == [
+        [1],
+        [2],
+        [2],
+        [2],
+        [3],
+    ]
+
+
+def test_a_write_outside_an_interrupt_joins_the_last_one_raised():
+    rows = [_row(1000, 0, 0, 1), _row(1500, None, 0, 2), _row(20656, 0, 0, 3)]
+    assert sidtrace_grid(rows, reg_count=1, cycles_per_frame=19656) == [[2], [3]]
+
+
+def test_grid_from_writes_anchors_after_the_init_gap():
+    writes = [(0, 0, 9), (50000, 0, 1), (69656, 0, 2)]
+    assert grid_from_writes(writes, reg_count=1) == [[1], [2]]
 
 
 def test_sidtrace_grid_filters_by_chip():

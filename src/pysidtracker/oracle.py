@@ -20,6 +20,7 @@ conftests, pydmcsid helpers).
 
 from __future__ import annotations
 
+import bisect
 import csv
 import io
 import os
@@ -29,7 +30,7 @@ import struct
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Iterable, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 from . import registers as reg
 from .emu import run_to_rts, wire_mpu
@@ -98,7 +99,9 @@ def register_grid(
 
     subject = image.mem
     subject[SID_VOLUME] = DRIVER_VOLUME  # PSID driver cold-start: maximum volume
-    mpu, mem = wire_mpu(subject, illegal_opcodes)
+    mpu, mem = wire_mpu(
+        subject, illegal_opcodes, reg.sid_model_for_flags(image.header.flags)
+    )
 
     init_address = image.header.init_address or image.header.real_load_address
     run_to_rts(mpu, mem, init_address, subtune, max_cycles)
@@ -120,6 +123,11 @@ class EmuPlayer(MemPlayer):
     one ``play`` call per :meth:`~pysidtracker.player.MemPlayer.play_frame`. Use
     it for driver versions that have no native transcription.
 
+    With ``cycles_per_frame`` each play call starts a period after the last, as
+    the interrupt calls it, so raster and osc3/env3 reads see the real elapsed
+    time, and an interrupt raised while the previous call still runs is lost;
+    ``sid_model`` is the chip those reads come from.
+
     ``snapshot`` masks the pulse-width-high registers to a nibble (the SID
     ignores their upper bits, see :data:`~pysidtracker.registers.PW_HI_REGS`), so
     the per-frame grid matches the reference-grid convention. The frame *cadence*
@@ -140,20 +148,32 @@ class EmuPlayer(MemPlayer):
         *,
         illegal_opcodes: bool = False,
         max_cycles: int = 8_000_000,
+        sid_model: str = "6581",
+        cycles_per_frame: Optional[int] = None,
     ):
         self._init_addr = init & 0xFFFF
         self._play_addr = play & 0xFFFF
         self._illegal = illegal_opcodes
         self._max_cycles = max_cycles
+        self._sid_model = sid_model
+        self._period = cycles_per_frame
         self._mpu = None
         self._obs = None
+        self._due = 0
         super().__init__(image, load, subtune)
 
     def _init(self, subtune: int) -> None:
-        self._mpu, self._obs = wire_mpu(self._mem, self._illegal)
+        self._mpu, self._obs = wire_mpu(self._mem, self._illegal, self._sid_model)
         run_to_rts(self._mpu, self._obs, self._init_addr, subtune, self._max_cycles)
+        self._due = self._mpu.processorCycles
 
     def _frame(self) -> None:
+        if self._period:
+            late = self._mpu.processorCycles > self._due
+            self._mpu.processorCycles = max(self._mpu.processorCycles, self._due)
+            self._due += self._period
+            if late:
+                return
         run_to_rts(self._mpu, self._obs, self._play_addr, 0, self._max_cycles)
 
     def snapshot(self) -> List[int]:
@@ -162,6 +182,25 @@ class EmuPlayer(MemPlayer):
             (self._mem[base + i] & 0x0F) if i in reg.PW_HI_REGS else self._mem[base + i]
             for i in range(self.REG_COUNT)
         ]
+
+
+def _frame_grid(
+    framed: Iterable[Tuple[int, int, int]], reg_count: int, pw_hi_regs: Iterable[int]
+) -> List[List[int]]:
+    """A forward-filled grid from ``(frame, reg, val)`` writes in frame order.
+
+    Frame ``-1`` is the baseline frame 0 starts from; pulse-width highs keep 4 bits.
+    """
+    pw = set(pw_hi_regs)
+    cur_row = [0] * reg_count
+    rows: List[List[int]] = []
+    for frame, register, val in framed:
+        if 0 <= register < reg_count:
+            while len(rows) < frame:
+                rows.append(cur_row[:])
+            cur_row[register] = (val & 0x0F) if register in pw else val
+    rows.append(cur_row[:])
+    return rows
 
 
 def grid_from_writes(
@@ -175,41 +214,22 @@ def grid_from_writes(
     """Frame a ``(clock, reg, val)`` write stream into a per-frame grid.
 
     Frame 0 is anchored to the first play call -- the first write after a
-    ``> gap``-cycle gap; the leading init writes form frame 0's baseline. Each
-    frame's registers forward-fill from the previous frame, and the
-    pulse-width-high registers (``pw_hi_regs``) are masked to 4 bits. Frame
-    assignment rounds to nearest (``(clock - t0 + cpf // 2) // cpf``).
+    ``> gap``-cycle gap; earlier writes form its baseline. A write lands in the
+    nearest frame (``(clock - t0 + cpf // 2) // cpf``).
     """
     if not writes:
         return []
-    pw = set(pw_hi_regs)
     cyc = [w[0] for w in writes]
-    t0 = cyc[0]
-    for prev, cur in zip(cyc, cyc[1:]):
-        if cur - prev > gap:
-            t0 = cur
-            break
-    cur_row = [0] * reg_count
-    rows: List[List[int]] = []
-    idx = 0
-    while idx < len(writes) and writes[idx][0] < t0:
-        _c, register, val = writes[idx]
-        if 0 <= register < reg_count:
-            cur_row[register] = (val & 0x0F) if register in pw else val
-        idx += 1
-
-    def frame_of(clock: int) -> int:
-        return (clock - t0 + cycles_per_frame // 2) // cycles_per_frame
-
-    nframes = frame_of(writes[-1][0]) + 1
-    for frame in range(nframes):
-        while idx < len(writes) and frame_of(writes[idx][0]) == frame:
-            _c, register, val = writes[idx]
-            if 0 <= register < reg_count:
-                cur_row[register] = (val & 0x0F) if register in pw else val
-            idx += 1
-        rows.append(cur_row[:])
-    return rows
+    t0 = next((cur for prev, cur in zip(cyc, cyc[1:]) if cur - prev > gap), cyc[0])
+    half = cycles_per_frame // 2
+    return _frame_grid(
+        (
+            (-1 if clock < t0 else (clock - t0 + half) // cycles_per_frame, r, v)
+            for clock, r, v in writes
+        ),
+        reg_count,
+        pw_hi_regs,
+    )
 
 
 def read_sidwr(path, *, reg_count: int = 25) -> List[Tuple[int, int, int]]:
@@ -305,6 +325,14 @@ def read_sidtrace(path) -> List[SidtraceRow]:
     return rows
 
 
+def _raise_cycle(row: SidtraceRow) -> Optional[int]:
+    """The cycle the interrupt that made ``row``'s write was raised, if any."""
+    since = (
+        row.since_video_irq if row.since_video_irq is not None else row.since_cia_irq
+    )
+    return None if since is None else row.cycle - since
+
+
 def sidtrace_cadence(rows: Sequence[SidtraceRow], *, chip: int = 0) -> Optional[int]:
     """The play cadence (cycles per frame) implied by a sidtrace CSV.
 
@@ -316,19 +344,28 @@ def sidtrace_cadence(rows: Sequence[SidtraceRow], *, chip: int = 0) -> Optional[
     """
     raises = sorted(
         {
-            row.cycle
-            - (
-                row.since_video_irq
-                if row.since_video_irq is not None
-                else row.since_cia_irq
-            )
+            at
             for row in rows
-            if row.chip == chip
-            and (row.since_video_irq is not None or row.since_cia_irq is not None)
+            if row.chip == chip and (at := _raise_cycle(row)) is not None
         }
     )
     diffs = [b - a for a, b in zip(raises, raises[1:])]
     return int(statistics.median(diffs)) if diffs else None
+
+
+def _raise_frames(raises: Iterable[int], cpf: int) -> Dict[int, int]:
+    """Each interrupt's frame: one per interrupt, and cadence-filled gaps between.
+
+    A play call that changed no register leaves no row, so a gap longer than
+    the cadence counts the calls it hides.
+    """
+    out: Dict[int, int] = {}
+    frame, prev = 0, None
+    for at in sorted(set(raises)):
+        if prev is not None:
+            frame += max(1, (at - prev + cpf // 2) // cpf)
+        out[at], prev = frame, at
+    return out
 
 
 def sidtrace_grid(
@@ -338,32 +375,37 @@ def sidtrace_grid(
     reg_count: int = 25,
     cycles_per_frame: Optional[int] = None,
     pw_hi_regs: Iterable[int] = reg.PW_HI_REGS,
-    gap: int = 10000,
 ) -> List[List[int]]:
     """Frame a sidtrace CSV into a per-frame register grid for ``chip``.
 
-    Reuses :func:`grid_from_writes` with the cadence from
-    :func:`sidtrace_cadence` (falling back to the PAL frame length), so the
-    oracle grid is directly comparable to :func:`register_grid` /
-    :meth:`~pysidtracker.player.MemPlayer.render_grid` via :func:`aligned_match`.
+    A play call's writes belong to the frame of the interrupt that made it
+    (:func:`_raise_frames`, over every chip's interrupts); a write outside any
+    interrupt belongs to the last one raised before it, or else to the baseline.
     """
     cpf = (
         cycles_per_frame
         or sidtrace_cadence(rows, chip=chip)
         or reg.PAL_CYCLES_PER_FRAME
     )
-    writes = [
-        (row.cycle, row.reg, row.value)
-        for row in rows
-        if row.chip == chip and 0 <= row.reg < reg_count
-    ]
-    return grid_from_writes(
-        writes,
-        cycles_per_frame=cpf,
-        reg_count=reg_count,
-        pw_hi_regs=pw_hi_regs,
-        gap=gap,
+    raises = [_raise_cycle(row) for row in rows]
+    frames = _raise_frames((at for at in raises if at is not None), cpf)
+    starts = sorted(frames)
+
+    def frame_of(row: SidtraceRow, at: Optional[int]) -> int:
+        if at is not None:
+            return frames[at]
+        i = bisect.bisect_right(starts, row.cycle)
+        return frames[starts[i - 1]] if i else -1
+
+    framed = sorted(
+        (
+            (frame_of(row, at), row.reg, row.value)
+            for row, at in zip(rows, raises)
+            if row.chip == chip
+        ),
+        key=lambda w: w[0],
     )
+    return _frame_grid(framed, reg_count, pw_hi_regs)
 
 
 def run_sidtrace(

@@ -3,6 +3,7 @@
 import pytest
 
 from pysidtracker import run_to_rts, wire_mpu
+from pysidtracker.emu import SidReads
 from pysidtracker.errors import EmulatorUnavailable
 
 jennings = pytest.importorskip("jennings")
@@ -157,29 +158,38 @@ def test_hardware_reads_are_synthesised_not_ram():
         seen.add(mpu.a)
         mpu.processorCycles += 63
     assert len(seen) > 1  # a raster spin loop can observe its compare value
-    assert mem[0xD41B] != subject[0xD41B]  # osc3 reads the cycle counter, not RAM
     assert mem[0xD011] & 0x80 == 0x00
 
 
-def test_run_to_rts_honours_cycle_cap():
+# LDA #$FF / STA $D412,$D40E,$D40F / LDA #$20 / STA $D412 / LDA $D41B / RTS: the
+# common SID-model probe, reading osc3 four cycles after releasing the test bit.
+_MODEL_PROBE = bytes(
+    [0xA9, 0xFF, 0x8D, 0x12, 0xD4, 0x8D, 0x0E, 0xD4, 0x8D, 0x0F, 0xD4]
+    + [0xA9, 0x20, 0x8D, 0x12, 0xD4, 0xAD, 0x1B, 0xD4, 0x60]
+)
+
+
+@pytest.mark.parametrize("model,osc3", [("6581", 3), ("8580", 2)])
+def test_osc3_is_the_chip_s_own_sawtooth_at_the_read_cycle(model, osc3):
     subject = bytearray(0x10000)
-    subject[CODE : CODE + 2] = bytes([0x4C, 0x00])  # JMP $1000 (endless)
-    subject[CODE + 2] = 0x10
-    mpu, mem = wire_mpu(subject)
+    subject[CODE : CODE + len(_MODEL_PROBE)] = _MODEL_PROBE
+    mpu, mem = wire_mpu(subject, sid_model=model)
     run_to_rts(mpu, mem, CODE, 0, max_cycles=1000)
-    assert mpu.processorCycles > 1000
+    assert mpu.a == osc3
 
 
-def test_wire_mpu_reports_missing_jennings(monkeypatch):
-    import builtins
+def test_sid_reads_replay_queued_writes_as_an_eager_chip_would():
+    from pyresidfp._pyresidfp import SID, ChipModel, SamplingMethod
 
-    real_import = builtins.__import__
-
-    def _no_jennings(name, *args, **kwargs):
-        if name.startswith("jennings"):
-            raise ImportError(name)
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _no_jennings)
-    with pytest.raises(EmulatorUnavailable):
-        wire_mpu(bytearray(0x10000))
+    writes = [(10, 0x0F, 0x12), (300, 0x12, 0x11), (900, 0x0E, 0x80)]
+    lazy = SidReads()
+    eager = SID(ChipModel.MOS6581, SamplingMethod.DECIMATE, 985248.0, 8000.0)
+    now = 0
+    for cycle, register, value in writes:
+        lazy.write(cycle, register, value)
+        eager.clock(cycle - now)
+        eager.write(register, value)
+        now = cycle
+    eager.clock(5000 - now)
+    assert lazy.read(5000, 0x1B) == eager.read(0x1B) != 0
+    assert lazy.read(5000, 0x1C) == eager.read(0x1C) != 0

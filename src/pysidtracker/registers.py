@@ -76,6 +76,15 @@ def cycles_per_frame_for_flags(flags: int) -> int:
     )
 
 
+def sid_model_for_flags(flags: int) -> str:
+    """The SID model a player emulates from PSID header ``flags`` (model bits 4-5).
+
+    ``"8580"`` when the header names the 8580 alone, else ``"6581"``: unknown and
+    both fall back to the 6581, as libsidplayfp's default model does.
+    """
+    return "8580" if ((flags >> 4) & 0b11) == 0b10 else "6581"
+
+
 # --- CIA #1 ($DC00..$DC0F) --------------------------------------------------
 CIA1_BASE = 0xDC00
 CIA1_LAST = 0xDC0F
