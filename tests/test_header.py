@@ -84,3 +84,20 @@ def test_data_offset_past_end():
 
 def test_decode_str_stops_at_nul():
     assert _decode_str(b"HI\x00\x00garbage") == "HI"
+
+
+def test_speed_bits_select_each_song_s_timer():
+    from pysidtracker import parse_sid_header, write_psid
+
+    header = parse_sid_header(
+        write_psid(load=0x1000, init=0, play=0, image=b"", speed=1 << 31 | 2)
+    )
+    assert header.speed == 1 << 31 | 2
+    assert [header.cia_speed(s) for s in (0, 1, 30, 31, 40)] == [
+        False,
+        True,
+        False,
+        True,
+        True,
+    ]
+    assert parse_sid_header(header.to_bytes()).speed == header.speed

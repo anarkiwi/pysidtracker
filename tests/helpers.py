@@ -20,6 +20,7 @@ def build_psid(
     magic=b"PSID",
     second_sid=0,
     data_offset=DATA_OFFSET,
+    speed=0,
 ):
     """Assemble a PSID/RSID container around ``image`` bytes."""
     hdr = bytearray(data_offset)
@@ -31,6 +32,7 @@ def build_psid(
     struct.pack_into(">H", hdr, 0x0C, load if play is None else play)
     struct.pack_into(">H", hdr, 0x0E, songs)
     struct.pack_into(">H", hdr, 0x10, start_song)
+    struct.pack_into(">I", hdr, 0x12, speed)
     hdr[0x16 : 0x16 + len(name)] = name.encode("latin-1")
     hdr[0x36 : 0x36 + len(author)] = author.encode("latin-1")
     hdr[0x56 : 0x56 + len(released)] = released.encode("latin-1")
