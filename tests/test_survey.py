@@ -160,6 +160,11 @@ def render_short(data, song, nframes):
     return render_exact(data, song, nframes)[0][: nframes - 1], {}
 
 
+@pytest.fixture(autouse=True)
+def _image_id(monkeypatch):
+    monkeypatch.setattr(survey, "sidtrace_image_id", lambda: "sha256:a")
+
+
 @pytest.fixture(name="survey_tree")
 def _survey_tree(tmp_path):
     hvsc, work = tmp_path / "hvsc", tmp_path / "work"
@@ -174,9 +179,9 @@ def _survey_tree(tmp_path):
         w = csv.DictWriter(f, survey.TUNE_FIELDS)
         w.writeheader()
         w.writerow(tune)
+    survey.oracle_cache(work)
     for song in (1, 2):
         ocsv = work / "oracle" / f"{md5}_{song}.csv.zst"
-        ocsv.parent.mkdir(parents=True, exist_ok=True)
         ocsv.write_bytes(zstandard.ZstdCompressor().compress(_trace_csv().encode()))
     return hvsc, tunes, work, tune
 
@@ -354,3 +359,42 @@ def test_diff_cli_reports_failure(survey_tree, capsys):
     args = ["diff", str(hvsc), str(tunes), key, "--work", str(work)]
     survey.main(args + ["--render", f"{__name__}:render_crash"])
     assert capsys.readouterr().out.count("\n") == 1
+
+
+@pytest.mark.parametrize("image,kept", [("sha256:a", 2), (None, 2), ("sha256:b", 0)])
+def test_oracle_cache_stamp(survey_tree, monkeypatch, image, kept):
+    work = survey_tree[2]
+    monkeypatch.setattr(survey, "sidtrace_image_id", lambda: image)
+    cache = survey.oracle_cache(work)
+    assert len(list(cache.glob("*.csv.zst"))) == kept
+    assert ("sha256:b" in (cache / "STAMP").read_text("utf-8")) == (kept == 0)
+
+
+def test_oracle_cache_unstamped_is_stale(survey_tree):
+    work = survey_tree[2]
+    (work / "oracle" / "STAMP").unlink()
+    assert not list(survey.oracle_cache(work).glob("*.csv.zst"))
+
+
+@pytest.mark.parametrize(
+    "codes,expect,calls",
+    [([0], "sha256:x", 1), ([1, 0, 0], "sha256:x", 3), ([1, 1, 1], None, 3)],
+)
+def test_sidtrace_image_id(monkeypatch, codes, expect, calls):
+    seen = []
+
+    def _run(cmd, **_):
+        seen.append(cmd[1])
+        return subprocess.CompletedProcess(cmd, codes[len(seen) - 1], "sha256:x\n")
+
+    monkeypatch.setattr(oracle.subprocess, "run", _run)
+    assert oracle.sidtrace_image_id("img") == expect and len(seen) == calls
+    assert seen[:2] == ["image", "pull"][: min(calls, 2)]
+
+
+def test_sidtrace_image_id_without_docker(monkeypatch):
+    def _run(cmd, **_):
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(oracle.subprocess, "run", _run)
+    assert oracle.sidtrace_image_id() is None

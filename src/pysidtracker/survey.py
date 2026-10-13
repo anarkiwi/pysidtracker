@@ -33,6 +33,7 @@ from .oracle import (
     run_sidtrace,
     sidtrace_cadence,
     sidtrace_grid,
+    sidtrace_image_id,
 )
 from .sidid import identify, sidid_signatures
 
@@ -212,6 +213,24 @@ def _err(exc):
     return f"{type(exc).__name__}: {exc}"
 
 
+def oracle_cache(work):
+    """``work/oracle``, emptied when its traces came from another sidtrace image or args."""
+    cache = Path(work) / "oracle"
+    cache.mkdir(parents=True, exist_ok=True)
+    image = sidtrace_image_id()
+    stamp = cache / "STAMP"
+    want = json.dumps({"image": image, "args": ORACLE_ARGS})
+    if image is None or (stamp.exists() and stamp.read_text("utf-8") == want):
+        return cache
+    stale = list(cache.glob("*.csv.zst"))
+    if stale:
+        print(f"oracle: re-rendering {len(stale)} stale traces", file=sys.stderr)
+    for path in stale:
+        path.unlink()
+    stamp.write_text(want, "utf-8")
+    return cache
+
+
 def check(job):
     """One subtune's oracle-vs-renderer comparison row (see ``RESULT_FIELDS``)."""
     sid_path, tune, song, seconds, work, render = job
@@ -292,7 +311,7 @@ def run(
 ):
     """Compare every subtune; write ``results.csv`` under ``work``, return tallies."""
     work = Path(work)
-    work.mkdir(parents=True, exist_ok=True)
+    oracle_cache(work)
     tunes = [
         t for t in load_tunes(tunes_csv) if re.search(player or "", t["player"], re.I)
     ]
@@ -328,6 +347,7 @@ def report(results_csv):
 def diff(hvsc, tunes_csv, key, work, render, context=3):
     """Print oracle (O) and renderer (L) rows around one subtune's first difference."""
     work = Path(work)
+    oracle_cache(work)
     md5, song = key.split("_")
     tune = next(t for t in load_tunes(tunes_csv) if t["md5"] == md5)
     job = next(j for j in jobs_for(hvsc, [tune], work, render) if j[2] == int(song))

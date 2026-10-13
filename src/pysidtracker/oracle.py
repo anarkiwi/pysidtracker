@@ -408,6 +408,19 @@ def sidtrace_grid(
     return _frame_grid(framed, reg_count, pw_hi_regs)
 
 
+def sidtrace_image_id(image: str = SIDTRACE_IMAGE, docker: str = "docker"):
+    """The local id of ``image``, pulled if absent; ``None`` without docker or image."""
+    inspect = [docker, "image", "inspect", "-f", "{{.Id}}", image]
+    try:
+        for cmd in (inspect, [docker, "pull", "-q", image], inspect):
+            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if cmd is inspect and res.returncode == 0:
+                return res.stdout.strip()
+    except FileNotFoundError:
+        pass
+    return None
+
+
 def run_sidtrace(
     tune_path,
     out_path,
