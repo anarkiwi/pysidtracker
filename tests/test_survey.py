@@ -286,10 +286,16 @@ def test_run_sidtrace_song_and_user(tmp_path, monkeypatch):
     tune = tmp_path / "t.sid"
     tune.write_bytes(b"PSID")
     oracle.run_sidtrace(
-        tune, tmp_path / "a.csv.zst", song=3, user="1:2", extra_args=["-q"]
+        tune,
+        tmp_path / "a.csv.zst",
+        song=3,
+        user="1:2",
+        extra_args=["-q"],
+        interrupts=True,
     )
     oracle.run_sidtrace(tune, tmp_path / "b.csv.zst")
     assert seen[0][3:5] == ["--user", "1:2"] and seen[0][-2:] == ["-o3", "-q"]
+    assert seen[0][5:7] == ["-e", "SIDTRACE_INTERRUPTS=1"] and "-e" not in seen[1]
     assert "--user" not in seen[1] and not any(a.startswith("-o") for a in seen[1])
 
 

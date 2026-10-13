@@ -30,7 +30,7 @@ import struct
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple, Union
 
 from . import registers as reg
 from .emu import run_to_rts, wire_mpu
@@ -275,20 +275,21 @@ def aligned_match(
 
 
 class SidtraceRow(NamedTuple):
-    """One row of a sidtrace oracle CSV (a single changed SID register write).
+    """One sidtrace CSV row: a changed SID register write or an interrupt raise.
 
-    The three interrupt-delta fields are ``None`` until their source first fires
-    (an empty CSV cell). ``reg`` is the register OFFSET ``0..31`` relative to the
-    chip's base, ``chip`` the SID index (``0`` = ``$D400``).
+    Interrupt-delta fields are ``None`` until their source first fires. A write
+    has ``chip`` (SID index), ``reg`` (offset ``0..31``) and an int ``value``; an
+    interrupt row (``SIDTRACE_INTERRUPTS``) has ``chip``/``reg`` ``None`` and
+    ``value`` ``"nmi"``, ``"video_irq"`` or ``"cia_irq"``.
     """
 
     cycle: int
     since_nmi: Optional[int]
     since_video_irq: Optional[int]
     since_cia_irq: Optional[int]
-    chip: int
-    reg: int
-    value: int
+    chip: Optional[int]
+    reg: Optional[int]
+    value: Union[int, str]
 
 
 def read_sidtrace(path) -> List[SidtraceRow]:
@@ -317,9 +318,9 @@ def read_sidtrace(path) -> List[SidtraceRow]:
                 int(nmi) if nmi else None,
                 int(vid) if vid else None,
                 int(cia) if cia else None,
-                int(chip),
-                int(register),
-                int(val),
+                int(chip) if chip else None,
+                int(register) if register else None,
+                int(val) if chip else val,
             )
         )
     return rows
@@ -333,22 +334,30 @@ def _raise_cycle(row: SidtraceRow) -> Optional[int]:
     return None if since is None else row.cycle - since
 
 
-def sidtrace_cadence(rows: Sequence[SidtraceRow], *, chip: int = 0) -> Optional[int]:
-    """The play cadence (cycles per frame) implied by a sidtrace CSV.
+def _raises(rows: Sequence[SidtraceRow], chip: int = 0) -> List[int]:
+    """Sorted raise cycles of the interrupt source timing ``chip``'s writes.
 
-    Each write records the cycle offset since its frame's interrupt was raised
-    (``since_video_irq`` for VIC-timed tunes, else ``since_cia_irq``), so
-    ``cycle - offset`` is that frame's interrupt-raise cycle. The median gap
-    between consecutive distinct raise cycles is the frame period, robust to
-    multi-speed and variable-tempo players. ``None`` if fewer than two frames.
+    Each write's ``cycle`` minus its ``since_video_irq`` (else ``since_cia_irq``)
+    is its play call's raise; interrupt rows of that source add the calls that
+    wrote nothing.
     """
-    raises = sorted(
-        {
-            at
-            for row in rows
-            if row.chip == chip and (at := _raise_cycle(row)) is not None
-        }
+    writes = [r for r in rows if r.chip == chip]
+    source = (
+        "video_irq" if any(r.since_video_irq is not None for r in writes) else "cia_irq"
     )
+    return sorted(
+        {at for r in writes if (at := _raise_cycle(r)) is not None}
+        | {r.cycle for r in rows if r.chip is None and r.value == source}
+    )
+
+
+def sidtrace_cadence(rows: Sequence[SidtraceRow], *, chip: int = 0) -> Optional[int]:
+    """The play cadence (cycles per frame): the median gap between :func:`_raises`.
+
+    Exact with interrupt rows; without them a call that wrote nothing leaves a
+    gap, so tunes that write every Nth call read N calls long. ``None`` if <2.
+    """
+    raises = _raises(rows, chip)
     diffs = [b - a for a, b in zip(raises, raises[1:])]
     return int(statistics.median(diffs)) if diffs else None
 
@@ -378,9 +387,9 @@ def sidtrace_grid(
 ) -> List[List[int]]:
     """Frame a sidtrace CSV into a per-frame register grid for ``chip``.
 
-    A play call's writes belong to the frame of the interrupt that made it
-    (:func:`_raise_frames`, over every chip's interrupts); a write outside any
-    interrupt belongs to the last one raised before it, or else to the baseline.
+    A play call's writes belong to the frame of the interrupt that made it (one
+    frame per raise given interrupt rows, else :func:`_raise_frames`); a write
+    outside any interrupt goes to the last raise before it, or the baseline.
     """
     cpf = (
         cycles_per_frame
@@ -388,7 +397,11 @@ def sidtrace_grid(
         or reg.PAL_CYCLES_PER_FRAME
     )
     raises = [_raise_cycle(row) for row in rows]
-    frames = _raise_frames((at for at in raises if at is not None), cpf)
+    calls = {at for at in raises if at is not None} | set(_raises(rows, chip))
+    if any(row.chip is None for row in rows):
+        frames = {at: i for i, at in enumerate(sorted(calls))}
+    else:
+        frames = _raise_frames(calls, cpf)
     starts = sorted(frames)
 
     def frame_of(row: SidtraceRow, at: Optional[int]) -> int:
@@ -431,12 +444,13 @@ def run_sidtrace(
     extra_args: Sequence[str] = (),
     song: Optional[int] = None,
     user: Optional[str] = None,
+    interrupts: bool = False,
 ) -> Path:
     """Render ``tune_path`` under the sidtrace Docker oracle to ``out_path``.
 
-    Renders in a private temp dir beside ``out_path``, then moves the ``.csv.zst``
-    in atomically. ``song`` (1-based) adds ``-o<song>``; ``user`` (``uid:gid``)
-    keeps the trace non-root-owned. Raises :class:`SidtraceUnavailable` on failure.
+    Renders in a temp dir beside ``out_path`` and moves it in atomically. ``song``
+    (1-based) adds ``-o<song>``, ``user`` (``uid:gid``) sets the owner, ``interrupts``
+    adds interrupt-raise rows. Raises :class:`SidtraceUnavailable` on failure.
     """
     tune_path = Path(tune_path)
     out_path = Path(out_path)
@@ -455,6 +469,7 @@ def run_sidtrace(
             "run",
             "--rm",
             *(["--user", user] if user else []),
+            *(["-e", "SIDTRACE_INTERRUPTS=1"] if interrupts else []),
             "-v",
             f"{work.resolve()}:/work",
             image,
