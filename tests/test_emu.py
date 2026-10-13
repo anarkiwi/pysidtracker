@@ -193,3 +193,27 @@ def test_sid_reads_replay_queued_writes_as_an_eager_chip_would():
     eager.clock(5000 - now)
     assert lazy.read(5000, 0x1B) == eager.read(0x1B) != 0
     assert lazy.read(5000, 0x1C) == eager.read(0x1C) != 0
+
+
+def test_run_to_rts_honours_cycle_cap():
+    subject = bytearray(0x10000)
+    subject[CODE : CODE + 2] = bytes([0x4C, 0x00])  # JMP $1000 (endless)
+    subject[CODE + 2] = 0x10
+    mpu, mem = wire_mpu(subject)
+    run_to_rts(mpu, mem, CODE, 0, max_cycles=1000)
+    assert mpu.processorCycles > 1000
+
+
+def test_wire_mpu_reports_missing_jennings(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_jennings(name, *args, **kwargs):
+        if name.startswith("jennings"):
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_jennings)
+    with pytest.raises(EmulatorUnavailable):
+        wire_mpu(bytearray(0x10000))
