@@ -15,9 +15,11 @@ import math
 import multiprocessing
 import os
 import re
+import signal
 import sys
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -231,9 +233,25 @@ def oracle_cache(work):
     return cache
 
 
+@contextmanager
+def deadline(seconds):
+    """Raise :class:`TimeoutError` in the main thread after ``seconds`` (0: never)."""
+
+    def _expire(*_):
+        raise TimeoutError(f"render exceeded {seconds}s")
+
+    old = signal.signal(signal.SIGALRM, _expire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
+
+
 def check(job):
     """One subtune's oracle-vs-renderer comparison row (see ``RESULT_FIELDS``)."""
-    sid_path, tune, song, seconds, work, render = job
+    sid_path, tune, song, seconds, work, render, timeout = job
     key = f"{tune['md5']}_{song}"
     row = dict(key=key, path=tune["path"], player=tune["player"], song=song)
     row["seconds"] = seconds
@@ -253,7 +271,8 @@ def check(job):
     except (SidtraceUnavailable, OSError, ValueError) as e:
         return dict(row, verdict="oracle_error", error=_err(e))
     try:
-        lib, info = render(Path(sid_path).read_bytes(), song, nframes + LEAD)
+        with deadline(timeout):
+            lib, info = render(Path(sid_path).read_bytes(), song, nframes + LEAD)
         lib = np.asarray(lib, dtype=np.int16)
         if lib.ndim != 2 or lib.shape[1] != NREGS or len(lib) < nframes + LEAD:
             raise ValueError(f"render grid shape {lib.shape}, need {nframes + LEAD}")
@@ -289,13 +308,15 @@ def load_render(spec):
     return getattr(importlib.import_module(module), name)
 
 
-def jobs_for(hvsc, tunes, work, render, default_seconds=180):
+def jobs_for(hvsc, tunes, work, render, default_seconds=180, timeout=600):
     """One :func:`check` job per (tune, song), timed by its HVSC song length."""
     for tune in tunes:
         lens = [float(x) for x in tune["lengths"].split()]
         for song in range(1, int(tune["songs"]) + 1):
             secs = lens[song - 1] if song <= len(lens) else default_seconds
-            yield Path(hvsc) / tune["path"], tune, song, secs, Path(work), render
+            yield Path(hvsc) / tune["path"], tune, song, secs, Path(
+                work
+            ), render, timeout
 
 
 def run(
@@ -308,6 +329,7 @@ def run(
     limit=None,
     jobs=None,
     default_seconds=180,
+    timeout=600,
 ):
     """Compare every subtune; write ``results.csv`` under ``work``, return tallies."""
     work = Path(work)
@@ -315,7 +337,7 @@ def run(
     tunes = [
         t for t in load_tunes(tunes_csv) if re.search(player or "", t["player"], re.I)
     ]
-    jobs_ = list(jobs_for(hvsc, tunes[:limit], work, render, default_seconds))
+    jobs_ = list(jobs_for(hvsc, tunes[:limit], work, render, default_seconds, timeout))
     tally = Counter()
     with (
         pool(jobs) as ex,
@@ -323,8 +345,10 @@ def run(
     ):
         w = csv.DictWriter(f, RESULT_FIELDS)
         w.writeheader()
-        bar = tqdm(ex.map(check, jobs_), total=len(jobs_), unit="song")
-        for row in bar:
+        futures = [ex.submit(check, job) for job in jobs_]
+        bar = tqdm(as_completed(futures), total=len(jobs_), unit="song")
+        for done in bar:
+            row = done.result()
             w.writerow(row)
             tally[row["verdict"]] += 1
             bar.set_postfix(tally)
@@ -488,6 +512,7 @@ def main(argv=None):
     p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
     p.add_argument("--limit", type=int, help="only the first N tunes")
     p.add_argument("--default-seconds", type=float, default=180)
+    p.add_argument("--timeout", type=float, default=600, help="render seconds")
     p.add_argument("--jobs", type=int, default=os.cpu_count())
     p = sub.add_parser("report", help=report.__doc__)
     p.add_argument("results")
@@ -508,6 +533,7 @@ def main(argv=None):
             limit=a.limit,
             jobs=a.jobs,
             default_seconds=a.default_seconds,
+            timeout=a.timeout,
         )
     elif a.cmd == "diff":
         out = diff(a.hvsc, a.tunes, a.key, a.work, load_render(a.render), a.context)

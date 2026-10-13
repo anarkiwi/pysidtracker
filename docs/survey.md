@@ -14,8 +14,9 @@ python -m pysidtracker.survey triage .hvsc-survey
 python -m pysidtracker.survey diff $HVSC tunes.csv <md5>_<song> --work .hvsc-survey --render mypkg.survey:render
 ```
 
-`run` also takes `--player REGEX`, `--limit N` (first N tunes), `--jobs` and
-`--default-seconds` (subtunes with no HVSC length). Player regexes are
+`run` also takes `--player REGEX`, `--limit N` (first N tunes), `--jobs`,
+`--default-seconds` (subtunes with no HVSC length) and `--timeout` (render
+seconds per subtune before it is a `library_error`, default 600). Player regexes are
 case-insensitive.
 
 ## Renderer

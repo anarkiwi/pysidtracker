@@ -155,6 +155,12 @@ def render_crash(data, song, nframes):
     raise KeyError(len(data) + song + nframes)
 
 
+def render_hang(data, song, nframes):
+    """Fake renderer that never returns."""
+    while data and song and nframes:
+        pass
+
+
 def render_short(data, song, nframes):
     """Fake renderer that returns too few frames."""
     return render_exact(data, song, nframes)[0][: nframes - 1], {}
@@ -186,9 +192,10 @@ def _survey_tree(tmp_path):
     return hvsc, tunes, work, tune
 
 
-def _job(survey_tree, render):
+def _job(survey_tree, render, timeout=600):
     hvsc, tunes, work, _ = survey_tree
-    jobs = survey.jobs_for(hvsc, survey.load_tunes(tunes), work, render)
+    tunes = survey.load_tunes(tunes)
+    jobs = survey.jobs_for(hvsc, tunes, work, render, timeout=timeout)
     return [j for j in jobs if j[2] == 2][0]
 
 
@@ -398,3 +405,10 @@ def test_sidtrace_image_id_without_docker(monkeypatch):
 
     monkeypatch.setattr(oracle.subprocess, "run", _run)
     assert oracle.sidtrace_image_id() is None
+
+
+def test_check_render_timeout(survey_tree):
+    row = survey.check(_job(survey_tree, render_hang, timeout=0.2))
+    assert row["verdict"] == "library_error"
+    assert row["error"] == "TimeoutError: render exceeded 0.2s"
+    assert survey.check(_job(survey_tree, render_exact, 5))["verdict"] == "exact"
