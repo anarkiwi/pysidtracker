@@ -18,8 +18,9 @@ from tqdm import tqdm
 
 from . import registers as reg
 from .header import parse_sid_header
-from .oracle import SidtraceUnavailable, read_sidtrace, run_sidtrace
-from .survey import _err, deadline, load_render, load_tunes, oracle_cache, pool
+from .oracle import SidtraceUnavailable, cached_sidtrace, play_source, raise_cycles
+from .survey import ORACLE_ARGS, _err, deadline, load_render, load_tunes
+from .survey import oracle_cache, pool
 
 SOURCES = ("video_irq", "cia_irq", "nmi")
 PREDICTED = {"pal_video": "video_irq", "ntsc_video": "video_irq"}
@@ -31,37 +32,14 @@ DEFAULT_CADENCE = "pysidtracker.cadence:playroutine_cadence"
 
 
 def interrupt_cadence(rows):
-    """``(source, raises)``: the interrupt source whose raises time the SID writes.
+    """``(source, raises)``: the interrupt source whose handlers make the SID writes.
 
-    Each write is attributed to the most recent raise of any source; the source
-    raised at least three times and driving the most distinct registers, then
-    writes, wins (as in the model).
+    Each write belongs to the innermost running handler; among sources raised at
+    least three times, the one driving the most distinct registers, then writes,
+    wins (as in the model).
     """
-    times = {
-        s: np.array([r.cycle for r in rows if r.value == s and r.chip is None])
-        for s in SOURCES
-    }
-    sid = [(r.cycle, r.reg) for r in rows if r.chip is not None]
-    writes, regs = np.array(sid, dtype=np.int64).reshape(-1, 2).T
-    latest = np.full((len(SOURCES), len(writes)), -1, dtype=np.int64)
-    for i, t in enumerate(times.values()):
-        if t.size:
-            idx = np.searchsorted(t, writes, side="right") - 1
-            latest[i] = np.where(idx >= 0, t[idx.clip(0)], -1)
-    owned = latest.max(0) >= 0
-    if not owned.any():
-        return None, np.array([], dtype=np.int64)
-    owner, regs = latest.argmax(0)[owned], regs[owned]
-    score = [
-        (
-            (np.unique(regs[owner == i]).size, int((owner == i).sum()))
-            if len(t) > 2
-            else (-1, 0)
-        )
-        for i, t in enumerate(times.values())
-    ]
-    source = SOURCES[max(range(len(SOURCES)), key=score.__getitem__)]
-    return source, times[source]
+    source = play_source(rows, min_raises=3)
+    return source, np.array(raise_cycles(rows, source) if source else [], np.int64)
 
 
 def measure(rows, frame):
@@ -110,16 +88,15 @@ def check(job):
     row["clock"] = "NTSC" if ntsc else "PAL"
     ocsv = Path(work) / "oracle" / f"{row['key']}.csv.zst"
     try:
-        if not ocsv.exists():
-            run_sidtrace(
-                sid_path,
-                ocsv,
-                seconds=seconds,
-                song=1,
-                user=f"{os.getuid()}:{os.getgid()}",
-                extra_args=("-f8000",),
-            )
-        meas = measure(read_sidtrace(ocsv), frame)
+        rows = cached_sidtrace(
+            sid_path,
+            ocsv,
+            seconds=seconds,
+            song=1,
+            user=f"{os.getuid()}:{os.getgid()}",
+            extra_args=ORACLE_ARGS,
+        )
+        meas = measure(rows, frame)
     except (SidtraceUnavailable, OSError, ValueError) as e:
         return dict(row, verdict="oracle_error", error=_err(e))
     row.update(meas)

@@ -38,9 +38,8 @@ from .errors import SidError
 from .oracle import (
     SIDTRACE_IMAGE,
     aligned_match,
-    read_sidtrace,
+    cached_sidtrace,
     register_grid,
-    run_sidtrace,
     sidtrace_grid,
 )
 
@@ -308,16 +307,14 @@ def oracle_grid(
     """Per-frame reference grid for ``tune_path`` from the sidtrace oracle.
 
     The CSV is cached at ``oracle_cache/<stem>.csv.zst`` and reused while it has
-    interrupt rows (sidtrace >= v0.5.0; ``force`` re-renders). ``cycles_per_frame``
+    ``rti`` rows (sidtrace >= v0.6.0; ``force`` re-renders). ``cycles_per_frame``
     fixes the cadence. Returns the first ``frames`` rows (all when ``None``).
     """
     tune_path = Path(tune_path)
-    oracle_cache = Path(oracle_cache)
-    csv_path = oracle_cache / f"{tune_path.stem}.csv.zst"
-    rows = None if force or not csv_path.exists() else read_sidtrace(csv_path)
-    if not rows or all(row.chip is not None for row in rows):
-        run_sidtrace(tune_path, csv_path, seconds=seconds, image=image)
-        rows = read_sidtrace(csv_path)
+    csv_path = Path(oracle_cache) / f"{tune_path.stem}.csv.zst"
+    rows = cached_sidtrace(
+        tune_path, csv_path, force=force, seconds=seconds, image=image
+    )
     grid = sidtrace_grid(
         rows,
         chip=chip,

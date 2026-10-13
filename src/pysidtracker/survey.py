@@ -31,8 +31,8 @@ from .errors import SidParseError
 from .header import parse_sid_header
 from .oracle import (
     SidtraceUnavailable,
+    cached_sidtrace,
     read_sidtrace,
-    run_sidtrace,
     sidtrace_cadence,
     sidtrace_grid,
     sidtrace_image_id,
@@ -55,6 +55,7 @@ REG_NAMES = [
     for n in ("freq_lo", "freq_hi", "pw_lo", "pw_hi", "ctrl", "ad", "sr")
 ] + ["fc_lo", "fc_hi", "res_filt", "mode_vol"]
 ORACLE_ARGS = ("-f8000",)
+ORACLE_ROWS = ("raise", "entry", "rti")
 THREAD_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
 TRIAGE_FIELDS = ["key", "path", "player", "song", "first_diff", "when", "kind"]
 TRIAGE_FIELDS += ["roles", "diffs"]
@@ -175,11 +176,11 @@ def read_grid(path, nframes):
 
 
 def oracle_frames(ocsv, seconds=0.0, clock="PAL", nframes=None):
-    """``(nframes, grid)`` of a cached sidtrace CSV over ``seconds`` at ``clock``.
+    """``(nframes, grid)`` of a sidtrace CSV (or its rows) over ``seconds`` at ``clock``.
 
     ``nframes`` overrides the frame count derived from ``seconds``.
     """
-    rows = read_sidtrace(ocsv)
+    rows = read_sidtrace(ocsv) if isinstance(ocsv, (str, Path)) else ocsv
     cpf = sidtrace_cadence(rows) or registers.PAL_CYCLES_PER_FRAME
     hz = registers.NTSC_CLOCK_HZ if clock == "NTSC" else registers.PAL_CLOCK_HZ
     nframes = int(seconds * hz / cpf) if nframes is None else nframes
@@ -216,12 +217,15 @@ def _err(exc):
 
 
 def oracle_cache(work):
-    """``work/oracle``, emptied when its traces came from another sidtrace image or args."""
+    """``work/oracle``, emptied when its traces came from another sidtrace setup.
+
+    The stamp holds the image id, the arguments and the logged row kinds.
+    """
     cache = Path(work) / "oracle"
     cache.mkdir(parents=True, exist_ok=True)
     image = sidtrace_image_id()
     stamp = cache / "STAMP"
-    want = json.dumps({"image": image, "args": ORACLE_ARGS})
+    want = json.dumps({"image": image, "args": ORACLE_ARGS, "rows": ORACLE_ROWS})
     if image is None or (stamp.exists() and stamp.read_text("utf-8") == want):
         return cache
     stale = list(cache.glob("*.csv.zst"))
@@ -257,16 +261,15 @@ def check(job):
     row["seconds"] = seconds
     ocsv, lcsv = (Path(work) / d / f"{key}.csv.zst" for d in ("oracle", "library"))
     try:
-        if not ocsv.exists():
-            run_sidtrace(
-                sid_path,
-                ocsv,
-                seconds=math.ceil(seconds) + 1,
-                song=song,
-                user=f"{os.getuid()}:{os.getgid()}",
-                extra_args=ORACLE_ARGS,
-            )
-        nframes, oracle = oracle_frames(ocsv, seconds, tune["clock"])
+        rows = cached_sidtrace(
+            sid_path,
+            ocsv,
+            seconds=math.ceil(seconds) + 1,
+            song=song,
+            user=f"{os.getuid()}:{os.getgid()}",
+            extra_args=ORACLE_ARGS,
+        )
+        nframes, oracle = oracle_frames(rows, seconds, tune["clock"])
         row["frames"] = nframes
     except (SidtraceUnavailable, OSError, ValueError) as e:
         return dict(row, verdict="oracle_error", error=_err(e))

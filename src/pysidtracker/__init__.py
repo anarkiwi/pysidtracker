@@ -82,7 +82,11 @@ from .oracle import (
     SidtraceRow,
     SidtraceUnavailable,
     aligned_match,
+    cached_sidtrace,
     grid_from_writes,
+    handler_sources,
+    play_source,
+    raise_cycles,
     read_sidtrace,
     read_sidwr,
     register_grid,
@@ -148,7 +152,7 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.10.0"
+__version__ = "0.12.1"
 
 __all__ = [
     "AudioUnavailable",
@@ -257,6 +261,10 @@ __all__ = [
     "read_d64",
     "read_reglog",
     "read_sidtrace",
+    "cached_sidtrace",
+    "handler_sources",
+    "play_source",
+    "raise_cycles",
     "read_sidwr",
     "recognize_format",
     "register_grid",

@@ -14,12 +14,37 @@ Docker — frame for frame.
    which streams a zstd CSV of every changed SID write annotated with
    cycle/interrupt timing. The CSV is cached per tune.
 3. **Frame** the CSV into a per-frame grid (`sidtrace_grid`): the cadence is the
-   median interrupt-raise interval taken from the CSV itself (`sidtrace_cadence`),
-   so no cadence guessing is needed.
+   median raise interval of the play source (`play_source`) taken from the CSV
+   itself (`sidtrace_cadence`), so no cadence guessing is needed.
 4. **Compare** the library render against the oracle grid with `aligned_match`.
 
 The oracle is deterministic (`sidtrace` pins the simulated power-on delay), so a
 given tune renders identically every run.
+
+## Interrupt rows and handler nesting
+
+A sidtrace (>= v0.6.0) row with empty `chip`/`reg` is an interrupt event:
+
+- **raise** (`nmi`, `video_irq`, `cia_irq`): the source asserted its line
+  (`c64::interruptIRQ`/`interruptNMI`). The CPU only samples it at the end of an
+  instruction: an NMI is edge-triggered and always taken next, an IRQ is
+  level-triggered and waits while the I flag is set (e.g. inside another
+  handler, until its `RTI`), and is never taken if acknowledged first. A raise
+  is therefore not the moment its handler starts running.
+- **entry** (`nmi_entry`, `video_irq_entry`, `cia_irq_entry`, `brk_entry`): the
+  CPU committed to an interrupt sequence and picked its vector, so an NMI that
+  hijacks an IRQ or `BRK` is an `nmi_entry`. An IRQ entry names the source that
+  pulled the line low (the earliest raise still asserting it).
+- **rti**: an `RTI` executed, logged before any interrupt taken straight after.
+
+`handler_sources(rows)` replays these as a stack: each entry pushes its source
+(`brk_entry` the running one), each `rti` pops (an `rti` outside any handler is
+ignored), and every row belongs to the innermost running handler, or `None`
+outside all of them. `play_source(rows, chip)` is the source whose handlers
+drive the most distinct SID registers, then make the most writes, so a digi
+NMI interrupting the music IRQ never claims the IRQ's writes. A trace without
+`rti` rows (sidtrace < v0.6.0) raises `ValueError`; `cached_sidtrace`,
+`oracle_grid` and the survey caches re-render it.
 
 ## Using it in a format package
 
