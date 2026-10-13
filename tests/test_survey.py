@@ -59,7 +59,7 @@ def test_find_filters_first_match_by_player(tmp_path):
     _songlengths(hvsc, f"{md5}=0:10 1:02.5\n")
     cfg = tmp_path / "sidid.cfg"
     cfg.write_bytes(CFG.encode())
-    out = tmp_path / "tunes.csv"
+    out = tmp_path / "work" / "tunes.csv"
     assert (
         survey.main(
             ["find", str(hvsc), "--sidid-cfg", str(cfg)]
