@@ -148,11 +148,13 @@ def test_play_that_never_writes_the_sid_is_unknown():
 
 def test_dynamic_when_play_alternates_the_latch():
     play = (
-        bytes((0xAD, 0x05, 0xDC, 0x49, 0x01, 0x8D, 0x05, 0xDC))  # flip latch bit 8
+        bytes((0xAD, 0xF0, 0x10, 0x49, 0x01, 0x8D, 0xF0, 0x10))  # flip a RAM bit
+        + bytes((0x09, 0x20, 0x8D, 0x05, 0xDC))  # latch hi = $20 | bit
         + PLAY_SID
     )
     cad = _cad(psid(latch(0x2000), play, speed=1))
     assert cad.source is TriggerSource.CIA_TIMER and cad.dynamic
+    assert abs(cad.cycles_per_call - (0x2001 + 0x2101) // 2) < 0x80
 
 
 def _raster_handler(exit_code):

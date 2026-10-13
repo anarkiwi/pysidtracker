@@ -412,12 +412,14 @@ def _cadence(machine: _Machine, start: int, frames: int) -> Cadence:
         return Cadence(cycles, video, clock_hz, None, False, per_frame, lines)
     chip, timer = source
     cia = machine.cias[chip]
-    periods = {period for _, period in steady}
-    period = cia.period(timer)
-    if cia.cr[timer] & 8 and len(steady) > 1:
-        period = round((steady[-1][0] - steady[0][0]) / (len(steady) - 1))
     trigger = TriggerSource.NMI_TIMER if chip else TriggerSource.CIA_TIMER
-    return Cadence(period, trigger, clock_hz, cia.latch[timer], len(periods) > 1)
+    dynamic = len({period for _, period in steady}) > 1
+    if (dynamic or cia.cr[timer] & 8) and len(steady) > 1:
+        mean = (steady[-1][0] - steady[0][0]) / (len(steady) - 1)
+        return Cadence(
+            round(mean), trigger, clock_hz, cia.latch[timer], dynamic, frame / mean
+        )
+    return Cadence(cia.period(timer), trigger, clock_hz, cia.latch[timer])
 
 
 def playroutine_cadence(
