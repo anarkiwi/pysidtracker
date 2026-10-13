@@ -215,9 +215,9 @@ class _Machine:
         )
         self.base = _driver_base(image.load, image.end)
 
-    def _sid(self, _addr, _value):
+    def _sid(self, addr, _value):
         if self.events:
-            self.events[-1][2] += 1
+            self.events[-1][2] |= 1 << (addr & 0x1F)
 
     def _write(self, addr, value):
         self.dirty = True
@@ -392,14 +392,20 @@ class _Machine:
 
 
 def _cadence(machine: _Machine, start: int, frames: int) -> Cadence:
-    """The :class:`Cadence` of the source whose raises the SID writes follow."""
+    """The :class:`Cadence` of the play source.
+
+    That is the source whose raises drive the most distinct SID registers (a
+    sample player drives few), then the one with the most writing raises.
+    """
     frame = machine.frame
     ntsc = frame == reg.NTSC_CYCLES_PER_FRAME
     clock_hz = reg.NTSC_CLOCK_HZ if ntsc else reg.PAL_CLOCK_HZ
-    writes = Counter()
+    regs, calls = Counter(), Counter()
     for _, src, wrote, _ in machine.events:
-        writes[src] += wrote
-    source, wrote = max(writes.items(), key=lambda kv: kv[1], default=(None, 0))
+        regs[src] |= wrote
+        calls[src] += bool(wrote)
+    source = max(regs, key=lambda s: (regs[s].bit_count(), calls[s]), default=None)
+    wrote = regs[source]
     steady = [(t, tag) for t, src, _, tag in machine.events if src == source]
     steady = [(t, tag) for t, tag in steady if t >= start]
     if not wrote or not steady:

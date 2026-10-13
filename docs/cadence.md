@@ -60,7 +60,10 @@ jennings and raises and takes interrupts as the C64 does:
   ROM (e.g. `JMP $EA31`) gets the KERNAL's register pull and `RTI`.
 
 Every SID write is attributed to the most recent raise, as the sidtrace
-oracle's rows are. The play source is the one with the most attributed writes.
+oracle's rows are. The play source is the one whose raises drive the most
+distinct SID registers, then the one with the most writing raises, so a
+sample player that drives only `$D418` at audio rate does not outvote the
+music routine.
 Init is run until it returns or idles (a `JMP *`), then `frames` more video
 frames. If it never does, the run stops at `max_cycles`. The last `frames - 1`
 frames are measured:
@@ -90,8 +93,9 @@ python -m pysidtracker.cadence_check run $HVSC */.hvsc-survey/tunes.csv --work .
 python -m pysidtracker.cadence_check report .cadence-check/cadence.csv
 ```
 
-The measured source is the interrupt whose raises the trace's SID writes follow
-(each write attributed to the latest raise). Its rate is taken over its raises
+The measured source is picked from the trace's SID writes by the same rule
+(each write attributed to the latest raise; most distinct registers, then most
+writes). Its rate is taken over its raises
 after the first, which init can hold back. A row agrees when the source matches
 and the predicted calls over the measured span are within one frame's calls of
 the count. Verdicts: `agree`, `rate`, `source`, `unknown` (no predicted source),

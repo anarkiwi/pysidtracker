@@ -191,6 +191,19 @@ def test_rsid_nmi_timer():
     assert cad.calls_per_frame == 2.0
 
 
+def test_a_raster_player_beats_a_faster_nmi_sample_player():
+    init = sta(0x7F, reg.CIA1_ICR) + sta(0x01, reg.VIC_IRQ_ENABLE)
+    init += vector(reg.RAM_IRQ_VECTOR_LO, LOAD + 0x80)
+    init += latch(PAL // 8 - 1, reg.CIA2_BASE)
+    init += vector(reg.RAM_NMI_VECTOR_LO, LOAD + 0xC0)
+    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + CLI + RTS
+    music = bytes((0xEE, 0x00, 0xD4, 0xEE, 0x01, 0xD4)) + ACK_VIC
+    digi = bytes((0xEE, 0x18, 0xD4)) + ACK_CIA2 + RTI
+    body = image(init_00=init, irq_80=music + bytes((0x4C, 0x81, 0xEA)), nmi_C0=digi)
+    cad = _cad(rsid(body))
+    assert (cad.source, cad.calls_per_frame) == (TriggerSource.PAL_VIDEO, 1.0)
+
+
 def test_an_unacknowledged_nmi_is_raised_once():
     init = sta(0x7F, reg.CIA1_ICR) + latch(PAL // 2 - 1, reg.CIA2_BASE)
     init += vector(reg.RAM_NMI_VECTOR_LO, LOAD + 0x80)

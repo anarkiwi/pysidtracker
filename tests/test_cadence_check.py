@@ -46,6 +46,17 @@ def test_writes_are_attributed_to_the_latest_raise():
     assert source == "cia_irq" and len(raises) == len(range(1000, 200000, 4000))
 
 
+def test_the_source_driving_more_registers_wins_over_a_faster_one():
+    digi = _rows(range(1000, 200000, 126), "nmi")
+    music = [
+        SidtraceRow(t + d, None, None, None, None if d == 0 else 0, d or None, v)
+        for t in range(500, 200000, PAL)
+        for d, v in ((0, "video_irq"), (1, 1), (2, 2), (3, 3))
+    ]
+    source, _ = cc.interrupt_cadence(sorted(digi + music))
+    assert source == "video_irq"
+
+
 def test_no_write_after_a_raise_has_no_source():
     rows = [SidtraceRow(10, None, None, None, 0, 0, 1)]
     source, raises = cc.interrupt_cadence(rows)
