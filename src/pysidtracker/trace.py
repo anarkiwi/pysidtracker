@@ -26,6 +26,7 @@ from typing import Dict, Optional, Set
 from . import registers as reg
 from .emu import run_to_rts, wire_mpu
 from .errors import SidParseError
+from .registers import sid_model_for_flags
 from .image import SidImage
 
 # Addresses the write observer watches: the full SID mirror band, the VIC and
@@ -162,7 +163,7 @@ def trace_init(
         writes[address] = value & 0xFF
         return None
 
-    mpu, mem = wire_mpu(image.mem)
+    mpu, mem = wire_mpu(image.mem, sid_model=sid_model_for_flags(image.header.flags))
     mem.subscribe_to_write(_WATCH_ADDRS, _record)
 
     init_address = image.header.init_address or image.header.real_load_address

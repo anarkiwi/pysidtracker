@@ -30,6 +30,7 @@ from typing import Callable, Optional, Tuple
 
 from .emu import run_to_rts, wire_mpu
 from .errors import SidParseError
+from .registers import sid_model_for_flags
 from .header import SidHeader
 from .image import MEM_SIZE, SidImage
 
@@ -230,5 +231,5 @@ def run_init(image: SidImage, subtune: int = 0, max_cycles: int = 8_000_000) -> 
     if image.header is None:
         raise SidParseError("cannot run init: image has no SID header")
     init_address = image.header.init_address or image.header.real_load_address
-    mpu, mem = wire_mpu(image.mem)
+    mpu, mem = wire_mpu(image.mem, sid_model=sid_model_for_flags(image.header.flags))
     run_to_rts(mpu, mem, init_address, subtune, max_cycles)

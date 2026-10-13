@@ -12,6 +12,7 @@ from pysidtracker import (
 )
 
 from .helpers import RTS_ONLY, build_prg, build_psid, store_sig
+from .test_emu import _MODEL_PROBE
 
 SIG = b"SIG"
 
@@ -92,3 +93,14 @@ def test_detection_dataclass_defaults():
     assert det.anchor is None
     assert det.changed_inside == 0
     assert det.written_outside == 0
+
+
+def test_run_init_probes_the_header_s_sid_model():
+    # init: the model probe, then STA $1100 of what osc3 read.
+    code = _MODEL_PROBE[:-1] + bytes([0x8D, 0x00, 0x11, 0x60])
+    for flags, osc3 in ((0b01_0000, 3), (0b10_0000, 2)):
+        image = SidImage.from_bytes(
+            build_psid(code, load=0x1000, init=0x1000, flags=flags)
+        )
+        run_init(image)
+        assert image.mem[0x1100] == osc3
