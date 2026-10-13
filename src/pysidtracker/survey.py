@@ -51,7 +51,7 @@ REG_NAMES = [
     for v in range(registers.SID_VOICES)
     for n in ("freq_lo", "freq_hi", "pw_lo", "pw_hi", "ctrl", "ad", "sr")
 ] + ["fc_lo", "fc_hi", "res_filt", "mode_vol"]
-ORACLE_ARGS = ("-f8000", "--sidlite")
+ORACLE_ARGS = ("-f8000",)
 THREAD_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
 TRIAGE_FIELDS = ["key", "path", "player", "song", "first_diff", "when", "kind"]
 TRIAGE_FIELDS += ["roles", "diffs"]
@@ -128,6 +128,7 @@ def find(hvsc, out_csv, cfg=None, player_regex=None, jobs=None):
     lengths = songlengths(hvsc)
     paths = sorted(hvsc.rglob("*.sid"))
     tally = Counter()
+    Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
     with (
         pool(jobs, _find_init, (cfg, player_regex)) as ex,
         open(out_csv, "w", newline="", encoding="utf-8") as f,
