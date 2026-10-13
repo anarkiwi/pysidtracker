@@ -307,19 +307,19 @@ def oracle_grid(
 ):
     """Per-frame reference grid for ``tune_path`` from the sidtrace oracle.
 
-    The oracle CSV is cached at ``oracle_cache/<stem>.csv.zst`` and reused on the
-    next call (so a CI cache -- or a developer's local dir -- avoids re-running
-    Docker). Pass ``force=True`` to re-render. ``cycles_per_frame`` frames at a
-    fixed cadence (e.g. PAL) instead of the sidtrace auto-cadence. Returns the
-    first ``frames`` rows (all rows when ``frames`` is ``None``).
+    The CSV is cached at ``oracle_cache/<stem>.csv.zst`` and reused while it has
+    interrupt rows (sidtrace >= v0.5.0; ``force`` re-renders). ``cycles_per_frame``
+    fixes the cadence. Returns the first ``frames`` rows (all when ``None``).
     """
     tune_path = Path(tune_path)
     oracle_cache = Path(oracle_cache)
     csv_path = oracle_cache / f"{tune_path.stem}.csv.zst"
-    if force or not csv_path.exists():
+    rows = None if force or not csv_path.exists() else read_sidtrace(csv_path)
+    if not rows or all(row.chip is not None for row in rows):
         run_sidtrace(tune_path, csv_path, seconds=seconds, image=image)
+        rows = read_sidtrace(csv_path)
     grid = sidtrace_grid(
-        read_sidtrace(csv_path),
+        rows,
         chip=chip,
         reg_count=reg_count,
         cycles_per_frame=cycles_per_frame,

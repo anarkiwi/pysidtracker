@@ -29,6 +29,7 @@ import statistics
 import struct
 import subprocess
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple, Union
 
@@ -279,7 +280,7 @@ class SidtraceRow(NamedTuple):
 
     Interrupt-delta fields are ``None`` until their source first fires. A write
     has ``chip`` (SID index), ``reg`` (offset ``0..31``) and an int ``value``; an
-    interrupt row (``SIDTRACE_INTERRUPTS``) has ``chip``/``reg`` ``None`` and
+    interrupt row (sidtrace >= v0.5.0) has ``chip``/``reg`` ``None`` and
     ``value`` ``"nmi"``, ``"video_irq"`` or ``"cia_irq"``.
     """
 
@@ -337,40 +338,39 @@ def _raise_cycle(row: SidtraceRow) -> Optional[int]:
 def _raises(rows: Sequence[SidtraceRow], chip: int = 0) -> List[int]:
     """Sorted raise cycles of the interrupt source timing ``chip``'s writes.
 
-    Each write's ``cycle`` minus its ``since_video_irq`` (else ``since_cia_irq``)
-    is its play call's raise; interrupt rows of that source add the calls that
-    wrote nothing.
+    The source is the one the writes' deltas refer to (else the most frequent);
+    raises come from its interrupt rows, so calls that wrote nothing count too.
     """
-    writes = [r for r in rows if r.chip == chip]
+    irqs = Counter(r.value for r in rows if r.chip is None)
+    if not irqs:
+        raise ValueError("sidtrace trace has no interrupt rows: re-render it")
+    timed = [r for r in rows if r.chip == chip and _raise_cycle(r) is not None]
     source = (
-        "video_irq" if any(r.since_video_irq is not None for r in writes) else "cia_irq"
+        ("video_irq" if timed[0].since_video_irq is not None else "cia_irq")
+        if timed
+        else irqs.most_common(1)[0][0]
     )
     return sorted(
-        {at for r in writes if (at := _raise_cycle(r)) is not None}
+        {_raise_cycle(r) for r in timed}
         | {r.cycle for r in rows if r.chip is None and r.value == source}
     )
 
 
 def sidtrace_cadence(rows: Sequence[SidtraceRow], *, chip: int = 0) -> Optional[int]:
-    """The play cadence (cycles per frame): the median gap between :func:`_raises`.
+    """The play cadence (cycles per call): the median gap between :func:`_raises`.
 
-    Exact with interrupt rows; without them a call that wrote nothing leaves a
-    gap, so tunes that write every Nth call read N calls long. ``None`` if <2.
+    ``None`` with fewer than two raises; ``ValueError`` without interrupt rows.
     """
     raises = _raises(rows, chip)
     diffs = [b - a for a, b in zip(raises, raises[1:])]
     return int(statistics.median(diffs)) if diffs else None
 
 
-def _raise_frames(raises: Iterable[int], cpf: int) -> Dict[int, int]:
-    """Each interrupt's frame: one per interrupt, and cadence-filled gaps between.
-
-    A play call that changed no register leaves no row, so a gap longer than
-    the cadence counts the calls it hides.
-    """
+def _raise_frames(raises: Sequence[int], cpf: int) -> Dict[int, int]:
+    """Each raise's frame at a fixed ``cpf`` cadence: one per raise, plus gap calls."""
     out: Dict[int, int] = {}
     frame, prev = 0, None
-    for at in sorted(set(raises)):
+    for at in raises:
         if prev is not None:
             frame += max(1, (at - prev + cpf // 2) // cpf)
         out[at], prev = frame, at
@@ -387,35 +387,23 @@ def sidtrace_grid(
 ) -> List[List[int]]:
     """Frame a sidtrace CSV into a per-frame register grid for ``chip``.
 
-    A play call's writes belong to the frame of the interrupt that made it (one
-    frame per raise given interrupt rows, else :func:`_raise_frames`); a write
-    outside any interrupt goes to the last raise before it, or the baseline.
+    Each interrupt raise of the timing source (:func:`_raises`) is one frame,
+    or ``cycles_per_frame`` fixes the cadence; a write outside any interrupt
+    goes to the last raise before it, or the baseline.
     """
-    cpf = (
-        cycles_per_frame
-        or sidtrace_cadence(rows, chip=chip)
-        or reg.PAL_CYCLES_PER_FRAME
+    raises = _raises(rows, chip)
+    frames = (
+        _raise_frames(raises, cycles_per_frame)
+        if cycles_per_frame
+        else {at: i for i, at in enumerate(raises)}
     )
-    raises = [_raise_cycle(row) for row in rows]
-    calls = {at for at in raises if at is not None} | set(_raises(rows, chip))
-    if any(row.chip is None for row in rows):
-        frames = {at: i for i, at in enumerate(sorted(calls))}
-    else:
-        frames = _raise_frames(calls, cpf)
-    starts = sorted(frames)
 
-    def frame_of(row: SidtraceRow, at: Optional[int]) -> int:
-        if at is not None:
-            return frames[at]
-        i = bisect.bisect_right(starts, row.cycle)
-        return frames[starts[i - 1]] if i else -1
+    def frame_of(row: SidtraceRow) -> int:
+        i = bisect.bisect_right(raises, row.cycle)
+        return frames[raises[i - 1]] if i else -1
 
     framed = sorted(
-        (
-            (frame_of(row, at), row.reg, row.value)
-            for row, at in zip(rows, raises)
-            if row.chip == chip
-        ),
+        ((frame_of(row), row.reg, row.value) for row in rows if row.chip == chip),
         key=lambda w: w[0],
     )
     return _frame_grid(framed, reg_count, pw_hi_regs)
@@ -444,13 +432,12 @@ def run_sidtrace(
     extra_args: Sequence[str] = (),
     song: Optional[int] = None,
     user: Optional[str] = None,
-    interrupts: bool = False,
 ) -> Path:
     """Render ``tune_path`` under the sidtrace Docker oracle to ``out_path``.
 
     Renders in a temp dir beside ``out_path`` and moves it in atomically. ``song``
-    (1-based) adds ``-o<song>``, ``user`` (``uid:gid``) sets the owner, ``interrupts``
-    adds interrupt-raise rows. Raises :class:`SidtraceUnavailable` on failure.
+    (1-based) adds ``-o<song>``; ``user`` (``uid:gid``) sets the owner. Raises
+    :class:`SidtraceUnavailable` on failure.
     """
     tune_path = Path(tune_path)
     out_path = Path(out_path)
@@ -469,7 +456,6 @@ def run_sidtrace(
             "run",
             "--rm",
             *(["--user", user] if user else []),
-            *(["-e", "SIDTRACE_INTERRUPTS=1"] if interrupts else []),
             "-v",
             f"{work.resolve()}:/work",
             image,
