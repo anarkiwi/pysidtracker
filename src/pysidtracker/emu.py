@@ -57,16 +57,17 @@ def access_cycle(mpu) -> int:
     SID registers share one page, so no indexed access to them adds a
     page-crossing cycle.
     """
-    return mpu.processorCycles + mpu.cycletime[mpu.memory[mpu.pc]] - 1
+    memory = getattr(mpu.memory, "_subject", mpu.memory)
+    return mpu.processorCycles + mpu.cycletime[memory[mpu.pc]] - 1
 
 
 def wire_mpu(
-    subject, illegal_opcodes: bool = True, sid_model: str = "6581"
+    subject, illegal_opcodes: bool = True, sid_model: str = "6581", ntsc: bool = False
 ):  # pylint: disable=unused-argument
     """Build a jennings MPU over the 64 KiB buffer ``subject``; return ``(mpu, mem)``.
 
-    VIC raster ($D011/$D012) reads are synthesised from the cycle counter, so
-    sync spin loops exit; SID osc3/env3 ($D41B/$D41C) reads come from a
+    VIC raster ($D011/$D012) reads are synthesised from the cycle counter on a
+    PAL (or ``ntsc``) beam, so sync spin loops exit; SID osc3/env3 ($D41B/$D41C) reads come from a
     ``sid_model`` reSIDfp chip fed the CPU's own SID writes (:class:`SidReads`).
     ``illegal_opcodes`` is kept for API compatibility; jennings decodes the NMOS
     illegals natively regardless.
@@ -85,9 +86,11 @@ def wire_mpu(
     mem = ObservableMemory(subject=subject)
     holder: dict = {}
     chip = SidReads(sid_model)
+    cpl = reg.NTSC_CYCLES_PER_LINE if ntsc else reg.PAL_CYCLES_PER_LINE
+    lines = (reg.NTSC_CYCLES_PER_FRAME if ntsc else reg.PAL_CYCLES_PER_FRAME) // cpl
 
     def _on_raster(addr):
-        line = (holder["mpu"].processorCycles // 63) % 312
+        line = (holder["mpu"].processorCycles // cpl) % lines
         if addr == reg.VIC_RASTER:
             return line & 0xFF
         return (subject[reg.VIC_CONTROL_1] & 0x7F) | (((line >> 8) & 1) << 7)

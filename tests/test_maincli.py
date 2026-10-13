@@ -158,12 +158,13 @@ def test_discover_formats_accepts_callable(monkeypatch):
 
 
 def test_cadence_uses_cia_timer_latch():
-    # init latches CIA #1 Timer-A ($DC04/$DC05) to 0x1234, so the play cadence is
-    # the timer period (latch + 1), not the nominal PAL video frame.
+    # A CIA-speed PSID whose init latches CIA #1 Timer-A to 0x1234 plays every
+    # latch + 1 cycles, not every PAL video frame.
     init = bytes(
-        [0xA9, 0x34, 0x8D, 0x04, 0xDC, 0xA9, 0x12, 0x8D, 0x05, 0xDC, 0x60]
-    )  # LDA #$34 STA $DC04 / LDA #$12 STA $DC05 / RTS
-    data = build_psid(init, load=0x1000, init=0x1000, play=0x1000)
+        [0xA9, 0x34, 0x8D, 0x04, 0xDC, 0xA9, 0x12, 0x8D, 0x05, 0xDC]
+        + [0xEE, 0x00, 0xD4, 0x60]
+    )  # LDA #$34 STA $DC04 / LDA #$12 STA $DC05 / INC $D400 / RTS
+    data = build_psid(init, load=0x1000, init=0x1000, play=0x1000, speed=1)
     cycles_per_frame, _clock = maincli._cadence(data)
     assert cycles_per_frame == 0x1234 + 1
 

@@ -1,275 +1,276 @@
-"""Tests for the derived play-routine cadence abstraction."""
+"""Tests for the interrupt-programmed play-routine cadence."""
 
 import pytest
 
-from pysidtracker import (
-    Cadence,
-    SidImage,
-    TriggerSource,
-    playroutine_cadence,
-)
+from pysidtracker import Cadence, SidImage, TriggerSource, playroutine_cadence
 from pysidtracker import registers as reg
-from pysidtracker.cadence import _cia_armed
-from pysidtracker.testing import TuneFetchError, fetch_tune, resolve_tune
-from pysidtracker.trace import trace_init
+from pysidtracker.cadence import _driver_base
+from pysidtracker.errors import SidParseError
+from pysidtracker.testing import resolve_tune
 
-from .helpers import build_psid
+from .helpers import build_prg, build_psid, build_psid_embedded_load
 
-jennings = pytest.importorskip("jennings")
-
-
-def _lda_sta(value, addr):
-    """LDA #value ; STA addr (absolute)."""
-    return bytes([0xA9, value, 0x8D, addr & 0xFF, addr >> 8])
-
-
-RTS = bytes([0x60])
+LOAD = 0x1000
+PAL = reg.PAL_CYCLES_PER_FRAME
+RTS, RTI, SEI, CLI = b"\x60", b"\x40", b"\x78", b"\x58"
+PLAY_SID = bytes((0xEE, 0x00, 0xD4)) + RTS  # INC $D400 ; RTS
+ACK_VIC = bytes((0x0E, 0x19, 0xD0))  # ASL $D019
+ACK_CIA2 = bytes((0xAD, 0x0D, 0xDD))  # LDA $DD0D
 
 
-# --- crafted images --------------------------------------------------------
+def sta(value, addr):
+    """LDA #value ; STA addr."""
+    return bytes((0xA9, value, 0x8D, addr & 0xFF, addr >> 8))
 
 
-def _raster_image(flags=0):
-    """Init that sets only the VIC raster compare (video-timed), then RTS."""
-    code = _lda_sta(0x30, reg.VIC_RASTER) + RTS
-    return build_psid(code, load=0x1000, init=0x1000, play=0x1000, flags=flags)
+def vector(addr_lo, target):
+    """Store ``target`` to the little-endian vector at ``addr_lo``."""
+    return sta(target & 0xFF, addr_lo) + sta(target >> 8, addr_lo + 1)
 
 
-def test_video_timed_defaults_to_pal():
-    cad = playroutine_cadence(_raster_image())
-    assert isinstance(cad, Cadence)
-    assert cad.source is TriggerSource.PAL_VIDEO
-    assert cad.cycles_per_call == reg.PAL_CYCLES_PER_FRAME
-    assert cad.clock_hz == reg.PAL_CLOCK_HZ
-    assert cad.latch is None
-    assert cad.dynamic is False
+def latch(value, base=reg.CIA1_BASE):
+    """Program Timer A's latch."""
+    return sta(value & 0xFF, base + 4) + sta(value >> 8, base + 5)
 
 
-def test_video_timed_explicit_ntsc():
-    cad = playroutine_cadence(_raster_image(), clock="NTSC")
-    assert cad.source is TriggerSource.NTSC_VIDEO
-    assert cad.cycles_per_call == reg.NTSC_CYCLES_PER_FRAME
-    assert cad.clock_hz == reg.NTSC_CLOCK_HZ
+def psid(init, play=PLAY_SID, **kwargs):
+    """A PSID whose init (ending RTS) is followed by its play routine."""
+    init += RTS
+    return build_psid(init + play, LOAD, LOAD, LOAD + len(init), **kwargs)
 
 
-def test_video_timed_ntsc_from_header_flags():
-    # flags clock bits (bits 2-3) = %10 -> NTSC hint.
-    cad = playroutine_cadence(_raster_image(flags=0b10 << 2))
-    assert cad.source is TriggerSource.NTSC_VIDEO
-    assert cad.cycles_per_call == reg.NTSC_CYCLES_PER_FRAME
+def image(**parts):
+    """A 256-byte image at ``LOAD`` with each ``name_OFF=bytes`` part at offset OFF."""
+    body = bytearray(0x100)
+    for name, code in parts.items():
+        off = int(name.rsplit("_", 1)[1], 16)
+        body[off : off + len(code)] = code
+    return bytes(body)
 
 
-def test_bad_clock_string_raises():
-    with pytest.raises(ValueError):
-        playroutine_cadence(_raster_image(), clock="SECAM")
+def rsid(body):
+    """An RSID whose init is at ``LOAD`` (the header load address is embedded)."""
+    return build_psid_embedded_load(body, LOAD, init=LOAD, play=0, magic=b"RSID")
 
 
-def test_cia_timer_derives_latch_plus_one():
-    # Latch $5BF9 = 23545; a continuous CIA timer underflows after latch+1
-    # cycles, so cycles_per_call = 23546 (the documented defMON cadence).
-    code = (
-        _lda_sta(0xF9, reg.CIA1_TIMER_A_LO)
-        + _lda_sta(0x5B, reg.CIA1_TIMER_A_HI)
-        + _lda_sta(0x00, reg.RAM_IRQ_VECTOR_LO)
-        + _lda_sta(0x40, reg.RAM_IRQ_VECTOR_HI)
-        + RTS
-    )
-    play_addr = 0x1000 + len(code)
-    data = build_psid(code + RTS, load=0x1000, init=0x1000, play=play_addr)
-    cad = playroutine_cadence(data)
-    assert cad.source is TriggerSource.CIA_TIMER
-    assert cad.latch == 23545
-    assert cad.cycles_per_call == 23546
-    assert cad.clock_hz == reg.PAL_CLOCK_HZ
-    assert cad.dynamic is False
+def _cad(data, **kwargs):
+    return playroutine_cadence(data, **kwargs)
 
 
-def test_cia_clock_hz_tracks_standard_but_latch_does_not():
-    code = (
-        _lda_sta(0xF9, reg.CIA1_TIMER_A_LO) + _lda_sta(0x5B, reg.CIA1_TIMER_A_HI) + RTS
-    )
-    data = build_psid(code + RTS, load=0x1000, init=0x1000, play=0x1000 + len(code))
-    cad = playroutine_cadence(data, clock="NTSC")
-    assert cad.source is TriggerSource.CIA_TIMER
-    assert cad.cycles_per_call == 23546  # latch-derived, independent of video std
-    assert cad.clock_hz == reg.NTSC_CLOCK_HZ
-
-
-def test_dynamic_when_play_rewrites_latch():
-    init = (
-        _lda_sta(0xF9, reg.CIA1_TIMER_A_LO) + _lda_sta(0x5B, reg.CIA1_TIMER_A_HI) + RTS
-    )
-    play = (
-        _lda_sta(0x2F, reg.CIA1_TIMER_A_LO) + _lda_sta(0x4D, reg.CIA1_TIMER_A_HI) + RTS
-    )
-    play_addr = 0x1000 + len(init)
-    data = build_psid(init + play, load=0x1000, init=0x1000, play=play_addr)
-    cad = playroutine_cadence(data)
-    assert cad.source is TriggerSource.CIA_TIMER
-    assert cad.dynamic is True
-
-
-def test_lo_only_cia_write_is_not_a_cadence():
-    # A lone $FF to the Timer-A lo byte (a reset artefact) must not be read as a
-    # CIA cadence; the tune is still video-timed.
-    code = _lda_sta(0xFF, reg.CIA1_TIMER_A_LO) + _lda_sta(0x30, reg.VIC_RASTER) + RTS
-    data = build_psid(code, load=0x1000, init=0x1000, play=0x1000)
-    cad = playroutine_cadence(data)
-    assert cad.source is TriggerSource.PAL_VIDEO
-
-
-def _cia_image(control_icr=b""):
-    """Init that latches an armed CIA cadence plus optional control/ICR writes."""
-    code = (
-        _lda_sta(0xF9, reg.CIA1_TIMER_A_LO)
-        + _lda_sta(0x5B, reg.CIA1_TIMER_A_HI)
-        + control_icr
-        + RTS
-    )
-    return build_psid(code, load=0x1000, init=0x1000, play=0x1000)
+def test_psid_vbi_bit_with_no_init_programming_is_one_raster_per_frame():
+    cad = _cad(psid(b""))
+    assert (cad.source, cad.cycles_per_call) == (TriggerSource.PAL_VIDEO, PAL)
+    assert (cad.calls_per_frame, cad.raster_lines) == (1.0, (0,))
+    assert cad.clock_hz == reg.PAL_CLOCK_HZ and cad.latch is None
 
 
 @pytest.mark.parametrize(
-    "control,icr,armed",
-    [
-        (None, None, True),  # KERNAL default (unwritten) is armed
-        (0x11, None, True),  # START set, continuous
-        (0x10, None, False),  # START clear
-        (0x09, None, False),  # one-shot mode (bit3) even while running
-        (None, 0x81, True),  # ICR set Timer-A enable (bit7=1, bit0=1)
-        (None, 0x01, False),  # ICR clear Timer-A enable (bit7=0, bit0=1)
-        (None, 0x80, True),  # ICR set with no Timer-A bit leaves it armed
-    ],
+    "clock,latch_value",
+    [("PAL", reg.KERNAL_CIA1_LATCH_PAL), ("NTSC", reg.KERNAL_CIA1_LATCH_NTSC)],
 )
-def test_cia_armed(control, icr, armed):
-    assert _cia_armed(control, icr) is armed
+def test_psid_cia_bit_with_no_init_programming_is_the_driver_timer(clock, latch_value):
+    cad = _cad(psid(b"", speed=1), clock=clock)
+    assert (cad.source, cad.latch) == (TriggerSource.CIA_TIMER, latch_value)
+    assert cad.cycles_per_call == latch_value + 1
+    assert cad.calls_per_second == pytest.approx(cad.clock_hz / (latch_value + 1))
 
 
-def test_disarmed_cia_latch_falls_back_to_video():
-    # A plausible latch whose timer START bit is cleared is not the trigger.
-    cad = playroutine_cadence(_cia_image(_lda_sta(0x10, reg.CIA1_CRA)))
+def test_speed_bit_is_per_subtune():
+    data = psid(b"", speed=0b10, songs=2)
+    assert _cad(data).source is TriggerSource.PAL_VIDEO
+    assert _cad(data, subtune=1).source is TriggerSource.CIA_TIMER
+
+
+def test_init_overrides_vbi_bit_with_an_armed_cia_timer():
+    init = sta(0x00, reg.VIC_IRQ_ENABLE) + latch(0x5BF9)
+    init += sta(0x81, reg.CIA1_ICR) + sta(0x11, reg.CIA1_CRA)
+    cad = _cad(psid(init))
+    assert (cad.source, cad.cycles_per_call) == (TriggerSource.CIA_TIMER, 0x5BFA)
+    assert not cad.dynamic
+
+
+def test_init_overrides_cia_bit_with_a_raster_irq():
+    init = sta(0x7F, reg.CIA1_ICR) + sta(0x01, reg.VIC_IRQ_ENABLE)
+    init += sta(0x80, reg.VIC_RASTER)
+    cad = _cad(psid(init, speed=1))
+    assert (cad.source, cad.raster_lines) == (TriggerSource.PAL_VIDEO, (0x80,))
+
+
+def test_a_latch_alone_does_not_start_the_vbi_drivers_stopped_timer():
+    cad = _cad(psid(latch(0x5BF9)))
     assert cad.source is TriggerSource.PAL_VIDEO
-    assert cad.latch is None
 
 
-def test_icr_masked_cia_latch_falls_back_to_video():
-    # A plausible latch whose Timer-A interrupt enable is cleared is not the trigger.
-    cad = playroutine_cadence(_cia_image(_lda_sta(0x01, reg.CIA1_ICR)))
+def test_cia_multispeed_latch():
+    cad = _cad(psid(latch(PAL // 4 - 1), speed=1))
+    assert (cad.source, cad.cycles_per_call) == (TriggerSource.CIA_TIMER, PAL // 4)
+    assert cad.calls_per_frame == 4.0
+
+
+def test_multispeed_raster_chain_counts_calls_per_frame():
+    lines = (0x10, 0x30, 0x90, 0xF0)
+    play = (
+        bytes((0xAE, 0x7F, LOAD >> 8))  # LDX LOAD+$7F
+        + bytes((0xBD, 0x80, LOAD >> 8))  # LDA LOAD+$80,X
+        + bytes((0x8D, 0x12, 0xD0))  # STA $D012
+        + bytes((0xE8, 0x8A, 0x29, 0x03, 0x8D, 0x7F, LOAD >> 8))  # idx = idx+1 & 3
+        + PLAY_SID
+    )
+    body = image(init_00=sta(lines[0], reg.VIC_RASTER) + RTS, play_20=play)
+    body = body[:0x80] + bytes(lines) + body[0x84:]
+    cad = _cad(build_psid(body, LOAD, LOAD, LOAD + 0x20))
     assert cad.source is TriggerSource.PAL_VIDEO
+    assert (cad.calls_per_frame, cad.raster_lines) == (4.0, lines)
+    assert cad.cycles_per_call == PAL // 4
 
 
-def test_armed_cia_latch_is_cia_timer():
-    cad = playroutine_cadence(_cia_image(_lda_sta(0x11, reg.CIA1_CRA)))
+def test_disarmed_timer_with_no_raster_plays_nothing():
+    for disarm in (sta(0x01, reg.CIA1_ICR), sta(0x00, reg.CIA1_CRA)):
+        cad = _cad(psid(disarm, speed=1))
+        assert cad.source is None
+        assert cad.cycles_per_call == PAL
+
+
+def test_one_shot_timer_is_not_periodic():
+    cad = _cad(psid(sta(0x19, reg.CIA1_CRA), speed=1))
+    assert cad.source is None
+
+
+def test_one_shot_timer_restarted_by_play_is_measured():
+    play = sta(0x19, reg.CIA1_CRA) + PLAY_SID
+    cad = _cad(psid(latch(4999), play, speed=1))
     assert cad.source is TriggerSource.CIA_TIMER
-    assert cad.cycles_per_call == 23546
+    assert 5000 < cad.cycles_per_call < 5100
 
 
-def test_accepts_sidimage_instance():
-    img = SidImage.from_bytes(_raster_image())
-    cad = playroutine_cadence(img)
-    assert cad.source is TriggerSource.PAL_VIDEO
+def test_play_that_never_writes_the_sid_is_unknown():
+    assert _cad(psid(b"", RTS)).source is None
 
 
-def test_calls_per_second_property():
-    cad = Cadence(19656, TriggerSource.PAL_VIDEO, reg.PAL_CLOCK_HZ)
-    assert cad.calls_per_second == pytest.approx(reg.PAL_CLOCK_HZ / 19656)
+def test_dynamic_when_play_alternates_the_latch():
+    play = (
+        bytes((0xAD, 0xF0, 0x10, 0x49, 0x01, 0x8D, 0xF0, 0x10))  # flip a RAM bit
+        + bytes((0x09, 0x20, 0x8D, 0x05, 0xDC))  # latch hi = $20 | bit
+        + PLAY_SID
+    )
+    cad = _cad(psid(latch(0x2000), play, speed=1))
+    assert cad.source is TriggerSource.CIA_TIMER and cad.dynamic
+    assert abs(cad.cycles_per_call - (0x2001 + 0x2101) // 2) < 0x80
 
 
-# --- real-tune validation (best-effort) ------------------------------------
-
-# A real defMON (Aleksi Eeben) tune that self-installs a CIA-timer play IRQ.
-_DEFMON_CIA_TUNE = "MUSICIANS/E/Eeben_Aleksi/Stella_2600_by_Starlight.sid"
+def _raster_handler(exit_code):
+    return bytes((0xEE, 0x00, 0xD4)) + ACK_VIC + exit_code
 
 
-def test_real_defmon_tune_is_cia_timer(tmp_path):
-    """A real defMON tune derives a CIA cadence of latch+1 cycles.
-
-    Pins the derivation to reality: the CIA latch defMON programs is the tune's
-    tempo (here ~19759), and cycles_per_call == latch + 1 -- the same rule that
-    yields defMON's canonical 23546 from a 23545 latch. Skips only if the HVSC
-    mirror is unreachable.
-    """
-    try:
-        path = fetch_tune(_DEFMON_CIA_TUNE, cache_dir=tmp_path)
-    except TuneFetchError:
-        pytest.skip("HVSC mirror unreachable")
-    data = path.read_bytes()
-    latch = trace_init(SidImage.from_bytes(data)).cia1_timer_latch
-    cad = playroutine_cadence(data)
-    assert cad.source is TriggerSource.CIA_TIMER
-    assert cad.latch == latch
-    assert cad.cycles_per_call == latch + 1
+IDLE = bytes((0x4C, 0x40, LOAD >> 8))  # JMP LOAD+$40 (at LOAD+$40)
 
 
-# Real tunes pinning the arming gate: armed CIA latch vs. video-timed non-CIA.
-_ARMING_TUNES = {
-    "MUSICIANS/H/Honey/8_Bit-Maerchenland_V2.sid": (
-        TriggerSource.CIA_TIMER,
-        16641,
-    ),
-    "MUSICIANS/F/Fern_Eric/Goldberg_Variations_parts_1-7.sid": (
+def test_rsid_raster_through_the_kernal_vector():
+    init = SEI + sta(0x7F, reg.CIA1_ICR) + sta(0x01, reg.VIC_IRQ_ENABLE)
+    init += sta(0x40, reg.VIC_RASTER) + sta(0x1B, reg.VIC_CONTROL_1)
+    init += vector(reg.RAM_IRQ_VECTOR_LO, LOAD + 0x80) + CLI + RTS
+    handler = _raster_handler(bytes((0x4C, 0x31, 0xEA)))  # JMP $EA31
+    cad = _cad(rsid(image(init_00=init, irq_80=handler)))
+    assert (cad.source, cad.raster_lines) == (TriggerSource.PAL_VIDEO, (0x40,))
+
+
+def test_rsid_raster_through_the_hardware_vector_with_kernal_banked_out():
+    init = SEI + sta(0x35, 0x01) + sta(0x7F, reg.CIA1_ICR)
+    init += sta(0x01, reg.VIC_IRQ_ENABLE)
+    init += vector(reg.CPU_IRQ_VECTOR, LOAD + 0x80) + CLI + bytes((0x4C, 0x40, 0x10))
+    cad = _cad(rsid(image(init_00=init, idle_40=IDLE, irq_80=_raster_handler(RTI))))
+    assert (cad.source, cad.raster_lines) == (TriggerSource.PAL_VIDEO, (311,))
+
+
+def test_rsid_nmi_timer():
+    init = sta(0x7F, reg.CIA1_ICR) + latch(PAL // 2 - 1, reg.CIA2_BASE)
+    init += vector(reg.RAM_NMI_VECTOR_LO, LOAD + 0x80)
+    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + RTS
+    handler = bytes((0xEE, 0x00, 0xD4)) + ACK_CIA2 + RTI
+    cad = _cad(rsid(image(init_00=init, nmi_80=handler)))
+    assert (cad.source, cad.cycles_per_call) == (TriggerSource.NMI_TIMER, PAL // 2)
+    assert cad.calls_per_frame == 2.0
+
+
+def test_a_raster_player_beats_a_faster_nmi_sample_player():
+    init = sta(0x7F, reg.CIA1_ICR) + sta(0x01, reg.VIC_IRQ_ENABLE)
+    init += vector(reg.RAM_IRQ_VECTOR_LO, LOAD + 0x80)
+    init += latch(PAL // 8 - 1, reg.CIA2_BASE)
+    init += vector(reg.RAM_NMI_VECTOR_LO, LOAD + 0xC0)
+    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + CLI + RTS
+    music = bytes((0xEE, 0x00, 0xD4, 0xEE, 0x01, 0xD4)) + ACK_VIC
+    digi = bytes((0xEE, 0x18, 0xD4)) + ACK_CIA2 + RTI
+    body = image(init_00=init, irq_80=music + bytes((0x4C, 0x81, 0xEA)), nmi_C0=digi)
+    cad = _cad(rsid(body))
+    assert (cad.source, cad.calls_per_frame) == (TriggerSource.PAL_VIDEO, 1.0)
+
+
+def test_an_unacknowledged_nmi_is_raised_once():
+    init = sta(0x7F, reg.CIA1_ICR) + latch(PAL // 2 - 1, reg.CIA2_BASE)
+    init += vector(reg.RAM_NMI_VECTOR_LO, LOAD + 0x80)
+    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + RTS
+    cad = _cad(rsid(image(init_00=init, nmi_80=bytes((0xEE, 0x00, 0xD4)) + RTI)))
+    assert cad.source is None
+
+
+def test_ntsc_header_and_explicit_clock():
+    cad = _cad(psid(b"", flags=0b10 << 2))
+    assert (cad.source, cad.cycles_per_call) == (
         TriggerSource.NTSC_VIDEO,
         reg.NTSC_CYCLES_PER_FRAME,
+    )
+    assert _cad(psid(b""), clock="ntsc").clock_hz == reg.NTSC_CLOCK_HZ
+    with pytest.raises(ValueError):
+        _cad(psid(b""), clock="SECAM")
+
+
+def test_accepts_a_sidimage_and_rejects_a_bare_prg():
+    assert _cad(SidImage.from_bytes(psid(b""))).source is TriggerSource.PAL_VIDEO
+    with pytest.raises(SidParseError):
+        _cad(build_prg(RTS, LOAD))
+
+
+def test_cadence_defaults_calls_per_frame():
+    cad = Cadence(PAL // 2, TriggerSource.CIA_TIMER, reg.PAL_CLOCK_HZ)
+    assert cad.calls_per_frame == 2.0
+    assert cad.calls_per_second == pytest.approx(reg.PAL_CLOCK_HZ / (PAL // 2))
+
+
+# Real HVSC tunes whose cadence sidplayfp's interrupt rows confirm.
+_REAL = {
+    "MUSICIANS/H/Honey/8_Bit-Maerchenland_V2.sid": (TriggerSource.CIA_TIMER, 16641),
+    "MUSICIANS/F/Fern_Eric/Goldberg_Variations_parts_1-7.sid": (
+        TriggerSource.CIA_TIMER,
+        17431,
     ),
+    "MUSICIANS/E/Eeben_Aleksi/Stella_2600_by_Starlight.sid": (
+        TriggerSource.CIA_TIMER,
+        19760,
+    ),
+    "MUSICIANS/G/Goto80/Automatas.sid": (TriggerSource.CIA_TIMER, 2457),
 }
 
 
-@pytest.mark.parametrize("relpath,expected", list(_ARMING_TUNES.items()))
-def test_real_tune_arming_gate(relpath, expected, tmp_path):
-    """The CIA arming gate resolves the real trigger on two HVSC tunes.
-
-    ``8_Bit-Maerchenland`` latches an armed CIA timer (16640 -> 16641 cycles);
-    ``Goldberg_Variations`` is NTSC-video-timed and its CIA latch must not be
-    read as the cadence. Skips only if the HVSC mirror is unreachable.
-    """
-    source, cycles = expected
+@pytest.mark.parametrize("relpath,expected", list(_REAL.items()))
+def test_real_tune_cadence(relpath, expected, tmp_path):
     path = resolve_tune(relpath, cache_dir=tmp_path)
     if path is None:
         pytest.skip("HVSC mirror unreachable")
-    cad = playroutine_cadence(path.read_bytes())
-    assert cad.source is source
-    assert cad.cycles_per_call == cycles
+    cad = _cad(path.read_bytes())
+    assert (cad.source, cad.cycles_per_call) == expected
 
 
-# An 8x-multispeed defMON tune whose depacker raster-syncs and whose replay uses
-# NMOS illegals: init latches $0998, so the cadence is 2457 cycles (confirmed
-# against a cycle-stamped sidtrace render: the CIA-IRQ delta mode is 2457).
-_MULTISPEED_TUNE = "MUSICIANS/G/Goto80/Automatas.sid"
-_MULTISPEED_LATCH = 0x0998
-
-
-def test_multispeed_defmon_cadence_is_latch_plus_one(tmp_path):
-    """A multispeed tune reports its CIA latch + 1, not the PAL video frame.
-
-    Without the full NMOS/C64 init host, init runs to the cycle cap, the
-    ``$DC04``/``$DC05`` writes are never seen and the cadence silently falls
-    through to 19656 -- 8x wrong for this tune.
-    """
-    path = resolve_tune(_MULTISPEED_TUNE, cache_dir=tmp_path)
-    if path is None:
-        pytest.skip("HVSC mirror unreachable")
-    data = path.read_bytes()
-    assert trace_init(SidImage.from_bytes(data)).cia1_timer_latch == _MULTISPEED_LATCH
-    cad = playroutine_cadence(data)
+def test_writes_with_io_banked_out_reach_ram_not_the_chips():
+    init = sta(0x34, 0x01) + sta(0x01, reg.VIC_IRQ_ENABLE) + sta(0x7F, reg.CIA1_ICR)
+    init += sta(0x37, 0x01)
+    cad = _cad(psid(init, speed=1))
     assert cad.source is TriggerSource.CIA_TIMER
-    assert cad.cycles_per_call == _MULTISPEED_LATCH + 1
 
 
-def test_psid_cia_speed_without_a_latch_is_the_kernal_timer():
-    data = build_psid(RTS, load=0x1000, init=0x1000, play=0x1000, speed=0b10)
-    assert playroutine_cadence(data).source is TriggerSource.PAL_VIDEO
-    cad = playroutine_cadence(data, subtune=1)
-    assert (cad.source, cad.latch) == (TriggerSource.CIA_TIMER, 0x4025)
-    assert playroutine_cadence(data, subtune=1, clock="NTSC").latch == 0x4295
-
-
-def _cia2_image(magic):
-    code = (
-        _lda_sta(0x40, reg.CIA2_TIMER_A_LO) + _lda_sta(0x28, reg.CIA2_TIMER_A_HI) + RTS
-    )
-    return build_psid(code, load=0x1000, init=0x1000, play=0x1000, magic=magic, speed=1)
-
-
-def test_a_psid_driver_never_plays_on_the_nmi_timer():
-    assert playroutine_cadence(_cia2_image(b"PSID")).cycles_per_call == 0x4026
-    assert playroutine_cadence(_cia2_image(b"RSID")).cycles_per_call == 0x2841
+def test_driver_page_is_the_headers_free_page_else_the_first_free_page():
+    data = bytearray(psid(b""))
+    assert _driver_base(SidImage.from_bytes(bytes(data))) == 0x0400
+    data[0x78] = 0x20
+    assert _driver_base(SidImage.from_bytes(bytes(data))) == 0x2000
+    low = build_psid(RTS, 0x0400, 0x0400, 0x0400)
+    assert _driver_base(SidImage.from_bytes(low)) == 0x0500

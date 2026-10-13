@@ -31,8 +31,10 @@ API.
 - `emu` — the shared jennings host every init/replay path runs on: `wire_mpu`
   (native NMOS illegal opcodes + cycle-derived VIC/SID reads) and `run_to_rts`.
 - `playroutine_cadence` / `Cadence` / `TriggerSource` — derive the play-routine
-  cadence (PAL/NTSC video frame vs CIA-timer latch) from what init programs, not
-  the header.
+  cadence (raster calls per frame, CIA/NMI timer period) from how the tune
+  programs its interrupts in sidplayfp's PSID driver environment
+  ([docs/cadence.md](docs/cadence.md)); `cadence_check` validates it against
+  sidtrace interrupt rows.
 - `native_decrunch` — native exomizer unpack (pydexomizer), an init-free
   alternative depack path; opt-in via `detect_playroutine(..., native=True)`.
 - `reglog` — `RegWrite` register-log format (`read_reglog` / `write_reglog`) and

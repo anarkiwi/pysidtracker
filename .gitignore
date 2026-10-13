@@ -222,3 +222,6 @@ __marimo__/
 
 # HVSC tune / C64 ROM fetch cache (never committed: copyright works)
 .tunecache/
+
+# cadence_check work dir (sidtrace traces, results, libsidplayfp reference)
+.cadence-check/
