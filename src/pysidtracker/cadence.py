@@ -101,14 +101,21 @@ def _iomap(header, addr: int) -> int:
     return 0x35 if addr >= _KERNAL_ROM else 0x34
 
 
-def _driver_base(load: int, end: int) -> int:
-    """The first free page psiddrv relocates itself to, outside the tune and BASIC."""
-    first, last = load >> 8, (end - 1) >> 8
-    return next(
-        p << 8
-        for p in range(4, 0xD0)
-        if not first <= p <= last and not 0xA0 <= p <= 0xBF
-    )
+def _driver_base(image: SidImage) -> int:
+    """The page psiddrv relocates itself to.
+
+    The header's free page (PSID v2+), else the first page outside the tune and
+    BASIC ROM.
+    """
+    first, last = image.load >> 8, (image.end - 1) >> 8
+    page = image.container[0x78] if image.header.version >= 2 else 0
+    if page in (0, 0xFF):
+        page = next(
+            p
+            for p in range(4, 0xD0)
+            if not first <= p <= last and not 0xA0 <= p <= 0xBF
+        )
+    return page << 8
 
 
 def _word(value: int) -> bytes:
@@ -205,7 +212,8 @@ class _Machine:
             self._write,
         )
         self.mem.subscribe_to_read(
-            [reg.VIC_IRQ_STATUS, reg.CIA1_ICR, reg.CIA2_ICR]
+            [reg.VIC_CONTROL_1, reg.VIC_RASTER, reg.VIC_IRQ_STATUS]
+            + [reg.CIA1_ICR, reg.CIA2_ICR, reg.SID_BASE + 0x1B, reg.SID_BASE + 0x1C]
             + [
                 base + o
                 for base in (reg.CIA1_BASE, reg.CIA2_BASE)
@@ -213,15 +221,23 @@ class _Machine:
             ],
             self._read,
         )
+        self.passthrough = (reg.VIC_CONTROL_1, reg.VIC_RASTER)
+        self.passthrough += (reg.SID_BASE + 0x1B, reg.SID_BASE + 0x1C)
         self.span = slice(image.load, image.end)
-        self.base = _driver_base(image.load, image.end)
+        self.base = _driver_base(image)
+
+    def _io(self) -> bool:
+        """The CPU port maps I/O, not RAM or character ROM, at ``$D000``."""
+        return bool(self.ram[1] & 3 and self.ram[1] & 4)
 
     def _sid(self, addr, _value):
-        if self.events:
+        if self.events and self._io():
             self.events[-1][2] |= 1 << (addr & 0x1F)
 
     def _write(self, addr, value):
         self.dirty = True
+        if not self._io():
+            return
         if addr == reg.VIC_IRQ_ENABLE:
             self.vic_enable = value & 0x0F
         elif addr == reg.VIC_IRQ_STATUS and (value | self._rmw()) & 1:
@@ -245,7 +261,11 @@ class _Machine:
         return int(self.ram[self.mpu.pc] in _RMW)
 
     def _read(self, addr):
+        if not self._io():
+            return self.ram[addr]
         now = self._now()
+        if addr in self.passthrough:
+            return None
         if addr == reg.VIC_IRQ_STATUS:
             match = self._next_match(now - self.frame)
             flag = self.vic_flag or self.vic_seen < match <= now

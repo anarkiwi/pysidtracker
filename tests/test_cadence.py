@@ -4,6 +4,7 @@ import pytest
 
 from pysidtracker import Cadence, SidImage, TriggerSource, playroutine_cadence
 from pysidtracker import registers as reg
+from pysidtracker.cadence import _driver_base
 from pysidtracker.errors import SidParseError
 from pysidtracker.testing import resolve_tune
 
@@ -257,3 +258,19 @@ def test_real_tune_cadence(relpath, expected, tmp_path):
         pytest.skip("HVSC mirror unreachable")
     cad = _cad(path.read_bytes())
     assert (cad.source, cad.cycles_per_call) == expected
+
+
+def test_writes_with_io_banked_out_reach_ram_not_the_chips():
+    init = sta(0x34, 0x01) + sta(0x01, reg.VIC_IRQ_ENABLE) + sta(0x7F, reg.CIA1_ICR)
+    init += sta(0x37, 0x01)
+    cad = _cad(psid(init, speed=1))
+    assert cad.source is TriggerSource.CIA_TIMER
+
+
+def test_driver_page_is_the_headers_free_page_else_the_first_free_page():
+    data = bytearray(psid(b""))
+    assert _driver_base(SidImage.from_bytes(bytes(data))) == 0x0400
+    data[0x78] = 0x20
+    assert _driver_base(SidImage.from_bytes(bytes(data))) == 0x2000
+    low = build_psid(RTS, 0x0400, 0x0400, 0x0400)
+    assert _driver_base(SidImage.from_bytes(low)) == 0x0500

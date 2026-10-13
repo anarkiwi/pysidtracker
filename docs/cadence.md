@@ -11,7 +11,9 @@ clock bits only pick PAL or NTSC (unless `clock` is given).
 
 libsidplayfp (`src/psiddrv.a65`, `src/psiddrv.cpp`) relocates a small driver
 into the first free page from `$04` up that is outside the tune and
-`$A0`–`$BF`. On reset the CPU jumps straight to the driver, so the KERNAL
+`$A0`–`$BF`. Before the tune is placed it clears `$0000`–`$03FF`, stores the
+PAL/NTSC flag at `$02A6` (1 for PAL) and the vectors below. On reset the CPU
+jumps straight to the driver, so the KERNAL
 initialisation never runs and every CIA register keeps its reset value
 (timers stopped, latches `$FFFF`, all interrupts masked). The driver then:
 
@@ -63,7 +65,7 @@ Every SID write is attributed to the most recent raise, as the sidtrace
 oracle's rows are. The play source is the one whose raises drive the most
 distinct SID registers, then the one with the most writing raises, so a
 sample player that drives only `$D418` at audio rate does not outvote the
-music routine.
+music routine. A source must raise at least twice in the measured window.
 Init is run until it returns or idles (a `JMP *`), then `frames` more video
 frames. If it never does, the run stops at `max_cycles`. The last `frames - 1`
 frames are measured:
@@ -94,8 +96,8 @@ python -m pysidtracker.cadence_check report .cadence-check/cadence.csv
 ```
 
 The measured source is picked from the trace's SID writes by the same rule
-(each write attributed to the latest raise; most distinct registers, then most
-writes). Its rate is taken over its raises
+(each write attributed to the latest raise; among sources raised at least three
+times, most distinct registers, then most writes). Its rate is taken over its raises
 after the first, which init can hold back. A row agrees when the source matches
 and the predicted calls over the measured span are within one frame's calls of
 the count. Verdicts: `agree`, `rate`, `source`, `unknown` (no predicted source),
