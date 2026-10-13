@@ -48,7 +48,8 @@ Renders each subtune under sidtrace (`-o<song> -f8000`: register writes do not
 depend on the sample rate; `--sidlite` is not used because its osc3/env3 reads
 ignore the tune's SID model) and under the renderer,
 caching both as zstd register CSVs keyed `<md5>_<song>` in `oracle/` and
-`library/` under `--work`. Cached oracle traces are reused. `results.csv`:
+`library/` under `--work`. Cached oracle traces are reused while `oracle/STAMP`
+(the sidtrace image id and arguments) matches; otherwise they are re-rendered. `results.csv`:
 
 | column | meaning |
 | --- | --- |
