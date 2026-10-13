@@ -2,7 +2,7 @@
 
 import pytest
 
-from pysidtracker import SidFormatError, parse_sid_header
+from pysidtracker import SidFormatError, parse_sid_header, write_psid
 from pysidtracker.header import _decode_str
 
 from .helpers import build_psid, build_psid_embedded_load
@@ -87,8 +87,6 @@ def test_decode_str_stops_at_nul():
 
 
 def test_speed_bits_select_each_song_s_timer():
-    from pysidtracker import parse_sid_header, write_psid
-
     header = parse_sid_header(
         write_psid(load=0x1000, init=0, play=0, image=b"", speed=1 << 31 | 2)
     )
