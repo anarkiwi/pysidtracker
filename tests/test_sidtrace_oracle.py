@@ -23,21 +23,42 @@ from .helpers import build_psid
 
 _HEADER = ",".join(oracle.SIDTRACE_COLUMNS)
 
-# A minimal CSV: a pre-IRQ volume write, then one reg-0 write per CIA frame.
+# A minimal CSV: a pre-IRQ volume write, then one reg-0 write per CIA raise.
 _CSV = (
     f"{_HEADER}\n"
     "100,,,,0,24,15\n"
+    "19706,,,0,,,cia_irq\n"
     "19756,,,50,0,0,10\n"
+    "39352,,,0,,,cia_irq\n"
     "39412,,,60,0,0,20\n"
+    "59013,,,0,,,cia_irq\n"
     "59068,,,55,0,0,30\n"
 )
 
+
+def _irqs(rows):
+    """``rows`` plus an interrupt row at each write's raise cycle."""
+    irq = {
+        (r.cycle - r.since_video_irq, "video_irq")
+        for r in rows
+        if r.since_video_irq is not None
+    } | {
+        (r.cycle - r.since_cia_irq, "cia_irq")
+        for r in rows
+        if r.since_video_irq is None and r.since_cia_irq is not None
+    }
+    out = rows + [SidtraceRow(at, None, None, None, None, None, k) for at, k in irq]
+    return sorted(out, key=lambda r: r.cycle)
+
+
 # Three clean CIA frames (raise cycles 19656, 39312, 58968 -> cadence 19656).
-_ROWS = [
-    SidtraceRow(19656, None, None, 0, 0, 0, 10),
-    SidtraceRow(39312, None, None, 0, 0, 0, 20),
-    SidtraceRow(58968, None, None, 0, 0, 0, 30),
-]
+_ROWS = _irqs(
+    [
+        SidtraceRow(19656, None, None, 0, 0, 0, 10),
+        SidtraceRow(39312, None, None, 0, 0, 0, 20),
+        SidtraceRow(58968, None, None, 0, 0, 0, 30),
+    ]
+)
 
 
 def _zst(text: str) -> bytes:
@@ -49,8 +70,9 @@ def test_read_sidtrace_plain_csv(tmp_path):
     path.write_text(_CSV)
     rows = read_sidtrace(path)
     assert rows[0] == SidtraceRow(100, None, None, None, 0, 24, 15)
-    assert rows[1] == SidtraceRow(19756, None, None, 50, 0, 0, 10)
-    assert len(rows) == 4
+    assert rows[1] == SidtraceRow(19706, None, None, 0, None, None, "cia_irq")
+    assert rows[2] == SidtraceRow(19756, None, None, 50, 0, 0, 10)
+    assert len(rows) == 7
 
 
 def test_read_sidtrace_zst_matches_plain(tmp_path):
@@ -71,16 +93,21 @@ def test_sidtrace_cadence_median_irq_interval():
     assert sidtrace_cadence(_ROWS) == 19656
 
 
-def test_sidtrace_cadence_none_without_irqs():
-    assert sidtrace_cadence([SidtraceRow(0, None, None, None, 0, 0, 1)]) is None
+def test_sidtrace_cadence_needs_interrupt_rows():
+    with pytest.raises(ValueError, match="no interrupt rows"):
+        sidtrace_cadence([SidtraceRow(0, None, None, None, 0, 0, 1)])
+    assert sidtrace_cadence(_irqs([SidtraceRow(9, None, None, 2, 0, 0, 1)])) is None
 
 
 def test_sidtrace_cadence_prefers_video_over_cia():
-    rows = [
-        SidtraceRow(20000, None, 100, 999, 0, 0, 1),
-        SidtraceRow(39656, None, 100, 999, 0, 0, 2),
-    ]
-    # video-raise 19900, 39556 -> 19656 (cia column ignored).
+    rows = _irqs(
+        [
+            SidtraceRow(20000, None, 100, 999, 0, 0, 1),
+            SidtraceRow(39656, None, 100, 999, 0, 0, 2),
+        ]
+    ) + [SidtraceRow(n * 7000, None, None, 0, None, None, "cia_irq") for n in (3, 4)]
+    rows.sort(key=lambda r: r.cycle)
+    # video-raise 19900, 39556 -> 19656 (cia raises ignored).
     assert sidtrace_cadence(rows) == 19656
 
 
@@ -93,19 +120,23 @@ def test_sidtrace_grid_frames_by_interrupt():
 
 
 def test_init_writes_are_the_baseline_however_close_the_first_interrupt():
-    rows = [_row(100, None, 1, 7), _row(6000, 200, 0, 10), _row(25856, 200, 0, 20)]
+    rows = _irqs(
+        [_row(100, None, 1, 7), _row(6000, 200, 0, 10), _row(25856, 200, 0, 20)]
+    )
     assert sidtrace_grid(rows, reg_count=2, cycles_per_frame=19656) == [
         [10, 7],
         [20, 7],
     ]
 
 
-def test_each_interrupt_is_a_frame_and_a_silent_gap_counts_its_calls():
-    rows = [
-        _row(1000, 0, 0, 1),
-        _row(2000, 0, 0, 2),  # an early first period: still its own frame
-        _row(2000 + 3 * 19656, 0, 0, 3),  # two silent calls in between
-    ]
+def test_fixed_cadence_counts_calls_between_raises():
+    rows = _irqs(
+        [
+            _row(1000, 0, 0, 1),
+            _row(2000, 0, 0, 2),
+            _row(2000 + 3 * 19656, 0, 0, 3),
+        ]
+    )
     assert sidtrace_grid(rows, reg_count=1, cycles_per_frame=19656) == [
         [1],
         [2],
@@ -116,7 +147,7 @@ def test_each_interrupt_is_a_frame_and_a_silent_gap_counts_its_calls():
 
 
 def test_a_write_outside_an_interrupt_joins_the_last_one_raised():
-    rows = [_row(1000, 0, 0, 1), _row(1500, None, 0, 2), _row(20656, 0, 0, 3)]
+    rows = _irqs([_row(1000, 0, 0, 1), _row(1500, None, 0, 2), _row(20656, 0, 0, 3)])
     assert sidtrace_grid(rows, reg_count=1, cycles_per_frame=19656) == [[2], [3]]
 
 
@@ -126,11 +157,13 @@ def test_grid_from_writes_anchors_after_the_init_gap():
 
 
 def test_sidtrace_grid_filters_by_chip():
-    rows = [
-        SidtraceRow(20000, None, 100, None, 0, 0, 11),
-        SidtraceRow(20000, None, 100, None, 1, 0, 99),
-        SidtraceRow(39656, None, 100, None, 0, 0, 22),
-    ]
+    rows = _irqs(
+        [
+            SidtraceRow(20000, None, 100, None, 0, 0, 11),
+            SidtraceRow(20000, None, 100, None, 1, 0, 99),
+            SidtraceRow(39656, None, 100, None, 0, 0, 22),
+        ]
+    )
     assert all(row[0] != 99 for row in sidtrace_grid(rows, chip=0))
 
 
@@ -199,6 +232,19 @@ def test_oracle_grid_uses_cache(tmp_path, monkeypatch):
     assert grid == sidtrace_grid(read_sidtrace(cache / "song.csv.zst"))
 
 
+def test_oracle_grid_rerenders_trace_without_interrupt_rows(tmp_path, monkeypatch):
+    cache = tmp_path / "csv"
+    cache.mkdir()
+    stale = "\n".join(l for l in _CSV.splitlines() if not l.endswith("irq")) + "\n"
+    (cache / "song.csv.zst").write_bytes(_zst(stale))
+    monkeypatch.setattr(oracle.subprocess, "run", _fake_docker(_CSV))
+    tune = tmp_path / "song.sid"
+    tune.write_bytes(b"PSID" + b"\x00" * 60)
+    grid = oracle_grid(tune, oracle_cache=cache)
+    rows = read_sidtrace(cache / "song.csv.zst")
+    assert any(r.chip is None for r in rows) and grid == sidtrace_grid(rows)
+
+
 def test_oracle_grid_renders_on_miss(tmp_path, monkeypatch):
     monkeypatch.setattr(oracle.subprocess, "run", _fake_docker(_CSV))
     tune = tmp_path / "song.sid"
@@ -214,14 +260,13 @@ def test_make_oracle_fixtures_returns_two_fixtures():
     assert tune_id is not None and oracle_match is not None
 
 
-def _jch_rows(irq_rows):
+def _jch_rows():
     """VIC-timed calls every PAL frame; only every third call writes."""
     frame = registers.PAL_CYCLES_PER_FRAME
     rows = []
     for n in range(1, 13):
         at = n * frame + 64
-        if irq_rows:
-            rows.append(SidtraceRow(at, None, 0, None, None, None, "video_irq"))
+        rows.append(SidtraceRow(at, None, 0, None, None, None, "video_irq"))
         if n % 3 == 0:
             rows.append(SidtraceRow(at + 40, None, 40, None, 0, 0, n))
     return rows
@@ -238,14 +283,13 @@ def test_read_sidtrace_interrupt_rows(tmp_path):
 
 def test_interrupt_rows_frame_every_call():
     frame = registers.PAL_CYCLES_PER_FRAME
-    assert sidtrace_cadence(_jch_rows(False)) == 3 * frame
-    assert sidtrace_cadence(_jch_rows(True)) == frame
-    grid = sidtrace_grid(_jch_rows(True), reg_count=1)
+    assert sidtrace_cadence(_jch_rows()) == frame
+    grid = sidtrace_grid(_jch_rows(), reg_count=1)
     assert [g[0] for g in grid] == [0, 0, 3, 3, 3, 6, 6, 6, 9, 9, 9, 12]
 
 
 def test_interrupt_rows_ignore_other_source():
-    rows = _jch_rows(True) + [
+    rows = _jch_rows() + [
         SidtraceRow(n * 7000, None, None, 0, None, None, "cia_irq")
         for n in range(1, 30)
     ]
