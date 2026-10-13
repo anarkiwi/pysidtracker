@@ -36,14 +36,10 @@ def _load(song, formats: Sequence[SidFormat]) -> Tuple[SidFormat, bytes, object]
 
 
 def _cadence(data: bytes) -> Tuple[int, float]:
-    """The tune's play cadence (cycles per frame) and CPU clock (Hz).
+    """The tune's play cadence (cycles per call) and CPU clock (Hz).
 
-    Derived from what the tune's init actually programs
-    (:func:`~pysidtracker.cadence.playroutine_cadence`): a CIA-timer latch period
-    for a timer-driven or multi-speed tune, else its PAL/NTSC video frame -- not
-    merely the header's advertised rate, so a timed tune is framed at its real
-    period rather than a nominal 50 Hz. A bare ``.prg`` (no init to trace)
-    defaults to the PAL frame."""
+    From how the tune programs its interrupts (:func:`playroutine_cadence`); a
+    bare ``.prg`` defaults to the PAL frame."""
     if data[:4] in (b"PSID", b"RSID"):
         image = SidImage.from_bytes(data)
         if image.header is not None:
