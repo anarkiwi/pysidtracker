@@ -57,7 +57,8 @@ def access_cycle(mpu) -> int:
     SID registers share one page, so no indexed access to them adds a
     page-crossing cycle.
     """
-    return mpu.processorCycles + mpu.cycletime[mpu.memory[mpu.pc]] - 1
+    memory = getattr(mpu.memory, "_subject", mpu.memory)
+    return mpu.processorCycles + mpu.cycletime[memory[mpu.pc]] - 1
 
 
 def wire_mpu(

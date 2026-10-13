@@ -213,6 +213,7 @@ class _Machine:
             ],
             self._read,
         )
+        self.span = slice(image.load, image.end)
         self.base = _driver_base(image.load, image.end)
 
     def _sid(self, addr, _value):
@@ -269,7 +270,18 @@ class _Machine:
         initiomap, playiomap = _iomap(header, init), _iomap(header, header.play_address)
         clock_bits = (header.flags >> 2) & 3
         tune_ntsc = ntsc if clock_bits in (0, 3) else clock_bits == 2
+        tune = ram[self.span]
+        ram[0:0x400] = bytes(0x400)
+        ram[0x02A6] = 0 if ntsc else 1
+        ram[reg.RAM_IRQ_VECTOR_LO : reg.RAM_NMI_VECTOR_HI + 1] = (
+            _word(base + _IRQRET) + _word(base + _EXCEPTION) * 2
+            if header.is_psid
+            else _word(base + _IRQRET) + _word(0xFE66) + _word(_KERNAL_NMI)
+        )
+        ram[self.span] = tune
         ram[0:2] = bytes((0x2F, initiomap or 0x37))
+        if initiomap and playiomap:
+            ram[reg.RAM_IRQ_VECTOR_LO] = base + _IRQJOB & 0xFF
         kernal = reg.KERNAL_CIA1_LATCH_NTSC if ntsc else reg.KERNAL_CIA1_LATCH_PAL
         compat = tune_ntsc != ntsc or initiomap
         cia_speed = not header.is_psid or header.cia_speed(subtune)
@@ -304,13 +316,6 @@ class _Machine:
             + bytes((0x68, 0x85, 0x01, 0xCE, 0x19, 0xD0, 0xAD, 0x0D, 0xDC))
             + bytes((0x68, 0xA8, 0x68, 0xAA, 0x68, _RTI, 0x02))
         )
-        vectors = (
-            _word(base + (_IRQJOB if initiomap and playiomap else _IRQRET))
-            + _word(base + _EXCEPTION) * 2
-            if header.is_psid
-            else _word(base + _IRQRET) + _word(0xFE66) + _word(_KERNAL_NMI)
-        )
-        ram[reg.RAM_IRQ_VECTOR_LO : reg.RAM_NMI_VECTOR_HI + 1] = vectors
         mpu = self.mpu
         mpu.sp, mpu.a = 0xFB, subtune
         ram[0x01FC:0x01FE] = _word(base + _RET - 1)
@@ -400,16 +405,20 @@ def _cadence(machine: _Machine, start: int, frames: int) -> Cadence:
     frame = machine.frame
     ntsc = frame == reg.NTSC_CYCLES_PER_FRAME
     clock_hz = reg.NTSC_CLOCK_HZ if ntsc else reg.PAL_CLOCK_HZ
-    regs, calls = Counter(), Counter()
-    for _, src, wrote, _ in machine.events:
+    regs, calls, recurs = Counter(), Counter(), Counter()
+    for t, src, wrote, _ in machine.events:
         regs[src] |= wrote
         calls[src] += bool(wrote)
-    source = max(regs, key=lambda s: (regs[s].bit_count(), calls[s]), default=None)
-    wrote = regs[source]
+        recurs[src] += t >= start
+    source = max(
+        (s for s in regs if regs[s] and recurs[s] > 1),
+        key=lambda s: (regs[s].bit_count(), calls[s]),
+        default=None,
+    )
+    if source is None:
+        return Cadence(frame, None, clock_hz)
     steady = [(t, tag) for t, src, _, tag in machine.events if src == source]
     steady = [(t, tag) for t, tag in steady if t >= start]
-    if not wrote or not steady:
-        return Cadence(frame, None, clock_hz)
     if source == _VIC:
         per_frame = len(steady) / frames
         video = TriggerSource.NTSC_VIDEO if ntsc else TriggerSource.PAL_VIDEO

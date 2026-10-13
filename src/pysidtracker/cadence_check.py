@@ -34,7 +34,8 @@ def interrupt_cadence(rows):
     """``(source, raises)``: the interrupt source whose raises time the SID writes.
 
     Each write is attributed to the most recent raise of any source; the source
-    driving the most distinct registers, then writes, wins (as in the model).
+    raised at least three times and driving the most distinct registers, then
+    writes, wins (as in the model).
     """
     times = {
         s: np.array([r.cycle for r in rows if r.value == s and r.chip is None])
@@ -52,8 +53,12 @@ def interrupt_cadence(rows):
         return None, np.array([], dtype=np.int64)
     owner, regs = latest.argmax(0)[owned], regs[owned]
     score = [
-        (np.unique(regs[owner == i]).size, int((owner == i).sum()))
-        for i in range(len(SOURCES))
+        (
+            (np.unique(regs[owner == i]).size, int((owner == i).sum()))
+            if len(t) > 2
+            else (-1, 0)
+        )
+        for i, t in enumerate(times.values())
     ]
     source = SOURCES[max(range(len(SOURCES)), key=score.__getitem__)]
     return source, times[source]
