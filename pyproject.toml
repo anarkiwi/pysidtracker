@@ -32,6 +32,8 @@ classifiers = [
 dependencies = ["jennings>=0.1.1", "pydexomizer>=0.1", "pyresidfp>=0.17", "numpy>=1.23"]
 
 [project.optional-dependencies]
+# The whole-song HVSC oracle survey (python -m pysidtracker.survey).
+survey = ["tqdm>=4", "zstandard>=0.21"]
 dev = [
     "black>=24",
     "pylint>=3",
@@ -40,6 +42,7 @@ dev = [
     "pytest-xdist>=3",
     # Decompress the sidtrace oracle's zstd CSV traces (oracle comparison tests).
     "zstandard>=0.21",
+    "tqdm>=4",
 ]
 
 [project.scripts]

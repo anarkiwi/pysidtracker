@@ -45,6 +45,9 @@ API.
   `resolve_tune`, `make_tune_fixtures`), and `make_oracle_fixtures` /
   `oracle_grid` — a reusable byte-exact player-vs-`sidtrace`-oracle test
   ([docs/oracle-testing.md](docs/oracle-testing.md)).
+- `survey` — whole-song HVSC survey of any format's renderer against the
+  `sidtrace` oracle, tunes selected by SIDId signature (`pip install
+  "pysidtracker[survey]"`, [docs/survey.md](docs/survey.md)).
 - `roms` — C64 KERNAL/BASIC/CHARGEN ROM fetch + SHA-256 verified cache
   (`fetch_rom`, `resolve_rom`, `roms_available`) and 64 KiB mapping (`rom_image`,
   `apply_roms`) for tunes that cannot run without the ROMs. The ROMs are
