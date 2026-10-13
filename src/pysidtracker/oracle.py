@@ -416,17 +416,14 @@ def run_sidtrace(
     image: str = SIDTRACE_IMAGE,
     docker: str = "docker",
     extra_args: Sequence[str] = (),
+    song: Optional[int] = None,
+    user: Optional[str] = None,
 ) -> Path:
     """Render ``tune_path`` under the sidtrace Docker oracle to ``out_path``.
 
-    The container reads and writes relative to ``/work``, so the render runs in a
-    private temporary directory (bind-mounted at ``/work``) and the finished
-    trace is moved into ``out_path`` atomically. This keeps concurrent renders --
-    e.g. pytest-xdist workers sharing one cache directory -- from colliding on
-    the mount directory, on same-named tunes, or on a half-written cache file.
-
-    Returns ``out_path`` (a ``.csv.zst``). Raises :class:`SidtraceUnavailable` if
-    Docker is missing or the render fails -- this never silently skips.
+    Renders in a private temp dir beside ``out_path``, then moves the ``.csv.zst``
+    in atomically. ``song`` (1-based) adds ``-o<song>``; ``user`` (``uid:gid``)
+    keeps the trace non-root-owned. Raises :class:`SidtraceUnavailable` on failure.
     """
     tune_path = Path(tune_path)
     out_path = Path(out_path)
@@ -438,16 +435,20 @@ def run_sidtrace(
         tune_local = work / tune_path.name
         tune_local.write_bytes(tune_path.read_bytes())
         result = work / "trace.csv.zst"
+        if user:
+            work.chmod(0o777)
         cmd = [
             docker,
             "run",
             "--rm",
+            *(["--user", user] if user else []),
             "-v",
             f"{work.resolve()}:/work",
             image,
             result.name,
             tune_local.name,
             f"-t{seconds}",
+            *([f"-o{song}"] if song else []),
             *extra_args,
         ]
         try:

@@ -32,6 +32,8 @@ classifiers = [
 dependencies = ["jennings>=0.1.1", "pydexomizer>=0.1", "pyresidfp>=0.17", "numpy>=1.23"]
 
 [project.optional-dependencies]
+# The SIDId scanner CLI and the whole-song HVSC oracle survey.
+survey = ["tqdm>=4", "zstandard>=0.21"]
 dev = [
     "black>=24",
     "pylint>=3",
@@ -40,6 +42,7 @@ dev = [
     "pytest-xdist>=3",
     # Decompress the sidtrace oracle's zstd CSV traces (oracle comparison tests).
     "zstandard>=0.21",
+    "tqdm>=4",
 ]
 
 [project.scripts]
@@ -50,6 +53,8 @@ pysidtracker = "pysidtracker.maincli:main"
 # Pre-cache HVSC tunes into the shared tune cache (CI populates a persisted
 # actions/cache before the suite runs).
 pysid-tune-fetch = "pysidtracker.testing:main"
+# Pure-Python SIDId playroutine identification (bundled sidid.cfg).
+pysidid = "pysidtracker.sidid:main"
 
 [project.entry-points.pytest11]
 # The `hvsc` / `sidtrace_oracle` / `disk_prgs` fixtures ship to every dependent
@@ -65,6 +70,9 @@ Issues = "https://github.com/anarkiwi/pysidtracker/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+pysidtracker = ["data/*"]
 
 [tool.setuptools]
 # The pytest plugin is a standalone top-level module (see [pytest11] above).
