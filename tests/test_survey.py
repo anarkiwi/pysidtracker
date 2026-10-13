@@ -133,7 +133,7 @@ def _expected(nframes):
 def render_exact(data, song, nframes):
     """Fake renderer: the oracle grid after two silent lead-in frames."""
     assert data.startswith(b"PSID") and song == 2
-    grid = np.vstack([np.zeros((2, 25), np.int16), _expected(nframes + survey.LEAD)])
+    grid = np.vstack([np.zeros((2, 25), np.int16), _expected(nframes)])
     grid[:2, 24] = 15
     return grid, {"variant": "test", "nframes": nframes}
 
@@ -157,7 +157,7 @@ def render_crash(data, song, nframes):
 
 def render_short(data, song, nframes):
     """Fake renderer that returns too few frames."""
-    return render_exact(data, song, nframes)[0][:nframes], {}
+    return render_exact(data, song, nframes)[0][: nframes - 1], {}
 
 
 @pytest.fixture(name="survey_tree")
@@ -199,10 +199,13 @@ def test_check_exact(survey_tree):
     row = survey.check(_job(survey_tree, render_exact))
     assert row["verdict"] == "exact" and (row["lead"], row["first_diff"]) == (2, "")
     assert (row["frames"], row["diff_frames"], row["diff_regs"]) == (NFRAMES, 0, "")
-    assert json.loads(row["info"]) == {"variant": "test", "nframes": NFRAMES}
+    assert json.loads(row["info"]) == {
+        "variant": "test",
+        "nframes": NFRAMES + survey.LEAD,
+    }
     assert row["oracle_gated"] and row["library_gated"]
     lib = survey.read_grid(survey_tree[2] / "library" / f"{row['key']}.csv.zst", 40)
-    assert (lib == render_exact(b"PSID", 2, NFRAMES)[0][:40]).all()
+    assert (lib == render_exact(b"PSID", 2, NFRAMES + survey.LEAD)[0][:40]).all()
 
 
 def test_check_differs_and_diff(survey_tree, capsys):

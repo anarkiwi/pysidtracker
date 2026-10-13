@@ -233,7 +233,7 @@ def check(job):
     except (SidtraceUnavailable, OSError, ValueError) as e:
         return dict(row, verdict="oracle_error", error=_err(e))
     try:
-        lib, info = render(Path(sid_path).read_bytes(), song, nframes)
+        lib, info = render(Path(sid_path).read_bytes(), song, nframes + LEAD)
         lib = np.asarray(lib, dtype=np.int16)
         if lib.ndim != 2 or lib.shape[1] != NREGS or len(lib) < nframes + LEAD:
             raise ValueError(f"render grid shape {lib.shape}, need {nframes + LEAD}")

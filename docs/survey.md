@@ -26,10 +26,11 @@ A format package supplies only an importable callable
 def render(data: bytes, song: int, nframes: int) -> tuple[numpy.ndarray, dict]:
 ```
 
-`data` is the `.sid` file, `song` 1-based, and the grid has at least
-`nframes + survey.LEAD` rows of the 25 per-frame SID registers
-(`$D400..$D418`, pulse-width highs masked to a nibble). The dict is recorded as
-the `info` column. Raising `pysidtracker.errors.SidParseError` (or a subclass)
+`data` is the `.sid` file and `song` is 1-based. It returns at least `nframes`
+rows of the 25 per-frame SID registers (`$D400..$D418`, pulse-width highs
+masked to a nibble). `nframes` already includes the `LEAD` frames the
+alignment may shift by, so a renderer needs nothing from `pysidtracker.survey`.
+The dict is recorded as the `info` column. Raising `pysidtracker.errors.SidParseError` (or a subclass)
 means the tune was not recognised; any other exception is a library error.
 
 ## `find`
