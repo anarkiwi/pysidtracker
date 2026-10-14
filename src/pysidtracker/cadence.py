@@ -213,6 +213,8 @@ class _Machine:
         self.events = []
         self.last = {}
         self.handlers = [None]
+        self.frames = [0x1FF]
+        self.opaque = set()
         self.dirty = True
         extra = [0xD000 | b << 4 for b in (header.second_sid, header.third_sid) if b]
         self.mem.subscribe_to_write(
@@ -404,10 +406,15 @@ class _Machine:
         return min(held, key=lambda event: event[0], default=None)
 
     def take(self, nmi: bool) -> None:
-        """Enter an interrupt through the vector the banked-in ROM or RAM gives."""
+        """Enter an interrupt through the vector the banked-in ROM or RAM gives.
+
+        A handler vectored into I/O executes live register values, which only
+        cycle-exact timing reproduces; its source is marked ``opaque``.
+        """
         mpu, ram = self.mpu, self.ram
         self.handlers.append(self.entered(nmi))
         mpu.nmi()
+        self.frames.append(mpu.sp)
         if ram[1] & 2:
             if not nmi:
                 for value in (mpu.a, mpu.x, mpu.y):
@@ -417,6 +424,8 @@ class _Machine:
         else:
             vector = reg.CPU_NMI_VECTOR if nmi else reg.CPU_IRQ_VECTOR
         mpu.pc = ram[vector] | ram[vector + 1] << 8
+        if self.handlers[-1] and self._io() and reg.VIC_BASE <= mpu.pc < _KERNAL_ROM:
+            self.opaque.add(self.handlers[-1][1])
 
     def execute(self, frames: int) -> int:
         """Run until ``frames`` frames after init first idles; return the last cycle."""
@@ -439,11 +448,14 @@ class _Machine:
             if len(handlers) > 1 and ram[1] & 2 and pc >= _KERNAL_ROM:
                 mpu.pc = self.base + _IRQRET + _kernal_exit(pc)
                 continue
-            if ram[pc] == _RTI and len(handlers) > 1:
-                handlers.pop()
-            elif ram[pc] == _BRK:
-                handlers.append(handlers[-1])
+            brk = ram[pc] == _BRK
             mpu.step()
+            if brk:
+                handlers.append(handlers[-1])
+                self.frames.append(mpu.sp)
+            while len(handlers) > 1 and mpu.sp > self.frames[-1]:
+                handlers.pop()
+                self.frames.pop()
             if mpu.pc == pc and mpu.sp == sp:
                 end = min(end, mpu.processorCycles + frames * self.frame)
                 if due is None:
@@ -456,7 +468,8 @@ def _cadence(machine: _Machine, start: int, frames: int) -> Cadence:
     """The :class:`Cadence` of the play source.
 
     That is the source whose raises drive the most distinct SID registers (a
-    sample player drives few), then the one with the most writing raises.
+    sample player drives few), then the one with the most writing raises; an
+    ``opaque`` source (see :meth:`_Machine.take`) is never chosen.
     """
     frame = machine.frame
     ntsc = frame == reg.NTSC_CYCLES_PER_FRAME
@@ -467,7 +480,7 @@ def _cadence(machine: _Machine, start: int, frames: int) -> Cadence:
         calls[src] += bool(wrote)
         recurs[src] += t >= start
     source = max(
-        (s for s in regs if regs[s] and recurs[s] > 1),
+        (s for s in regs if regs[s] and recurs[s] > 1 and s not in machine.opaque),
         key=lambda s: (regs[s].bit_count(), calls[s]),
         default=None,
     )

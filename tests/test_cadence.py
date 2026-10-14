@@ -4,7 +4,7 @@ import pytest
 
 from pysidtracker import Cadence, SidImage, TriggerSource, playroutine_cadence
 from pysidtracker import registers as reg
-from pysidtracker.cadence import _driver_base, _Machine
+from pysidtracker.cadence import _cadence, _driver_base, _Machine
 from pysidtracker.errors import SidParseError
 from pysidtracker.testing import resolve_tune
 
@@ -314,3 +314,33 @@ def test_the_romless_kernal_acknowledges_cia1_only_up_to_ea7e(exit_to, source):
     handler = PLAY_SID[:-1] + bytes((0x4C, exit_to & 0xFF, exit_to >> 8))
     cad = _cad(rsid(image(init_00=init, irq_80=handler)))
     assert cad.source is source
+
+
+def _nmi_tune(target, nmi_exit=RTI):
+    """An RSID NMI timer vectored to ``target``; the handler at ``LOAD + 0x80``
+    bumps ``$D400`` and leaves by ``nmi_exit`` (``$DD0C`` holds an RTI)."""
+    init = sta(0x7F, reg.CIA1_ICR) + latch(PAL // 2 - 1, reg.CIA2_BASE)
+    init += sta(0x40, reg.CIA2_BASE + 0xC) + vector(reg.RAM_NMI_VECTOR_LO, target)
+    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + RTS
+    handler = bytes((0xEE, 0x00, 0xD4)) + ACK_CIA2 + nmi_exit
+    return SidImage.from_bytes(rsid(image(init_00=init, nmi_80=handler)))
+
+
+def _run(tune):
+    machine = _Machine(tune, False, 2_000_000)
+    machine.driver(tune.header, 0, False)
+    machine.execute(4)
+    return machine
+
+
+def test_a_handler_returning_through_io_unwinds_its_frame():
+    tune = _nmi_tune(LOAD + 0x80, bytes((0x4C, 0x0C, 0xDD)))  # JMP $DD0C
+    assert len(_run(tune).handlers) <= 2
+    cad = _cad(tune)
+    assert (cad.source, cad.cycles_per_call) == (TriggerSource.NMI_TIMER, PAL // 2)
+
+
+def test_a_handler_vectored_into_io_is_opaque_and_never_the_play_source():
+    assert _cad(_nmi_tune(LOAD + 0x80)).source == TriggerSource.NMI_TIMER
+    machine = _run(_nmi_tune(reg.CIA1_BASE + 4))
+    assert machine.opaque == {(1, 0)} and _cadence(machine, 0, 4).source is None
