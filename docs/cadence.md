@@ -59,10 +59,17 @@ jennings and raises and takes interrupts as the C64 does:
   NMI is taken on each new edge. With the KERNAL banked in (`$01` bit 1) the
   CPU goes through `$0314` (after the KERNAL's `A`/`X`/`Y` push) or `$0318`,
   else through `$FFFE`/`$FFFA` in RAM. Code that leaves a handler into KERNAL
-  ROM (e.g. `JMP $EA31`) gets the KERNAL's register pull and `RTI`.
+  ROM gets what sidplayfp's ROM-less KERNAL (`SystemROMBanks.h`, NOPs sliding
+  into a few stubs) does: up to `$EA7E` (e.g. `JMP $EA31`) it reads `$DC0D`,
+  acknowledging CIA #1, then pulls the registers and returns; `$FE47` just
+  returns; elsewhere (e.g. `JMP $EA81`, `JMP $FEBC`) it pulls and returns.
 
-Every SID write is attributed to the most recent raise, as the sidtrace
-oracle's rows are. The play source is the one whose raises drive the most
+Every SID write is attributed to the innermost running interrupt handler: each
+taken interrupt pushes the raise it serves (an NMI's own, or for an IRQ the
+earliest raise still asserting the line), each `RTI` pops, and a `BRK` pushes
+the running one. Writes outside every handler (init, a main loop) belong to no
+source. This is how the sidtrace oracle's entry and `rti` rows are read (see
+`docs/oracle-testing.md`). The play source is the one whose raises drive the most
 distinct SID registers, then the one with the most writing raises, so a
 sample player that drives only `$D418` at audio rate does not outvote the
 music routine. A source must raise at least twice in the measured window.
@@ -96,8 +103,9 @@ python -m pysidtracker.cadence_check report .cadence-check/cadence.csv
 ```
 
 The measured source is picked from the trace's SID writes by the same rule
-(each write attributed to the latest raise; among sources raised at least three
-times, most distinct registers, then most writes). Its rate is taken over its raises
+(`play_source`: each write attributed to the innermost running handler; among
+sources raised at least three times, most distinct registers, then most writes).
+Cached traces without `rti` rows are re-rendered. Its rate is taken over its raises
 after the first, which init can hold back. A row agrees when the source matches
 and the predicted calls over the measured span are within one frame's calls of
 the count. Verdicts: `agree`, `rate`, `source`, `unknown` (no predicted source),

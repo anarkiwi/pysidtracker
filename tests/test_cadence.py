@@ -4,7 +4,7 @@ import pytest
 
 from pysidtracker import Cadence, SidImage, TriggerSource, playroutine_cadence
 from pysidtracker import registers as reg
-from pysidtracker.cadence import _driver_base
+from pysidtracker.cadence import _cadence, _driver_base, _Machine
 from pysidtracker.errors import SidParseError
 from pysidtracker.testing import resolve_tune
 
@@ -274,3 +274,73 @@ def test_driver_page_is_the_headers_free_page_else_the_first_free_page():
     assert _driver_base(SidImage.from_bytes(bytes(data))) == 0x2000
     low = build_psid(RTS, 0x0400, 0x0400, 0x0400)
     assert _driver_base(SidImage.from_bytes(low)) == 0x0500
+
+
+def test_nmis_nested_in_a_timer_irq_do_not_take_its_writes():
+    init = sta(0x7F, reg.CIA1_ICR) + latch(PAL - 1)
+    init += sta(0x81, reg.CIA1_ICR) + sta(0x11, reg.CIA1_CRA)
+    init += vector(reg.RAM_IRQ_VECTOR_LO, LOAD + 0x80)
+    init += latch(144, reg.CIA2_BASE) + vector(reg.RAM_NMI_VECTOR_LO, LOAD + 0xF0)
+    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + CLI + RTS
+    delay = bytes((0xA2, 0x30, 0xCA, 0xD0, 0xFD))  # LDX #$30 ; DEX ; BNE *-1
+    music = b"".join(bytes((0xEE, r, 0xD4)) + delay for r in range(7))
+    music += bytes((0xAD, 0x0D, 0xDC, 0x4C, 0x81, 0xEA))  # LDA $DC0D ; JMP $EA81
+    digi = bytes((0xEE, 0x18, 0xD4)) + ACK_CIA2 + RTI
+    cad = _cad(rsid(image(init_00=init, irq_80=music, nmi_F0=digi)))
+    assert (cad.source, cad.cycles_per_call) == (TriggerSource.CIA_TIMER, PAL)
+
+
+def test_a_brk_inside_a_handler_runs_on_its_behalf():
+    init = SEI + sta(0x35, 0x01) + sta(0x7F, reg.CIA1_ICR)
+    init += sta(0x01, reg.VIC_IRQ_ENABLE)
+    init += vector(reg.CPU_IRQ_VECTOR, LOAD + 0x80) + CLI + bytes((0x4C, 0x40, 0x10))
+    pull = bytes((0x68, 0xAA, 0x68)) + RTI  # PLA ; TAX ; PLA ; RTI
+    handler = bytes((0x48, 0x8A, 0x48, 0xBA, 0xBD, 0x03, 0x01, 0x29, 0x10))
+    handler += bytes((0xD0, 0x0C, 0x00, 0xEA, 0xEE, 0x01, 0xD4)) + ACK_VIC + pull
+    brk = bytes((0xEE, 0x00, 0xD4)) + pull  # B set: PHA/TXA/PHA/TSX/LDA $0103,X
+    body = image(init_00=init, idle_40=IDLE, irq_80=handler, brk_97=brk)
+    machine = _Machine(SidImage.from_bytes(rsid(body)), False, 2_000_000)
+    machine.driver(SidImage.from_bytes(rsid(body)).header, 0, False)
+    machine.execute(4)
+    assert {wrote for *_, wrote, _ in machine.events[1:]} == {0b11}
+    assert machine.handlers == [None]
+
+
+@pytest.mark.parametrize(
+    "exit_to,source", [(0xEA31, TriggerSource.CIA_TIMER), (0xEA81, None)]
+)
+def test_the_romless_kernal_acknowledges_cia1_only_up_to_ea7e(exit_to, source):
+    init = latch(PAL - 1) + vector(reg.RAM_IRQ_VECTOR_LO, LOAD + 0x80) + CLI + RTS
+    handler = PLAY_SID[:-1] + bytes((0x4C, exit_to & 0xFF, exit_to >> 8))
+    cad = _cad(rsid(image(init_00=init, irq_80=handler)))
+    assert cad.source is source
+
+
+def _nmi_tune(target, nmi_exit=RTI):
+    """An RSID NMI timer vectored to ``target``; the handler at ``LOAD + 0x80``
+    bumps ``$D400`` and leaves by ``nmi_exit`` (``$DD0C`` holds an RTI)."""
+    init = sta(0x7F, reg.CIA1_ICR) + latch(PAL // 2 - 1, reg.CIA2_BASE)
+    init += sta(0x40, reg.CIA2_BASE + 0xC) + vector(reg.RAM_NMI_VECTOR_LO, target)
+    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + RTS
+    handler = bytes((0xEE, 0x00, 0xD4)) + ACK_CIA2 + nmi_exit
+    return SidImage.from_bytes(rsid(image(init_00=init, nmi_80=handler)))
+
+
+def _run(tune):
+    machine = _Machine(tune, False, 2_000_000)
+    machine.driver(tune.header, 0, False)
+    machine.execute(4)
+    return machine
+
+
+def test_a_handler_returning_through_io_unwinds_its_frame():
+    tune = _nmi_tune(LOAD + 0x80, bytes((0x4C, 0x0C, 0xDD)))  # JMP $DD0C
+    assert len(_run(tune).handlers) <= 2
+    cad = _cad(tune)
+    assert (cad.source, cad.cycles_per_call) == (TriggerSource.NMI_TIMER, PAL // 2)
+
+
+def test_a_recurring_handler_vectored_into_io_makes_the_source_unknown():
+    assert _cad(_nmi_tune(LOAD + 0x80)).source == TriggerSource.NMI_TIMER
+    machine = _run(_nmi_tune(reg.CIA1_BASE + 4))
+    assert machine.opaque == {(1, 0)} and _cadence(machine, 0, 4).source is None

@@ -22,8 +22,9 @@ _MIN_CIA_LATCH = 0x100
 # psiddrv.a65 ``irqjob``/``irqret`` offsets from the relocated driver's first byte.
 _IRQJOB, _IRQRET = 0xA8, 0xBB
 _RET, _EXCEPTION = 0xA0, 0xC4
-_KERNAL_ROM, _KERNAL_NMI = 0xE000, 0xFE47
-_RTI, _I_FLAG = 0x40, 0x04
+# sidplayfp's ROM-less KERNAL slides NOPs up to `NOP $DC0D` at $EA7E (an ack).
+_KERNAL_ROM, _KERNAL_ACK, _KERNAL_NMI = 0xE000, 0xEA7E, 0xFE47
+_BRK, _RTI, _I_FLAG = 0x00, 0x40, 0x04
 _VIC = (-1, 0)
 _RMW = frozenset(
     (0x0E, 0x1E, 0x2E, 0x3E, 0x4E, 0x5E, 0x6E, 0x7E, 0xCE, 0xDE, 0xEE, 0xFE)
@@ -118,6 +119,17 @@ def _driver_base(image: SidImage) -> int:
     return page << 8
 
 
+def _kernal_exit(pc: int) -> int:
+    """The ``irqret`` offset matching where a jump into the ROM-less KERNAL ends.
+
+    Up to ``$EA7E`` it acknowledges CIA #1, pulls and returns (``irqret``),
+    ``$FE47`` saves then restores the registers (``RTI``), else it pulls and returns.
+    """
+    if pc <= _KERNAL_ACK:
+        return 0
+    return 8 if pc == _KERNAL_NMI else 3
+
+
 def _word(value: int) -> bytes:
     return bytes((value & 0xFF, value >> 8))
 
@@ -199,6 +211,10 @@ class _Machine:
         self.vic_enable = self.raster = self.vic_seen = 0
         self.vic_flag = False
         self.events = []
+        self.last = {}
+        self.handlers = [None]
+        self.frames = [0x1FF]
+        self.opaque = set()
         self.dirty = True
         extra = [0xD000 | b << 4 for b in (header.second_sid, header.third_sid) if b]
         self.mem.subscribe_to_write(
@@ -231,8 +247,8 @@ class _Machine:
         return bool(self.ram[1] & 3 and self.ram[1] & 4)
 
     def _sid(self, addr, _value):
-        if self.events and self._io():
-            self.events[-1][2] |= 1 << (addr & 0x1F)
+        if self.handlers[-1] and self._io():
+            self.handlers[-1][2] |= 1 << (addr & 0x1F)
 
     def _write(self, addr, value):
         self.dirty = True
@@ -365,6 +381,7 @@ class _Machine:
             raised = cia.underflow(source[1], when)
         if raised:
             self.events.append([when, source, 0, tag])
+            self.last[source[0]] = self.events[-1]
         return raised
 
     def irq_line(self) -> bool:
@@ -372,10 +389,32 @@ class _Machine:
         cia = self.cias[0]
         return bool(self.vic_flag and self.vic_enable & 1 or cia.flags & cia.mask)
 
+    def entered(self, nmi: bool):
+        """The raise an interrupt entry serves.
+
+        That is the NMI's, else the earliest raise still asserting the IRQ line,
+        as sidtrace's entry rows name it.
+        """
+        if nmi:
+            return self.last.get(1)
+        cia = self.cias[0]
+        lines = (
+            (_VIC[0], self.vic_flag and self.vic_enable & 1),
+            (0, cia.flags & cia.mask),
+        )
+        held = [self.last[k] for k, on in lines if on and k in self.last]
+        return min(held, key=lambda event: event[0], default=None)
+
     def take(self, nmi: bool) -> None:
-        """Enter an interrupt through the vector the banked-in ROM or RAM gives."""
+        """Enter an interrupt through the vector the banked-in ROM or RAM gives.
+
+        A handler vectored into I/O executes live register values, which only
+        cycle-exact timing reproduces; its source is marked ``opaque``.
+        """
         mpu, ram = self.mpu, self.ram
+        self.handlers.append(self.entered(nmi))
         mpu.nmi()
+        self.frames.append(mpu.sp)
         if ram[1] & 2:
             if not nmi:
                 for value in (mpu.a, mpu.x, mpu.y):
@@ -385,11 +424,14 @@ class _Machine:
         else:
             vector = reg.CPU_NMI_VECTOR if nmi else reg.CPU_IRQ_VECTOR
         mpu.pc = ram[vector] | ram[vector + 1] << 8
+        if self.handlers[-1] and self._io() and reg.VIC_BASE <= mpu.pc < _KERNAL_ROM:
+            self.opaque.add(self.handlers[-1][1])
 
     def execute(self, frames: int) -> int:
         """Run until ``frames`` frames after init first idles; return the last cycle."""
         mpu, ram = self.mpu, self.ram
-        end, depth, nmi, due = self.max_cycles, 0, False, None
+        end, nmi, due = self.max_cycles, False, None
+        handlers = self.handlers
         while mpu.processorCycles < end:
             now = mpu.processorCycles
             if self.dirty:
@@ -400,14 +442,20 @@ class _Machine:
                 continue
             if nmi or irq and not mpu.p & _I_FLAG:
                 self.take(nmi)
-                depth, nmi = depth + 1, False
+                nmi = False
                 continue
             pc, sp = mpu.pc, mpu.sp
-            if depth and ram[1] & 2 and pc >= _KERNAL_ROM:
-                mpu.pc = self.base + _IRQRET + (8 if pc == _KERNAL_NMI else 3)
+            if len(handlers) > 1 and ram[1] & 2 and pc >= _KERNAL_ROM:
+                mpu.pc = self.base + _IRQRET + _kernal_exit(pc)
                 continue
-            depth -= depth and ram[pc] == _RTI
+            brk = ram[pc] == _BRK
             mpu.step()
+            if brk:
+                handlers.append(handlers[-1])
+                self.frames.append(mpu.sp)
+            while len(handlers) > 1 and mpu.sp > self.frames[-1]:
+                handlers.pop()
+                self.frames.pop()
             if mpu.pc == pc and mpu.sp == sp:
                 end = min(end, mpu.processorCycles + frames * self.frame)
                 if due is None:
@@ -420,7 +468,8 @@ def _cadence(machine: _Machine, start: int, frames: int) -> Cadence:
     """The :class:`Cadence` of the play source.
 
     That is the source whose raises drive the most distinct SID registers (a
-    sample player drives few), then the one with the most writing raises.
+    sample player drives few), then the one with the most writing raises; any
+    recurring ``opaque`` source (see :meth:`_Machine.take`) makes it unknown.
     """
     frame = machine.frame
     ntsc = frame == reg.NTSC_CYCLES_PER_FRAME
@@ -430,11 +479,14 @@ def _cadence(machine: _Machine, start: int, frames: int) -> Cadence:
         regs[src] |= wrote
         calls[src] += bool(wrote)
         recurs[src] += t >= start
+    live = [s for s in regs if recurs[s] > 1]
     source = max(
-        (s for s in regs if regs[s] and recurs[s] > 1),
+        (s for s in live if regs[s]),
         key=lambda s: (regs[s].bit_count(), calls[s]),
         default=None,
     )
+    if machine.opaque.intersection(live):
+        source = None
     if source is None:
         return Cadence(frame, None, clock_hz)
     steady = [(t, tag) for t, src, _, tag in machine.events if src == source]

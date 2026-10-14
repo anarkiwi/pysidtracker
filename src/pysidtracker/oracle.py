@@ -56,6 +56,11 @@ SIDTRACE_COLUMNS = (
     "value",
 )
 
+# Interrupt raise rows (sidtrace >= v0.5.0), and the source each handler-entry
+# row (sidtrace >= v0.6.0) enters.
+RAISE_SOURCES = ("video_irq", "cia_irq", "nmi")
+ENTRY_SOURCES = {f"{s}_entry": s for s in RAISE_SOURCES}
+
 # The libsidplayfp PSID driver (``psiddrv.a65``) writes maximum volume to $D418
 # before running a tune's init, so a tune that never sets volume itself is still
 # audible. Mirror that cold-start default when rendering a reference grid.
@@ -276,12 +281,11 @@ def aligned_match(
 
 
 class SidtraceRow(NamedTuple):
-    """One sidtrace CSV row: a changed SID register write or an interrupt raise.
+    """One sidtrace CSV row: a changed SID register write or an interrupt event.
 
-    Interrupt-delta fields are ``None`` until their source first fires. A write
-    has ``chip`` (SID index), ``reg`` (offset ``0..31``) and an int ``value``; an
-    interrupt row (sidtrace >= v0.5.0) has ``chip``/``reg`` ``None`` and
-    ``value`` ``"nmi"``, ``"video_irq"`` or ``"cia_irq"``.
+    A write has int ``chip``, ``reg`` and ``value``; an interrupt row has ``chip``
+    and ``reg`` ``None`` and ``value`` a raise, a ``*_entry`` or ``"rti"`` (see
+    ``docs/oracle-testing.md``). Delta fields are ``None`` until their source fires.
     """
 
     cycle: int
@@ -327,39 +331,79 @@ def read_sidtrace(path) -> List[SidtraceRow]:
     return rows
 
 
-def _raise_cycle(row: SidtraceRow) -> Optional[int]:
-    """The cycle the interrupt that made ``row``'s write was raised, if any."""
-    since = (
-        row.since_video_irq if row.since_video_irq is not None else row.since_cia_irq
+def nested(rows: Sequence[SidtraceRow]) -> bool:
+    """Whether the trace logs RTIs (sidtrace >= v0.6.0), so handler nesting is known."""
+    return any(r.value == "rti" and r.chip is None for r in rows)
+
+
+def handler_sources(rows: Sequence[SidtraceRow]) -> List[Optional[str]]:
+    """The interrupt source whose handler executes each row, ``None`` outside any.
+
+    Each ``*_entry`` pushes its source (``brk_entry`` the running one) and each
+    ``rti`` pops, so a write belongs to the innermost running handler.
+    ``ValueError`` if the trace has no ``rti`` rows (re-render it).
+    """
+    if not nested(rows):
+        raise ValueError("sidtrace trace has no rti rows: re-render it")
+    stack: List[Optional[str]] = [None]
+    out: List[Optional[str]] = []
+    for row in rows:
+        if row.chip is None:
+            if row.value == "rti":
+                if len(stack) > 1:
+                    stack.pop()
+            elif row.value == "brk_entry":
+                stack.append(stack[-1])
+            elif row.value in ENTRY_SOURCES:
+                stack.append(ENTRY_SOURCES[row.value])
+        out.append(stack[-1])
+    return out
+
+
+def play_source(
+    rows: Sequence[SidtraceRow], chip: Optional[int] = None, min_raises: int = 1
+) -> Optional[str]:
+    """The source whose handlers drive the most distinct SID registers, then writes.
+
+    Only writes to ``chip`` count (every chip when ``None``), and only sources
+    raised at least ``min_raises`` times compete; ``None`` if none wrote.
+    """
+    raised = Counter(r.value for r in rows if r.chip is None)
+    regs: Dict[str, set] = {s: set() for s in RAISE_SOURCES}
+    writes: Counter = Counter()
+    for row, source in zip(rows, handler_sources(rows)):
+        if source and row.chip is not None and chip in (None, row.chip):
+            regs[source].add((row.chip, row.reg))
+            writes[source] += 1
+    return max(
+        (s for s in RAISE_SOURCES if writes[s] and raised[s] >= min_raises),
+        key=lambda s: (len(regs[s]), writes[s]),
+        default=None,
     )
-    return None if since is None else row.cycle - since
+
+
+def raise_cycles(rows: Sequence[SidtraceRow], source: str) -> List[int]:
+    """The cycles ``source`` was raised, from its interrupt rows."""
+    return [r.cycle for r in rows if r.chip is None and r.value == source]
 
 
 def _raises(rows: Sequence[SidtraceRow], chip: int = 0) -> List[int]:
-    """Sorted raise cycles of the interrupt source timing ``chip``'s writes.
+    """Raise cycles of the :func:`play_source` of ``chip``, else the most raised.
 
-    The source is the one the writes' deltas refer to (else the most frequent);
-    raises come from its interrupt rows, so calls that wrote nothing count too.
+    ``ValueError`` without interrupt or ``rti`` rows.
     """
-    irqs = Counter(r.value for r in rows if r.chip is None)
-    if not irqs:
+    raised = Counter(r.value for r in rows if r.value in RAISE_SOURCES)
+    if not raised:
         raise ValueError("sidtrace trace has no interrupt rows: re-render it")
-    timed = [r for r in rows if r.chip == chip and _raise_cycle(r) is not None]
-    source = (
-        ("video_irq" if timed[0].since_video_irq is not None else "cia_irq")
-        if timed
-        else irqs.most_common(1)[0][0]
-    )
-    return sorted(
-        {_raise_cycle(r) for r in timed}
-        | {r.cycle for r in rows if r.chip is None and r.value == source}
-    )
+    source = play_source(rows, chip) or raised.most_common(1)[0][0]
+    return raise_cycles(rows, source)
 
 
 def sidtrace_cadence(rows: Sequence[SidtraceRow], *, chip: int = 0) -> Optional[int]:
     """The play cadence (cycles per call): the median gap between :func:`_raises`.
 
-    ``None`` with fewer than two raises; ``ValueError`` without interrupt rows.
+    ``None`` with fewer than two raises; ``ValueError`` without interrupt or
+    ``rti`` rows.
     """
     raises = _raises(rows, chip)
     diffs = [b - a for a, b in zip(raises, raises[1:])]
@@ -420,6 +464,20 @@ def sidtrace_image_id(image: str = SIDTRACE_IMAGE, docker: str = "docker"):
     except FileNotFoundError:
         pass
     return None
+
+
+def cached_sidtrace(tune_path, csv_path, *, force: bool = False, **kw):
+    """The rows of the trace cached at ``csv_path``, rendered when needed.
+
+    :func:`run_sidtrace` (``kw``) renders it when missing, ``force``d or without
+    ``rti`` rows (sidtrace < v0.6.0).
+    """
+    csv_path = Path(csv_path)
+    rows = None if force or not csv_path.exists() else read_sidtrace(csv_path)
+    if rows is None or not nested(rows):
+        run_sidtrace(tune_path, csv_path, **kw)
+        rows = read_sidtrace(csv_path)
+    return rows
 
 
 def run_sidtrace(

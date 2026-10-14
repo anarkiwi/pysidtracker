@@ -16,39 +16,47 @@ from pysidtracker import (
     sidtrace_cadence,
     sidtrace_grid,
 )
-from pysidtracker import oracle, registers, testing
+from pysidtracker import oracle, registers
 from pysidtracker.testing import make_oracle_fixtures, oracle_grid
 
-from .helpers import build_psid
+from .helpers import build_psid, event, handled
 
 _HEADER = ",".join(oracle.SIDTRACE_COLUMNS)
 
-# A minimal CSV: a pre-IRQ volume write, then one reg-0 write per CIA raise.
+# A minimal CSV: a pre-IRQ volume write, then one handled CIA raise per reg-0 write.
 _CSV = (
     f"{_HEADER}\n"
     "100,,,,0,24,15\n"
     "19706,,,0,,,cia_irq\n"
+    "19713,,,7,,,cia_irq_entry\n"
     "19756,,,50,0,0,10\n"
+    "19800,,,94,,,rti\n"
     "39352,,,0,,,cia_irq\n"
+    "39359,,,7,,,cia_irq_entry\n"
     "39412,,,60,0,0,20\n"
+    "39450,,,98,,,rti\n"
     "59013,,,0,,,cia_irq\n"
+    "59020,,,7,,,cia_irq_entry\n"
     "59068,,,55,0,0,30\n"
+    "59100,,,87,,,rti\n"
 )
 
 
 def _irqs(rows):
-    """``rows`` plus an interrupt row at each write's raise cycle."""
-    irq = {
-        (r.cycle - r.since_video_irq, "video_irq")
-        for r in rows
-        if r.since_video_irq is not None
-    } | {
-        (r.cycle - r.since_cia_irq, "cia_irq")
-        for r in rows
-        if r.since_video_irq is None and r.since_cia_irq is not None
-    }
-    out = rows + [SidtraceRow(at, None, None, None, None, None, k) for at, k in irq]
-    return sorted(out, key=lambda r: r.cycle)
+    """``rows`` with each timed write's interrupt raised, entered and returned from.
+
+    The handler returns after the last write timed by its raise.
+    """
+    ends = {}
+    for r in rows:
+        since = r.since_video_irq if r.since_video_irq is not None else r.since_cia_irq
+        if since is not None:
+            key = (r.cycle - since, "video_irq" if r.since_video_irq else "cia_irq")
+            ends[key] = max(ends.get(key, 0), r.cycle)
+    out = list(rows)
+    for (at, source), end in ends.items():
+        out += [event(at, source), event(at, f"{source}_entry"), event(end, "rti")]
+    return sorted(out, key=lambda r: (r.cycle, r.value == "rti", r.chip is not None))
 
 
 # Three clean CIA frames (raise cycles 19656, 39312, 58968 -> cadence 19656).
@@ -71,8 +79,10 @@ def test_read_sidtrace_plain_csv(tmp_path):
     rows = read_sidtrace(path)
     assert rows[0] == SidtraceRow(100, None, None, None, 0, 24, 15)
     assert rows[1] == SidtraceRow(19706, None, None, 0, None, None, "cia_irq")
-    assert rows[2] == SidtraceRow(19756, None, None, 50, 0, 0, 10)
-    assert len(rows) == 7
+    assert rows[2] == SidtraceRow(19713, None, None, 7, None, None, "cia_irq_entry")
+    assert rows[3] == SidtraceRow(19756, None, None, 50, 0, 0, 10)
+    assert rows[4] == SidtraceRow(19800, None, None, 94, None, None, "rti")
+    assert len(rows) == 13
 
 
 def test_read_sidtrace_zst_matches_plain(tmp_path):
@@ -227,22 +237,25 @@ def test_oracle_grid_uses_cache(tmp_path, monkeypatch):
     def _no_render(*_a, **_k):
         raise AssertionError("should not re-render on a cache hit")
 
-    monkeypatch.setattr(testing, "run_sidtrace", _no_render)
+    monkeypatch.setattr(oracle, "run_sidtrace", _no_render)
     grid = oracle_grid(tune, oracle_cache=cache)
     assert grid == sidtrace_grid(read_sidtrace(cache / "song.csv.zst"))
 
 
-def test_oracle_grid_rerenders_trace_without_interrupt_rows(tmp_path, monkeypatch):
+@pytest.mark.parametrize("raises", [False, True])
+def test_oracle_grid_rerenders_trace_without_rti_rows(tmp_path, monkeypatch, raises):
     cache = tmp_path / "csv"
     cache.mkdir()
-    stale = "\n".join(l for l in _CSV.splitlines() if not l.endswith("irq")) + "\n"
+    head, *body = _CSV.splitlines()
+    kept = [l for l in body if l[-1].isdigit() or (raises and l.endswith("irq"))]
+    stale = "\n".join([head] + kept) + "\n"
     (cache / "song.csv.zst").write_bytes(_zst(stale))
     monkeypatch.setattr(oracle.subprocess, "run", _fake_docker(_CSV))
     tune = tmp_path / "song.sid"
     tune.write_bytes(b"PSID" + b"\x00" * 60)
     grid = oracle_grid(tune, oracle_cache=cache)
     rows = read_sidtrace(cache / "song.csv.zst")
-    assert any(r.chip is None for r in rows) and grid == sidtrace_grid(rows)
+    assert oracle.nested(rows) and grid == sidtrace_grid(rows)
 
 
 def test_oracle_grid_renders_on_miss(tmp_path, monkeypatch):
@@ -267,17 +280,26 @@ def _jch_rows():
     for n in range(1, 13):
         at = n * frame + 64
         rows.append(SidtraceRow(at, None, 0, None, None, None, "video_irq"))
+        rows.append(SidtraceRow(at + 7, None, 7, None, None, None, "video_irq_entry"))
         if n % 3 == 0:
             rows.append(SidtraceRow(at + 40, None, 40, None, 0, 0, n))
+        rows.append(SidtraceRow(at + 60, None, 60, None, None, None, "rti"))
     return rows
 
 
 def test_read_sidtrace_interrupt_rows(tmp_path):
     path = tmp_path / "t.csv"
-    path.write_text(_HEADER + "\n100,,0,,,,video_irq\n140,,40,,0,24,15\n")
+    path.write_text(
+        _HEADER + "\n100,,0,,,,video_irq\n107,,7,,,,video_irq_entry\n"
+        "140,,40,,0,24,15\n141,,41,,,,brk_entry\n150,,50,,,,rti\n160,,60,,,,rti\n"
+    )
     assert read_sidtrace(path) == [
         SidtraceRow(100, None, 0, None, None, None, "video_irq"),
+        SidtraceRow(107, None, 7, None, None, None, "video_irq_entry"),
         SidtraceRow(140, None, 40, None, 0, 24, 15),
+        SidtraceRow(141, None, 41, None, None, None, "brk_entry"),
+        SidtraceRow(150, None, 50, None, None, None, "rti"),
+        SidtraceRow(160, None, 60, None, None, None, "rti"),
     ]
 
 
@@ -295,3 +317,67 @@ def test_interrupt_rows_ignore_other_source():
     ]
     rows.sort(key=lambda r: r.cycle)
     assert sidtrace_cadence(rows) == registers.PAL_CYCLES_PER_FRAME
+
+
+def _write(cycle, register, chip=0):
+    return SidtraceRow(cycle, None, None, None, chip, register, 1)
+
+
+def test_handler_sources_follow_entry_and_rti_nesting():
+    rows = [
+        _write(1, 0),
+        event(10, "cia_irq"),
+        event(17, "cia_irq_entry"),
+        _write(20, 1),
+        event(30, "nmi"),
+        event(37, "nmi_entry"),
+        _write(40, 24),
+        event(50, "rti"),
+        _write(55, 2),
+        event(60, "brk_entry"),
+        _write(65, 3),
+        event(70, "rti"),
+        _write(75, 4),
+        event(80, "rti"),
+        event(85, "rti"),
+        _write(90, 5),
+    ]
+    owners = {
+        r.reg: s for r, s in zip(rows, oracle.handler_sources(rows)) if r.chip == 0
+    }
+    assert owners == {
+        0: None,
+        1: "cia_irq",
+        24: "nmi",
+        2: "cia_irq",
+        3: "cia_irq",
+        4: "cia_irq",
+        5: None,
+    }
+
+
+def test_handler_sources_need_rti_rows():
+    with pytest.raises(ValueError, match="rti rows"):
+        oracle.handler_sources([event(10, "cia_irq"), event(17, "cia_irq_entry")])
+
+
+def test_play_source_counts_the_chip_and_raise_floor():
+    cia = handled("cia_irq", 100, [(110, 0, 1)])
+    cia[-1:-1] = [_write(111 + r, r, chip=1) for r in range(3)]
+    rows = handled("nmi", 10, [(20, 0, 1), (21, 1, 1)]) + cia
+    rows += [event(200, "cia_irq"), event(300, "cia_irq")]
+    assert oracle.play_source(rows) == "cia_irq"
+    assert oracle.play_source(rows, chip=0) == "nmi"
+    assert oracle.play_source(rows, chip=0, min_raises=2) == "cia_irq"
+    assert oracle.play_source(rows, min_raises=4) is None
+    assert oracle.raise_cycles(rows, "cia_irq") == [100, 200, 300]
+
+
+def test_cached_sidtrace_force_rerenders(tmp_path, monkeypatch):
+    cache = tmp_path / "song.csv.zst"
+    cache.write_bytes(_zst(_CSV.replace("15\n", "14\n", 1)))
+    monkeypatch.setattr(oracle.subprocess, "run", _fake_docker(_CSV))
+    tune = tmp_path / "song.sid"
+    tune.write_bytes(b"PSID" + b"\x00" * 60)
+    assert oracle.cached_sidtrace(tune, cache)[0].value == 14
+    assert oracle.cached_sidtrace(tune, cache, force=True)[0].value == 15

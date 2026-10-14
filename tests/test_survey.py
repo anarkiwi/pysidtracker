@@ -118,9 +118,11 @@ def _trace_csv():
     for k in range(NFRAMES - 5):
         at = 1000 + k * CPF + 40
         lines.append(f"{at - 40},,0,,,,video_irq")
+        lines.append(f"{at - 33},,7,,,,video_irq_entry")
         lines.append(f"{at},,40,,0,0,{k}")
         if k == 2:
             lines.append(f"{at + 20},,60,,0,4,65")
+        lines.append(f"{at + 30},,70,,,,rti")
     return "\n".join(lines) + "\n"
 
 
@@ -257,7 +259,7 @@ def test_check_renders_oracle_once(survey_tree, monkeypatch):
         calls.append(kw)
         out.write_bytes(trace)
 
-    monkeypatch.setattr(survey, "run_sidtrace", _render)
+    monkeypatch.setattr(oracle, "run_sidtrace", _render)
     assert survey.check(_job(survey_tree, render_exact))["verdict"] == "exact"
     assert survey.check(_job(survey_tree, render_exact))["verdict"] == "exact"
     assert len(calls) == 1
@@ -268,7 +270,7 @@ def test_check_renders_oracle_once(survey_tree, monkeypatch):
     def _fail(*_a, **_k):
         raise SidtraceUnavailable("no docker")
 
-    monkeypatch.setattr(survey, "run_sidtrace", _fail)
+    monkeypatch.setattr(oracle, "run_sidtrace", _fail)
     cached.unlink()
     row = survey.check(_job(survey_tree, render_exact))
     assert row["verdict"] == "oracle_error" and "no docker" in row["error"]
@@ -417,3 +419,27 @@ def test_check_render_timeout(survey_tree):
     assert row["verdict"] == "library_error"
     assert row["error"] == "TimeoutError: render exceeded 0.2s"
     assert survey.check(_job(survey_tree, render_exact, 5))["verdict"] == "exact"
+
+
+def test_oracle_cache_stamp_without_row_kinds_is_stale(survey_tree):
+    work = survey_tree[2]
+    stamp = {"image": "sha256:a", "args": survey.ORACLE_ARGS}
+    (work / "oracle" / "STAMP").write_text(json.dumps(stamp), "utf-8")
+    assert not list(survey.oracle_cache(work).glob("*.csv.zst"))
+
+
+def test_check_rerenders_a_cached_trace_without_rti_rows(survey_tree, monkeypatch):
+    _, _, work, tune = survey_tree
+    cached = work / "oracle" / f"{tune['md5']}_2.csv.zst"
+    lines = _trace_csv().splitlines()
+    stale = "\n".join(l for l in lines if not l.endswith(("entry", "rti"))) + "\n"
+    cached.write_bytes(zstandard.ZstdCompressor().compress(stale.encode()))
+    calls = []
+
+    def _render(_sid_path, out, **kw):
+        calls.append(kw)
+        out.write_bytes(zstandard.ZstdCompressor().compress(_trace_csv().encode()))
+
+    monkeypatch.setattr(oracle, "run_sidtrace", _render)
+    assert survey.check(_job(survey_tree, render_exact))["verdict"] == "exact"
+    assert len(calls) == 1

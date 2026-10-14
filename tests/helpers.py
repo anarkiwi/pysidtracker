@@ -2,6 +2,8 @@
 
 import struct
 
+from pysidtracker.oracle import SidtraceRow
+
 DATA_OFFSET = 0x7C
 
 
@@ -68,3 +70,34 @@ def store_sig(sig, addr):
 
 
 RTS_ONLY = bytes([0x60])
+
+
+def event(cycle, value):
+    """A sidtrace interrupt row (raise, ``*_entry`` or ``rti``) at ``cycle``."""
+    return SidtraceRow(cycle, None, None, None, None, None, value)
+
+
+def handled(source, at, writes=(), entry=7):
+    """sidtrace rows of one ``source`` interrupt raised at ``at`` and handled.
+
+    The handler is entered ``entry`` cycles later, makes ``writes`` (``(cycle,
+    reg, value)`` on chip 0) and returns one cycle after the last.
+    """
+    end = max([at + entry] + [w[0] for w in writes]) + 1
+    return [
+        event(at, source),
+        event(at + entry, f"{source}_entry"),
+        *(SidtraceRow(c, None, None, None, 0, r, v) for c, r, v in writes),
+        event(end, "rti"),
+    ]
+
+
+def trace_csv(rows):
+    """``rows`` as sidtrace CSV text (empty delta columns)."""
+    lines = ["cycle,cycle_since_nmi,cycle_since_video_irq,cycle_since_cia_irq"]
+    lines[0] += ",chip,reg,value"
+    for r in rows:
+        chip = "" if r.chip is None else r.chip
+        reg = "" if r.reg is None else r.reg
+        lines.append(f"{r.cycle},,,,{chip},{reg},{r.value}")
+    return "\n".join(lines) + "\n"
