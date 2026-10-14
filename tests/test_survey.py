@@ -12,9 +12,9 @@ import zstandard
 
 from pysidtracker import oracle, registers, survey
 from pysidtracker.errors import SidFormatError
-from pysidtracker.oracle import SIDTRACE_COLUMNS, SidtraceUnavailable
+from pysidtracker.oracle import SIDTRACE_COLUMNS, SidtraceRow, SidtraceUnavailable
 
-from .helpers import build_psid
+from .helpers import build_psid, event, trace_csv
 
 CFG = """Other_Player\r
 A9 00 8D END\r
@@ -124,6 +124,17 @@ def _trace_csv():
             lines.append(f"{at + 20},,60,,0,4,65")
         lines.append(f"{at + 30},,70,,,,rti")
     return "\n".join(lines) + "\n"
+
+
+def _never_returns_csv():
+    """A never-returning main loop: each call raises and the tune writes, but the
+    I flag is set so the raised IRQ is never taken -- no entry, no ``rti``."""
+    rows = [SidtraceRow(100, None, None, None, 0, 24, 15)]
+    for k in range(NFRAMES - 5):
+        at = 1000 + k * CPF + 40
+        rows.append(event(at - 40, "cia_irq"))
+        rows.append(SidtraceRow(at, None, None, None, 0, 0, k))
+    return trace_csv(rows)
 
 
 def _expected(nframes):
@@ -276,6 +287,30 @@ def test_check_renders_oracle_once(survey_tree, monkeypatch):
     assert row["verdict"] == "oracle_error" and "no docker" in row["error"]
 
 
+def test_oracle_frames_never_returning_trace(survey_tree):
+    # A trace that raises but never ``rti``s is valid, not unplayable.
+    _, _, work, tune = survey_tree
+    ocsv = work / "oracle" / f"{tune['md5']}_2.csv.zst"
+    ocsv.write_bytes(zstandard.ZstdCompressor().compress(_never_returns_csv().encode()))
+    nframes, grid = survey.oracle_frames(ocsv, SECONDS, "PAL")
+    assert nframes == NFRAMES and grid.shape == (NFRAMES, survey.NREGS)
+
+
+def test_check_reuses_never_returning_trace(survey_tree, monkeypatch):
+    # The cached never-returning trace is a verdict, not an ``oracle_error``, and
+    # is never re-rendered (re-rendering cannot add an ``rti``).
+    _, _, work, tune = survey_tree
+    ocsv = work / "oracle" / f"{tune['md5']}_2.csv.zst"
+    ocsv.write_bytes(zstandard.ZstdCompressor().compress(_never_returns_csv().encode()))
+
+    def _no_render(*_a, **_k):
+        raise AssertionError("a never-returning trace must be reused, not re-rendered")
+
+    monkeypatch.setattr(oracle, "run_sidtrace", _no_render)
+    row = survey.check(_job(survey_tree, render_exact))
+    assert row["verdict"] in ("exact", "differs")
+
+
 def test_run_sidtrace_song_and_user(tmp_path, monkeypatch):
     seen = []
 
@@ -426,23 +461,6 @@ def test_oracle_cache_stamp_without_row_kinds_is_stale(survey_tree):
     stamp = {"image": "sha256:a", "args": survey.ORACLE_ARGS}
     (work / "oracle" / "STAMP").write_text(json.dumps(stamp), "utf-8")
     assert not list(survey.oracle_cache(work).glob("*.csv.zst"))
-
-
-def test_check_rerenders_a_cached_trace_without_rti_rows(survey_tree, monkeypatch):
-    _, _, work, tune = survey_tree
-    cached = work / "oracle" / f"{tune['md5']}_2.csv.zst"
-    lines = _trace_csv().splitlines()
-    stale = "\n".join(l for l in lines if not l.endswith(("entry", "rti"))) + "\n"
-    cached.write_bytes(zstandard.ZstdCompressor().compress(stale.encode()))
-    calls = []
-
-    def _render(_sid_path, out, **kw):
-        calls.append(kw)
-        out.write_bytes(zstandard.ZstdCompressor().compress(_trace_csv().encode()))
-
-    monkeypatch.setattr(oracle, "run_sidtrace", _render)
-    assert survey.check(_job(survey_tree, render_exact))["verdict"] == "exact"
-    assert len(calls) == 1
 
 
 def render_frame0(data, song, nframes):

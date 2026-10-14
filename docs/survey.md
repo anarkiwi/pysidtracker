@@ -54,8 +54,10 @@ oracle frames are the player's actual calls, including calls that write
 nothing) and under the renderer, caching both as zstd register CSVs keyed
 `<md5>_<song>` in `oracle/` and
 `library/` under `--work`. Cached oracle traces are reused while `oracle/STAMP`
-(the sidtrace image id, arguments and logged row kinds) matches and they have `rti`
-rows; otherwise they are re-rendered. `results.csv`:
+(the sidtrace image id, arguments and logged row kinds) matches; a change of sidtrace
+wipes and re-renders them. A valid trace has no `rti` rows only when its handler never
+returned (a main loop that set the I flag), and that is reused, not re-rendered.
+`results.csv`:
 
 | column | meaning |
 | --- | --- |

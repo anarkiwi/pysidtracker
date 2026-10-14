@@ -242,20 +242,41 @@ def test_oracle_grid_uses_cache(tmp_path, monkeypatch):
     assert grid == sidtrace_grid(read_sidtrace(cache / "song.csv.zst"))
 
 
-@pytest.mark.parametrize("raises", [False, True])
-def test_oracle_grid_rerenders_trace_without_rti_rows(tmp_path, monkeypatch, raises):
+def test_oracle_grid_reuses_a_trace_without_rti_rows(tmp_path, monkeypatch):
+    # A raise with entry but no `rti` is a valid never-returning tune, not a
+    # stale trace: it is reused, never re-rendered (which cannot add an `rti`).
     cache = tmp_path / "csv"
     cache.mkdir()
     head, *body = _CSV.splitlines()
-    kept = [l for l in body if l[-1].isdigit() or (raises and l.endswith("irq"))]
+    kept = [
+        l for l in body if l[-1].isdigit() or l.endswith("irq") or l.endswith("entry")
+    ]
     stale = "\n".join([head] + kept) + "\n"
     (cache / "song.csv.zst").write_bytes(_zst(stale))
-    monkeypatch.setattr(oracle.subprocess, "run", _fake_docker(_CSV))
     tune = tmp_path / "song.sid"
     tune.write_bytes(b"PSID" + b"\x00" * 60)
+
+    def _no_render(*_a, **_k):
+        raise AssertionError("a never-returning trace must be reused, not re-rendered")
+
+    monkeypatch.setattr(oracle.subprocess, "run", _no_render)
     grid = oracle_grid(tune, oracle_cache=cache)
     rows = read_sidtrace(cache / "song.csv.zst")
-    assert oracle.nested(rows) and grid == sidtrace_grid(rows)
+    assert not oracle.nested(rows)
+    assert grid == sidtrace_grid(rows)
+
+
+def test_oracle_grid_still_raises_without_interrupt_rows(tmp_path):
+    # A trace with no interrupt at all is unplayable, not merely un-nested.
+    cache = tmp_path / "csv"
+    cache.mkdir()
+    head, *body = _CSV.splitlines()
+    writes = "\n".join([head] + [l for l in body if l[-1].isdigit()]) + "\n"
+    (cache / "song.csv.zst").write_bytes(_zst(writes))
+    tune = tmp_path / "song.sid"
+    tune.write_bytes(b"PSID" + b"\x00" * 60)
+    with pytest.raises(ValueError, match="no interrupt rows"):
+        oracle_grid(tune, oracle_cache=cache)
 
 
 def test_oracle_grid_renders_on_miss(tmp_path, monkeypatch):
@@ -356,9 +377,17 @@ def test_handler_sources_follow_entry_and_rti_nesting():
     }
 
 
-def test_handler_sources_need_rti_rows():
-    with pytest.raises(ValueError, match="rti rows"):
-        oracle.handler_sources([event(10, "cia_irq"), event(17, "cia_irq_entry")])
+def test_handler_sources_unknown_without_rti_rows():
+    # A handler that never returned leaves the source of every row unknown.
+    rows = [
+        event(10, "cia_irq"),
+        event(17, "cia_irq_entry"),
+        _write(20, 0),
+        _write(30, 1),
+    ]
+    assert oracle.handler_sources(rows) == [None] * len(rows)
+    assert oracle.play_source(rows) is None
+    assert oracle.play_source(rows, min_raises=3) is None
 
 
 def test_play_source_counts_the_chip_and_raise_floor():

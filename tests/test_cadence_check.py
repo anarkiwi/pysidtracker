@@ -84,9 +84,11 @@ def test_a_write_outside_any_handler_has_no_source():
     assert source is None and not len(raises)
 
 
-def test_a_trace_without_rti_rows_must_be_rerendered():
-    with pytest.raises(ValueError, match="rti"):
-        cc.interrupt_cadence([event(5, "cia_irq")])
+def test_a_trace_without_rti_rows_is_an_unknown_source():
+    # A never-returning handler is a valid trace, not an error to re-render.
+    source, raises = cc.interrupt_cadence([event(5, "cia_irq")])
+    assert source is None and len(raises) == 0
+    assert cc.measure([event(5, "cia_irq")], PAL) == {"meas_source": "", "raises": 0}
 
 
 def test_measure_drops_the_first_raise_held_by_init():

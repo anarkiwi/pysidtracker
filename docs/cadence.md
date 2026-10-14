@@ -104,12 +104,13 @@ python -m pysidtracker.cadence_check report .cadence-check/cadence.csv
 
 The measured source is picked from the trace's SID writes by the same rule
 (`play_source`: each write attributed to the innermost running handler; among
-sources raised at least three times, most distinct registers, then most writes).
-Cached traces without `rti` rows are re-rendered. Its rate is taken over its raises
-after the first, which init can hold back. A row agrees when the source matches
-and the predicted calls over the measured span are within one frame's calls of
-the count. Verdicts: `agree`, `rate`, `source`, `unknown` (no predicted source),
-`no_raises`, `oracle_error`, `cadence_error`.
+sources raised at least three times, most distinct registers, then most writes). A
+trace with no `rti` rows (a handler that never returned) has no known source, so its
+`meas_source` is empty and its rate is unmeasured, grading `no_raises`. Its rate is
+otherwise taken over its raises after the first, which init can hold back. A row
+agrees when the source matches and the predicted calls over the measured span are
+within one frame's calls of the count. Verdicts: `agree`, `rate`, `source`, `unknown`
+(no predicted source), `no_raises`, `oracle_error`, `cadence_error`.
 
 ## Measured cadence from the interrupt host
 
