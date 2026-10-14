@@ -2,7 +2,8 @@
 
 ``find`` lists tunes by SIDId signature, ``run`` compares every subtune's oracle
 and ``module:function`` renderer grids, ``report`` tallies, ``diff`` shows frames,
-``triage`` classifies first differences and renderer ``info`` exact rates.
+``triage`` classifies first differences and renderer ``info`` exact rates,
+``leads`` tabulates every alignment lead's mismatches.
 """
 
 import argparse
@@ -40,6 +41,7 @@ from .oracle import (
 from .sidid import identify, sidid_signatures
 
 LEAD = 8
+NEAR = 3
 NREGS = registers.SID_REG_COUNT
 VOICE_ROLES = ("freq", "freq", "pw", "pw", "ctrl", "ad", "sr")
 GATE_COLS = [off + registers.CTRL for off in registers.SID_VOICE_OFFSET]
@@ -58,7 +60,8 @@ ORACLE_ARGS = ("-f8000",)
 ORACLE_ROWS = ("raise", "entry", "rti")
 THREAD_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
 TRIAGE_FIELDS = ["key", "path", "player", "song", "first_diff", "when", "kind"]
-TRIAGE_FIELDS += ["roles", "diffs"]
+TRIAGE_FIELDS += ["roles", "diffs", "min_lead", "min_bad", "min_first", "min_regs"]
+LEAD_FIELDS = ["key", "path", "song", "frames", "lead", "first_diff", "bad", "regs"]
 TUNE_FIELDS = ["path", "md5", "player", "songs", "clock", "lengths"]
 RESULT_FIELDS = [
     "key",
@@ -72,6 +75,10 @@ RESULT_FIELDS = [
     "first_diff",
     "diff_frames",
     "diff_regs",
+    "min_lead",
+    "min_bad",
+    "min_first",
+    "min_regs",
     "info",
     "oracle_gated",
     "library_gated",
@@ -196,15 +203,69 @@ def aligned(oracle, lib, lead):
     return oracle[-lead:], lib[: len(oracle) + lead]
 
 
+def scan_leads(oracle, lib):
+    """Mismatches of ``lib`` against ``oracle`` at every lead, in ``|lead|`` order.
+
+    Returns ``(leads, ne, size, first, nbad)``: ``ne[i, f, r]`` is whether register
+    ``r`` differs on aligned frame ``f`` at ``leads[i]`` (False past that lead's
+    ``size[i]`` aligned frames), ``first[i]`` the first bad frame (``size[i]``
+    when none) and ``nbad[i]`` the count of bad frames.
+    """
+    n = len(oracle)
+    leads = np.array(sorted(range(-min(LEAD, n - 1), LEAD + 1), key=abs))
+    frames = np.arange(n)
+    size = n - np.maximum(-leads, 0)
+    o = np.minimum(frames + np.maximum(-leads, 0)[:, None], n - 1)
+    l = frames + np.maximum(leads, 0)[:, None]
+    ne = (oracle[o] != lib[l]) & (frames < size[:, None])[..., None]
+    bad = ne.any(2)
+    first = np.where(bad.any(1), bad.argmax(1), size)
+    return leads, ne, size, first, bad.sum(1)
+
+
+def reg_names(mask):
+    """Space-separated :data:`REG_NAMES` of a boolean register mask."""
+    return " ".join(REG_NAMES[r] for r in np.flatnonzero(mask))
+
+
 def compare(oracle, lib):
     """``(lead, bad, first)``: the lead of ``lib`` with the latest first mismatch."""
-    best = None
-    for lead in sorted(range(-min(LEAD, len(oracle) - 1), LEAD + 1), key=abs):
-        bad = np.not_equal(*aligned(oracle, lib, lead)).any(1)
-        first = int(np.argmax(bad)) if bad.any() else len(bad)
-        if best is None or first > best[2]:
-            best = (lead, bad, first)
-    return best
+    leads, ne, size, first, _ = scan_leads(oracle, lib)
+    i = int(np.argmax(first))
+    return int(leads[i]), ne[i, : size[i]].any(1), int(first[i])
+
+
+def min_lead(scan):
+    """``min_lead``/``min_bad``/``min_first``/``min_regs`` of a :func:`scan_leads`.
+
+    The lead with the fewest bad frames (the smallest ``|lead|`` on ties), its
+    bad-frame count and first bad frame, and the registers differing on them.
+    """
+    leads, ne, size, first, nbad = scan
+    i = int(np.argmin(nbad))
+    return dict(
+        min_lead=int(leads[i]),
+        min_bad=int(nbad[i]),
+        min_first=int(first[i]) if nbad[i] else "",
+        min_regs=reg_names(ne[i, : size[i]].any(0)),
+    )
+
+
+def verdict_fields(scan):
+    """The ``results.csv`` comparison columns of a :func:`scan_leads`.
+
+    ``lead`` has the latest first mismatch; ``min_lead`` the fewest bad frames.
+    """
+    leads, ne, size, first, nbad = scan
+    i = int(np.argmax(first))
+    return dict(
+        verdict="differs" if nbad[i] else "exact",
+        lead=int(leads[i]),
+        first_diff=int(first[i]) if nbad[i] else "",
+        diff_frames=int(nbad[i]),
+        diff_regs=reg_names(ne[i, : size[i]].any(0)),
+        **min_lead(scan),
+    )
 
 
 def gated(grid):
@@ -237,6 +298,18 @@ def oracle_cache(work):
     return cache
 
 
+def oracle_rows(sid_path, ocsv, seconds, song):
+    """The sidtrace rows of one subtune, cached at ``ocsv``."""
+    return cached_sidtrace(
+        sid_path,
+        ocsv,
+        seconds=math.ceil(seconds) + 1,
+        song=song,
+        user=f"{os.getuid()}:{os.getgid()}",
+        extra_args=ORACLE_ARGS,
+    )
+
+
 @contextmanager
 def deadline(seconds):
     """Raise :class:`TimeoutError` in the main thread after ``seconds`` (0: never)."""
@@ -261,15 +334,9 @@ def check(job):
     row["seconds"] = seconds
     ocsv, lcsv = (Path(work) / d / f"{key}.csv.zst" for d in ("oracle", "library"))
     try:
-        rows = cached_sidtrace(
-            sid_path,
-            ocsv,
-            seconds=math.ceil(seconds) + 1,
-            song=song,
-            user=f"{os.getuid()}:{os.getgid()}",
-            extra_args=ORACLE_ARGS,
+        nframes, oracle = oracle_frames(
+            oracle_rows(sid_path, ocsv, seconds, song), seconds, tune["clock"]
         )
-        nframes, oracle = oracle_frames(rows, seconds, tune["clock"])
         row["frames"] = nframes
     except (SidtraceUnavailable, OSError, ValueError) as e:
         return dict(row, verdict="oracle_error", error=_err(e))
@@ -284,15 +351,9 @@ def check(job):
         return dict(row, verdict="not_decompiled", error=str(e))
     except Exception as e:  # pylint: disable=broad-except
         return dict(row, verdict="library_error", error=_err(e))
-    lead, bad, first = compare(oracle, lib)
-    regs = np.not_equal(*aligned(oracle, lib, lead))[bad].any(0)
     return dict(
         row,
-        verdict="differs" if bad.any() else "exact",
-        lead=lead,
-        first_diff=first if bad.any() else "",
-        diff_frames=int(bad.sum()),
-        diff_regs=" ".join(REG_NAMES[r] for r in np.flatnonzero(regs)),
+        **verdict_fields(scan_leads(oracle, lib)),
         info=json.dumps(info, sort_keys=True, default=str),
         oracle_gated=gated(oracle),
         library_gated=gated(lib),
@@ -358,14 +419,38 @@ def run(
     return tally
 
 
-def report(results_csv):
-    """Print tallies by player/verdict, differing registers and errors."""
+def near_exact(rows, near=NEAR, top=20):
+    """Print and return the ``differs`` rows with at most ``near`` bad frames at
+    their ``min_lead`` (rows without ``min_bad``, from older surveys, are skipped).
+    """
+    hits = [
+        r
+        for r in rows
+        if r["verdict"] == "differs" and r.get("min_bad") and int(r["min_bad"]) <= near
+    ]
+    print(f"near-exact (<= {near} bad frames at min_lead): {len(hits)}")
+    groups = {}
+    for r in hits:
+        group = (r["min_bad"], r["min_first"], r["min_lead"], r["min_regs"])
+        groups.setdefault(group, []).append(r["path"])
+    for (nbad, first, lead, regs), paths in sorted(
+        groups.items(), key=lambda kv: -len(kv[1])
+    )[:top]:
+        where = f"bad={nbad} first={first} lead={lead}"
+        print(f"{len(paths):7d} {where:28} {regs:28} e.g. {', '.join(paths[:2])}")
+    return hits
+
+
+def report(results_csv, near=NEAR):
+    """Print tallies by player/verdict, differing registers, near-exact subtunes
+    and errors."""
     with open(results_csv, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     verdicts = Counter((r["player"], r["verdict"]) for r in rows)
     print(verdicts.most_common())
     differs = [r for r in rows if r["verdict"] == "differs"]
     print("diff regs:", Counter(r["diff_regs"] for r in differs).most_common(20))
+    near_exact(rows, near)
     errs = Counter(r["error"][:70] for r in rows if r["error"])
     print("errors:", errs.most_common(20))
     return verdicts
@@ -395,15 +480,112 @@ def diff(hvsc, tunes_csv, key, work, render, context=3):
     return row
 
 
+def cached_grids(work, key, nframes):
+    """``(oracle, lib)`` grids of a subtune's cached ``work`` traces."""
+    _, oracle = oracle_frames(Path(work) / "oracle" / f"{key}.csv.zst", nframes=nframes)
+    lib = read_grid(Path(work) / "library" / f"{key}.csv.zst", nframes + LEAD)
+    return oracle, lib
+
+
+def _diffs_at(oracle, lib, lead, frame):
+    o, l = (g[frame] for g in aligned(oracle, lib, lead))
+    return [(int(r), int(o[r]), int(l[r])) for r in np.flatnonzero(o != l)]
+
+
+def _lead_rows(job):
+    """``(summary, rows)``: one subtune's :func:`verdict_fields` and per-lead rows.
+
+    Reuses the cached oracle trace and library grid, rendering only what is missing.
+    """
+    sid_path, tune, song, seconds, work, render, _ = job
+    key = f"{tune['md5']}_{song}"
+    ocsv, lcsv = (work / d / f"{key}.csv.zst" for d in ("oracle", "library"))
+    nframes, oracle = oracle_frames(
+        oracle_rows(sid_path, ocsv, seconds, song), seconds, tune["clock"]
+    )
+    if lcsv.exists():
+        lib = read_grid(lcsv, nframes + LEAD)
+    elif render is None:
+        raise ValueError(f"{lcsv} is not cached and no --render was given")
+    else:
+        lib = np.asarray(
+            render(Path(sid_path).read_bytes(), song, nframes + LEAD)[0], np.int16
+        )
+        write_grid(lib, lcsv)
+    scan = scan_leads(oracle, lib)
+    leads, ne, _, first, nbad = scan
+    at_first = ne[np.arange(len(leads)), np.minimum(first, nframes - 1)]
+    row = dict(key=key, path=tune["path"], song=song, frames=nframes)
+    rows = [
+        dict(row, lead=int(leads[i]), first_diff=int(first[i]) if nbad[i] else "")
+        | dict(bad=int(nbad[i]), regs=reg_names(at_first[i]))
+        for i in np.argsort(leads)
+    ]
+    return dict(row, **verdict_fields(scan)), rows
+
+
+def leads(hvsc, tunes_csv, work, render=None, *, keys=(), verdicts=(), **kw):
+    """Tabulate every lead's first mismatch, bad frames and first-frame registers.
+
+    One key prints its table. Otherwise the keys, plus the ``results.csv``
+    subtunes with a verdict in ``verdicts``, are scanned with ``kw['jobs']``
+    processes into ``kw['out']`` (default ``work/leads.csv``).
+    """
+    work = Path(work)
+    keys = list(keys)
+    if verdicts:
+        results = load_tunes(work / "results.csv")
+        keys += [r["key"] for r in results if r["verdict"] in verdicts]
+    wanted = {tuple(k.split("_")) for k in keys}
+    tunes = [t for t in load_tunes(tunes_csv) if t["md5"] in {m for m, _ in wanted}]
+    jobs_ = [
+        j
+        for j in jobs_for(hvsc, tunes, work, render)
+        if (j[1]["md5"], str(j[2])) in wanted
+    ]
+    if len(keys) == 1 and not verdicts:
+        summary, rows = _lead_rows(jobs_[0])
+        print(
+            f"{summary['key']} {summary['path']} song {summary['song']}: "
+            f"{summary['frames']} frames, {summary['verdict']}, "
+            f"lead {summary['lead']} (*, latest first mismatch), "
+            f"min_lead {summary['min_lead']} (<, fewest bad frames)"
+        )
+        print(f"{'lead':>6} {'first':>6} {'bad':>6}  regs at first bad frame")
+        for r in rows:
+            mark = ("*" if r["lead"] == summary["lead"] else " ") + (
+                "<" if r["lead"] == summary["min_lead"] else " "
+            )
+            print(
+                f"{r['lead']:4d}{mark} {r['first_diff']:>6} {r['bad']:6d}  {r['regs']}"
+            )
+        return [summary]
+    out = Path(kw.get("out") or work / "leads.csv")
+    summaries = []
+    with (
+        pool(kw.get("jobs")) as ex,
+        open(out, "w", newline="", encoding="utf-8") as f,
+    ):
+        w = csv.DictWriter(f, LEAD_FIELDS)
+        w.writeheader()
+        for summary, rows in tqdm(
+            ex.map(_lead_rows, jobs_), total=len(jobs_), unit="song"
+        ):
+            w.writerows(rows)
+            summaries.append(summary)
+    moved = Counter(
+        (s["lead"], s["min_lead"]) for s in summaries if s["lead"] != s["min_lead"]
+    )
+    print(f"{len(summaries)} subtunes, lead != min_lead:", moved.most_common(20))
+    near_exact(summaries, kw.get("near", NEAR))
+    return summaries
+
+
 def first_difference(work, row):
     """``(frame, [(reg, oracle, renderer)])`` at a ``differs`` row's first mismatch."""
-    nframes, first = int(row["frames"]), int(row["first_diff"])
-    _, oracle = oracle_frames(
-        Path(work) / "oracle" / f"{row['key']}.csv.zst", nframes=nframes
-    )
-    lib = read_grid(Path(work) / "library" / f"{row['key']}.csv.zst", nframes + LEAD)
-    o, l = (g[first] for g in aligned(oracle, lib, int(row["lead"])))
-    return first, [(int(r), int(o[r]), int(l[r])) for r in np.flatnonzero(o != l)]
+    first = int(row["first_diff"])
+    grids = cached_grids(work, row["key"], int(row["frames"]))
+    return first, _diffs_at(*grids, int(row["lead"]), first)
 
 
 def classify(frame, diffs, row):
@@ -436,9 +618,12 @@ def classify(frame, diffs, row):
 
 def _triage_one(args):
     work, row = args
-    frame, diffs = first_difference(work, row)
+    oracle, lib = cached_grids(work, row["key"], int(row["frames"]))
+    frame = int(row["first_diff"])
+    diffs = _diffs_at(oracle, lib, int(row["lead"]), frame)
     when, kind, roles = classify(frame, diffs, row)
     out = {k: row[k] for k in ("key", "path", "player", "song")}
+    out.update(min_lead(scan_leads(oracle, lib)))
     return dict(out, first_diff=frame, when=when, kind=kind, roles=roles, diffs=diffs)
 
 
@@ -458,7 +643,7 @@ def info_rates(rows, max_values=20):
     return rates
 
 
-def triage(work, jobs=None, top=15, max_values=20):
+def triage(work, jobs=None, top=15, max_values=20, near=NEAR):
     """Classify every ``differs`` first mismatch into ``triage.csv``; print tables."""
     work = Path(work)
     with open(work / "results.csv", newline="", encoding="utf-8") as f:
@@ -486,6 +671,7 @@ def triage(work, jobs=None, top=15, max_values=20):
         :top
     ]:
         print(f"{len(paths):7d} {kind:14} {roles:28} e.g. {', '.join(paths[:2])}")
+    near_exact([dict(t, verdict="differs") for t in out], near, top)
     rates = info_rates(rows, max_values)
     print("renderer info vs exact rate:")
     for (k, v), (n, hit) in sorted(rates.items(), key=lambda kv: -kv[1][0])[:top]:
@@ -494,7 +680,7 @@ def triage(work, jobs=None, top=15, max_values=20):
 
 
 def main(argv=None):
-    """``python -m pysidtracker.survey {find,run,report,diff,triage}``."""
+    """``python -m pysidtracker.survey {find,run,report,diff,triage,leads}``."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("find", help=find.__doc__)
@@ -503,12 +689,16 @@ def main(argv=None):
     p.add_argument("--out", required=True)
     p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
     p.add_argument("--jobs", type=int, default=os.cpu_count())
-    for name, fn in (("run", run), ("diff", diff)):
+    for name, fn in (("run", run), ("diff", diff), ("leads", leads)):
         p = sub.add_parser(name, help=fn.__doc__)
         p.add_argument("hvsc")
         p.add_argument("tunes")
         p.add_argument("--work", required=True)
-        p.add_argument("--render", required=True, help="module:function renderer")
+        p.add_argument(
+            "--render",
+            required=name != "leads",
+            help="module:function renderer (leads: only for uncached grids)",
+        )
     sub.choices["diff"].add_argument("key")
     sub.choices["diff"].add_argument("--context", type=int, default=3)
     p = sub.choices["run"]
@@ -517,13 +707,29 @@ def main(argv=None):
     p.add_argument("--default-seconds", type=float, default=180)
     p.add_argument("--timeout", type=float, default=600, help="render seconds")
     p.add_argument("--jobs", type=int, default=os.cpu_count())
+    p = sub.choices["leads"]
+    p.add_argument("keys", nargs="*", help="<md5>_<song> subtune keys")
+    p.add_argument(
+        "--all", action="store_true", help="every exact/differs subtune in results.csv"
+    )
+    p.add_argument(
+        "--verdict", action="append", default=[], help="results.csv verdict to scan"
+    )
+    p.add_argument("--out", help="leads CSV (default: WORK/leads.csv)")
+    p.add_argument("--jobs", type=int, default=os.cpu_count())
     p = sub.add_parser("report", help=report.__doc__)
     p.add_argument("results")
     p = sub.add_parser("triage", help=triage.__doc__)
     p.add_argument("work")
     p.add_argument("--jobs", type=int, default=os.cpu_count())
     p.add_argument("--top", type=int, default=15)
+    for name in ("leads", "report", "triage"):
+        sub.choices[name].add_argument(
+            "--near", type=int, default=NEAR, help="near-exact bad-frame limit"
+        )
     a = ap.parse_args(argv)
+    if a.cmd == "leads" and not (a.keys or a.all or a.verdict):
+        ap.error("leads needs keys, --all or --verdict")
     if a.cmd == "find":
         out = find(a.hvsc, a.out, a.sidid_cfg, a.player, a.jobs)
     elif a.cmd == "run":
@@ -540,10 +746,22 @@ def main(argv=None):
         )
     elif a.cmd == "diff":
         out = diff(a.hvsc, a.tunes, a.key, a.work, load_render(a.render), a.context)
+    elif a.cmd == "leads":
+        leads(
+            a.hvsc,
+            a.tunes,
+            a.work,
+            a.render and load_render(a.render),
+            keys=a.keys,
+            verdicts=("exact", "differs") if a.all else a.verdict,
+            out=a.out,
+            jobs=a.jobs,
+            near=a.near,
+        )
     elif a.cmd == "triage":
-        triage(a.work, a.jobs, a.top)
+        triage(a.work, a.jobs, a.top, near=a.near)
     else:
-        out = report(a.results)
+        out = report(a.results, a.near)
     if a.cmd in ("find", "run"):
         print(dict(out))
     return 0

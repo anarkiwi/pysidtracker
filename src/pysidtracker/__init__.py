@@ -152,7 +152,7 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.12.1"
+__version__ = "0.13.0"
 
 __all__ = [
     "AudioUnavailable",
