@@ -340,7 +340,7 @@ def test_a_handler_returning_through_io_unwinds_its_frame():
     assert (cad.source, cad.cycles_per_call) == (TriggerSource.NMI_TIMER, PAL // 2)
 
 
-def test_a_handler_vectored_into_io_is_opaque_and_never_the_play_source():
+def test_a_recurring_handler_vectored_into_io_makes_the_source_unknown():
     assert _cad(_nmi_tune(LOAD + 0x80)).source == TriggerSource.NMI_TIMER
     machine = _run(_nmi_tune(reg.CIA1_BASE + 4))
     assert machine.opaque == {(1, 0)} and _cadence(machine, 0, 4).source is None

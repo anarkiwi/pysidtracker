@@ -468,8 +468,8 @@ def _cadence(machine: _Machine, start: int, frames: int) -> Cadence:
     """The :class:`Cadence` of the play source.
 
     That is the source whose raises drive the most distinct SID registers (a
-    sample player drives few), then the one with the most writing raises; an
-    ``opaque`` source (see :meth:`_Machine.take`) is never chosen.
+    sample player drives few), then the one with the most writing raises; any
+    recurring ``opaque`` source (see :meth:`_Machine.take`) makes it unknown.
     """
     frame = machine.frame
     ntsc = frame == reg.NTSC_CYCLES_PER_FRAME
@@ -479,11 +479,14 @@ def _cadence(machine: _Machine, start: int, frames: int) -> Cadence:
         regs[src] |= wrote
         calls[src] += bool(wrote)
         recurs[src] += t >= start
+    live = [s for s in regs if recurs[s] > 1]
     source = max(
-        (s for s in regs if regs[s] and recurs[s] > 1 and s not in machine.opaque),
+        (s for s in live if regs[s]),
         key=lambda s: (regs[s].bit_count(), calls[s]),
         default=None,
     )
+    if machine.opaque.intersection(live):
+        source = None
     if source is None:
         return Cadence(frame, None, clock_hz)
     steady = [(t, tag) for t, src, _, tag in machine.events if src == source]
