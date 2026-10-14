@@ -1,9 +1,10 @@
 """The generic ``pysidtracker`` command-line tool.
 
 Discovers every installed SID format (:mod:`pysidtracker.formats`) and offers
-the shared ``info`` / ``reglog`` / ``wav`` commands -- plus any format-specific
-subcommands each format contributes -- so a dependent package registers a
-:class:`~pysidtracker.formats.SidFormat` instead of shipping its own CLI.
+the shared ``info`` / ``reglog`` / ``wav`` / ``disasm`` commands -- plus any
+format-specific subcommands each format contributes -- so a dependent package
+registers a :class:`~pysidtracker.formats.SidFormat` instead of shipping its
+own CLI.
 
 Format selection is by content: each command loads the tune, picks the first
 registered format whose parser recognises it, and runs against that format's
@@ -18,6 +19,7 @@ from typing import List, Optional, Sequence, Tuple
 from .audio import CHIP_MODELS, render_player_wav, seconds_to_frames
 from .cadence import playroutine_cadence
 from .cli import print_info, run_cli
+from .disasm import disassemble, entry_labels, image_after_init
 from .errors import SidError, SidParseError
 from .formats import SidFormat, discover_formats, recognize_format
 from .image import SidImage
@@ -82,6 +84,27 @@ def _wav(args, formats: Sequence[SidFormat]) -> None:
     print(f"wrote {args.output}")
 
 
+def _disasm(args) -> None:
+    image = SidImage.from_bytes(read_bytes(args.song))
+    if args.after_init:
+        image = image_after_init(image, subtune=args.subtune)
+    for addr, raw, text in disassemble(
+        image, args.start, args.end, labels=entry_labels(image)
+    ):
+        print(f"{addr:04X}  {raw.hex(' '):<9} {text}")
+
+
+def _hex_addr(value: str) -> int:
+    """A hex C64 address: ``1000``, ``0x1000``, or ``$1000``."""
+    text = value[1:] if value[:1] == "$" else value
+    try:
+        return int(text, 16)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"expected a hex C64 address, got {value!r}"
+        ) from exc
+
+
 def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
     """The ``pysidtracker`` argument parser for the given registered ``formats``."""
     parser = argparse.ArgumentParser(
@@ -105,6 +128,37 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
     wav.add_argument("--seconds", type=float, default=60.0)
     wav.add_argument("--model", choices=CHIP_MODELS, default="8580")
     wav.set_defaults(func=lambda args: _wav(args, formats))
+
+    disasm = subparsers.add_parser(
+        "disasm", help="disassemble a range of the loaded .sid/.prg image"
+    )
+    disasm.add_argument("song", help="input tune")
+    disasm.add_argument(
+        "start",
+        nargs="?",
+        type=_hex_addr,
+        default=None,
+        help="first address (hex; default the load address)",
+    )
+    disasm.add_argument(
+        "end",
+        nargs="?",
+        type=_hex_addr,
+        default=None,
+        help="one past the last address (hex; default the image end)",
+    )
+    disasm.add_argument(
+        "--after-init",
+        action="store_true",
+        help="disassemble the image state after running the tune's init routine",
+    )
+    disasm.add_argument(
+        "--subtune",
+        type=int,
+        default=0,
+        help="the subtune number passed to init (with --after-init)",
+    )
+    disasm.set_defaults(func=lambda args: _disasm(args))
 
     for fmt in formats:
         for command in fmt.commands:
