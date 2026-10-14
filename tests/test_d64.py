@@ -58,6 +58,14 @@ def test_read_d64_skips_non_prg_slots():
     assert [f.name for f in read_d64(bytes(d64))] == ["A"]
 
 
+def test_read_d64_reads_locked_prg():
+    # A locked PRG type byte is $C2 (closed + locked), as c1541 shows as prg<.
+    d64 = bytearray(_build_d64([("LOCKED", b"\x00\x20xy")]))
+    d64[_ts_offset(DIR_TRACK, DIR_SECTOR) + 2] = 0xC2
+    files = read_d64(bytes(d64))
+    assert files == [D64File("LOCKED", b"\x00\x20xy", locked=True)]
+
+
 def test_read_d64_too_short_raises():
     with pytest.raises(ValueError, match="not a d64"):
         read_d64(b"\x00" * (D64_SIZE - 1))

@@ -21,6 +21,9 @@ D64_SIZE = sum(SECTORS_PER_TRACK[1:]) * SECTOR_SIZE  # 174848
 DIR_TRACK = 18
 DIR_SECTOR = 1
 FILETYPE_PRG = 0x82
+# Closed-PRG type check: PRG type bits (2) + closed bit ($80), ignoring the locked bit.
+FILETYPE_PRG_CLOSED_MASK = 0x8F
+FILETYPE_LOCKED = 0x40
 
 
 @dataclass(frozen=True)
@@ -29,10 +32,12 @@ class D64File:
 
     ``prg`` is the raw file payload, load-address header included (the first two
     bytes are the little-endian C64 load address), exactly as a ``.prg`` on disk.
+    ``locked`` is the directory entry's 1541 lock bit.
     """
 
     name: str
     prg: bytes
+    locked: bool = False
 
 
 def _ts_offset(track: int, sector: int) -> int:
@@ -77,11 +82,11 @@ def read_d64(data: bytes) -> List[D64File]:
         block = data[_ts_offset(track, sector) :][:SECTOR_SIZE]
         for slot in range(8):
             entry = block[2 + slot * 32 : 2 + slot * 32 + 30]
-            if len(entry) < 19 or entry[0] != FILETYPE_PRG:
+            if len(entry) < 19 or entry[0] & FILETYPE_PRG_CLOSED_MASK != FILETYPE_PRG:
                 continue
             name = entry[3:19].rstrip(b"\xa0").decode("latin-1", errors="replace")
             prg = b"".join(_chain(data, entry[1], entry[2]))
-            files.append(D64File(name, prg))
+            files.append(D64File(name, prg, entry[0] & FILETYPE_LOCKED != 0))
         if block[0] == 0:
             break
         track, sector = block[0], block[1]
