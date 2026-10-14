@@ -96,7 +96,7 @@ from .oracle import (
     sidtrace_grid,
 )
 from .player import MemPlayer
-from .poweron import PSID_DRIVER_CLEARED, power_on_ram, ram_pattern
+from .poweron import PSID_DRIVER_CLEARED, power_on_ram, psid_init_bank, ram_pattern
 from .irqhost import InterruptHost, InterruptPlayer, host_cadence
 from .registers import (
     NTSC_CLOCK_HZ,
@@ -267,6 +267,7 @@ __all__ = [
     "parse_sid_header",
     "playroutine_cadence",
     "power_on_ram",
+    "psid_init_bank",
     "print_info",
     "ram_pattern",
     "read_bytes",

@@ -2,12 +2,17 @@
 
 jennings' ``mpu6502`` is a py65-compatible 6510 that decodes every NMOS illegal
 opcode natively, byte/cycle-exact. It is a bare CPU, so :func:`wire_mpu`
-synthesises the C64 hardware reads.
+synthesises the C64 hardware reads and the ``$01`` banking the C64's PLA applies
+to the ROM space (sidplayfp's ROM-less KERNAL/BASIC/CHAR; see
+:class:`_BankedMemory`).
 """
 
 from __future__ import annotations
 
 from array import array
+from typing import Optional
+
+from jennings.memory import ObservableMemory  # core dependency
 
 from . import registers as reg
 from .errors import EmulatorUnavailable
@@ -69,6 +74,44 @@ def access_cycle(mpu) -> int:
     return mpu.processorCycles + mpu.cycletime[memory[mpu.pc]] - 1
 
 
+class _BankedMemory(ObservableMemory):
+    """The flat CPU's C64 memory: reads of the ROM space follow the ``$01`` bank.
+
+    The ROM space is sidplayfp's ROM-less ROMs, the same bytes the interrupt host
+    maps (``irqhost.C64``): KERNAL is its stub, BASIC and the character ROM read
+    zero. ``$01`` is the live RAM byte at ``$01`` (the tune or the PSID driver
+    writes it), so a tune that re-banks to reach the RAM behind a ROM sees RAM,
+    and one that banks in the I/O page sees it. Only reads are banked; writes
+    always reach the ``$01`` byte and the RAM shadow beneath the ROMs.
+    """
+
+    def __init__(self, subject):
+        super().__init__(subject=subject)
+        from .irqhost import kernal_stub  # lazy: irqhost imports this module
+
+        self._kernal = kernal_stub()
+
+    def _rom_value(self, address: int) -> Optional[int]:
+        """The ROM byte at ``address`` under the live ``$01``; ``None`` for RAM."""
+        b = self._subject[1] & 7
+        if address < 0xC000:  # $A000-$BFFF: BASIC, in when L- and H-IRAM both on
+            return 0 if (b & 1) and (b & 2) else None
+        if address < 0xD000:  # $C000-$CFFF: always RAM
+            return None
+        if address < 0xE000:  # $D000-$DFFF: CHAR ROM, else the I/O page / RAM
+            if (b & 1) or (b & 2):
+                return None if b & 4 else 0
+            return None
+        return self._kernal[address - 0xE000] if b & 2 else None  # $E000-$FFFF
+
+    def __getitem__(self, address):
+        if isinstance(address, int) and address >= 0xA000:
+            rom = self._rom_value(address)
+            if rom is not None:
+                return rom
+        return super().__getitem__(address)
+
+
 def wire_mpu(
     subject, illegal_opcodes: bool = True, sid_model: str = "6581", ntsc: bool = False
 ):  # pylint: disable=unused-argument
@@ -77,21 +120,22 @@ def wire_mpu(
     VIC raster ($D011/$D012) reads are synthesised from the cycle counter on a
     PAL (or ``ntsc``) beam, so sync spin loops exit; SID osc3/env3 ($D41B/$D41C) reads come from a
     ``sid_model`` reSIDfp chip fed the CPU's own SID writes (:class:`SidReads`).
-    ``illegal_opcodes`` is kept for API compatibility; jennings decodes the NMOS
-    illegals natively regardless.
+    Reads of the C64 ROM space are ``$01``-banked (sidplayfp's ROM-less KERNAL /
+    BASIC / CHAR) by a :class:`_BankedMemory`, so a tune reading KERNAL or BASIC
+    sees the oracle's ROMs, not the RAM beneath. ``illegal_opcodes`` is kept for
+    API compatibility; jennings decodes the NMOS illegals natively regardless.
 
     Raises:
       EmulatorUnavailable: jennings (a core dependency) is not installed.
     """
     try:
         from jennings.devices.mpu6502 import MPU
-        from jennings.memory import ObservableMemory
     except ImportError as exc:  # pragma: no cover - jennings is a core dependency
         raise EmulatorUnavailable(
             "jennings is required to run a tune: pip install pysidtracker"
         ) from exc
 
-    mem = ObservableMemory(subject=subject)
+    mem = _BankedMemory(subject)
     holder: dict = {}
     chip = SidReads(sid_model)
     cpl = reg.NTSC_CYCLES_PER_LINE if ntsc else reg.PAL_CYCLES_PER_LINE

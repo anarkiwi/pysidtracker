@@ -16,6 +16,7 @@ from . import registers as reg
 from .emu import wire_mpu
 from .errors import EmulatorUnavailable, SidParseError
 from .image import SidImage
+from .poweron import psid_init_bank
 
 # A CIA Timer-A latch below this is a lo-byte-only artefact, not a play period.
 _MIN_CIA_LATCH = 0x100
@@ -95,11 +96,7 @@ def _iomap(header, addr: int) -> int:
     """psiddrv's ``$01`` bank value for code at ``addr`` (0: real C64 environment)."""
     if not header.is_psid or addr == 0:
         return 0
-    if addr < 0xA000:
-        return 0x37
-    if addr < 0xD000:
-        return 0x36
-    return 0x35 if addr >= _KERNAL_ROM else 0x34
+    return psid_init_bank(addr)
 
 
 def _driver_base(image: SidImage) -> int:

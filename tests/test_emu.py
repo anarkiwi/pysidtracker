@@ -204,6 +204,53 @@ def test_run_to_rts_honours_cycle_cap():
     assert mpu.processorCycles > 1000
 
 
+def test_rom_space_reads_follow_the_01_bank():
+    """The flat host reads the C64 ROM space as sidplayfp does, for every ``$01``.
+
+    The reference is the C64 PLA bit map plus sidplayfp's ROM-less ROMs (the flat
+    host and the interrupt host must agree): KERNAL is sidplayfp's stub, BASIC and
+    the character ROM read ``0``, and the ``$01``/shadow-RAM underneath is what a
+    re-banked tune reads back.
+    """
+    from pysidtracker.irqhost import kernal_stub
+
+    subject = bytearray(0x10000)
+    subject[0xA000] = 0xAB  # shadow RAM behind BASIC
+    subject[0xD000] = 0xEF  # shadow RAM behind the character ROM / I/O page
+    subject[0xE000] = 0xCD  # shadow RAM behind KERNAL
+    _, mem = wire_mpu(subject)
+    kernal = kernal_stub()
+
+    for bank in range(0x00, 0x20):
+        subject[1] = bank
+        loram, hiram, charen = bank & 1, bank & 2, bank & 4
+        kernal_in = bool(hiram)
+        basic_in = bool(loram and hiram)
+        chars_in = bool(not charen and (loram or hiram))
+        # KERNAL ($E000): the sidplayfp stub when banked in, else the RAM beneath.
+        assert mem[0xE000] == (kernal[0] if kernal_in else 0xCD)
+        # The stub's vectors and a jump-table routine read like KERNAL, not RAM.
+        assert mem[0xFFFA] == (
+            kernal[0xFFFA - 0xE000] if kernal_in else subject[0xFFFA]
+        )
+        assert mem[0xFFD2] == (0x60 if kernal_in else subject[0xFFD2])
+        # BASIC ($A000): zero ROM when banked in, else the RAM beneath.
+        assert mem[0xA000] == (0 if basic_in else 0xAB)
+        # CHAR/I-O ($D000): the character ROM (zero) when CH-EN is out, else I/O or RAM.
+        assert mem[0xD000] == (0 if chars_in else 0xEF)
+
+
+def test_a_rebanked_tune_reads_the_ram_behind_a_rom():
+    subject = bytearray(0x10000)
+    _, mem = wire_mpu(subject)
+    subject[1] = 0x37  # ROMs in (H-IRAM set): KERNAL stub shadows the RAM
+    mem[0xE000] = 0x5A
+    assert mem[0xE000] == 0xEA  # a read still returns the KERNAL stub (a NOP)
+    subject[1] = 0x05  # re-bank: H-IRAM off, so the RAM behind KERNAL is reachable
+    assert mem[0xE000] == 0x5A  # the tune's write lands in the shadow RAM
+    assert mem[1] == 0x05  # and the bank register itself reads back
+
+
 def test_wire_mpu_reports_missing_jennings(monkeypatch):
     import builtins
 

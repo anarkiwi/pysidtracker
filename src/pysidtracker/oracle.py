@@ -38,7 +38,7 @@ from .emu import run_to_rts, wire_mpu
 from .errors import SidError, SidParseError
 from .image import SidImage
 from .player import MemPlayer
-from .poweron import power_on_ram
+from .poweron import power_on_ram, psid_init_bank
 
 # preframr-sidtrace ``.sidwr.bin`` record: (clock, addr, reg, val).
 _SIDWR_REC = struct.Struct("<qHBB")
@@ -111,6 +111,9 @@ def register_grid(
     subject = power_on_ram()
     subject[image.load : image.load + len(image.image)] = image.image
     subject[SID_VOLUME] = DRIVER_VOLUME  # PSID driver cold-start: maximum volume
+    # The driver banks the init's ROM space before calling it (KERNAL/BASIC in).
+    init_bank_addr = image.header.init_address or image.header.real_load_address
+    subject[1] = psid_init_bank(init_bank_addr)
     mpu, mem = wire_mpu(
         subject, illegal_opcodes, reg.sid_model_for_flags(image.header.flags)
     )
@@ -184,6 +187,8 @@ class EmuPlayer(MemPlayer):
         super().__init__(image, load, subtune)
 
     def _init(self, subtune: int) -> None:
+        # The driver banks the init's ROM space before calling it (KERNAL/BASIC in).
+        self._mem[1] = psid_init_bank(self._init_addr)
         self._mpu, self._obs = wire_mpu(self._mem, self._illegal, self._sid_model)
         run_to_rts(self._mpu, self._obs, self._init_addr, subtune, self._max_cycles)
         self._due = self._mpu.processorCycles
