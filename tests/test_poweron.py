@@ -16,14 +16,23 @@ def test_ram_pattern_is_four_byte_runs_flipped_per_16k_bank():
     assert ram[0xC000:0xC008] == ram[0x4000:0x4008]
 
 
-def test_power_on_image_is_the_pattern_with_the_driver_page_cleared():
+def test_power_on_image_is_the_driver_cleared_pattern_with_the_sid_at_rest():
     pattern = poweron.power_on_ram()
     base = poweron.ram_pattern()
     # psiddrv::install zeroes $0000-$03FE (0x3FF bytes).
     assert pattern[: poweron.PSID_DRIVER_CLEARED] == bytes(poweron.PSID_DRIVER_CLEARED)
-    assert pattern[poweron.PSID_DRIVER_CLEARED :] == base[poweron.PSID_DRIVER_CLEARED :]
     assert pattern[0x03FE] == 0
     assert pattern[0x03FF] == base[0x03FF]  # the clear stops before $03FF
+    # the uninitialised SID register file reads as 0 (reSID reset)
+    assert pattern[
+        poweron.SID_PORT : poweron.SID_PORT + poweron.SID_PORT_SIZE
+    ] == bytes(poweron.SID_PORT_SIZE)
+    # ... everything else is the power-on pattern, untouched
+    assert pattern[0x3FF : poweron.SID_PORT] == base[0x3FF : poweron.SID_PORT]
+    assert (
+        pattern[poweron.SID_PORT + poweron.SID_PORT_SIZE :]
+        == base[poweron.SID_PORT + poweron.SID_PORT_SIZE :]
+    )
 
 
 def test_power_on_image_matches_the_reference_formula():
@@ -31,6 +40,7 @@ def test_power_on_image_matches_the_reference_formula():
     run = (addr & 7 >= 2) & (addr & 7 < 6)
     want = np.where(run ^ ((addr >> 14) & 1).astype(bool), 0xFF, 0).astype(np.uint8)
     want[:0x3FF] = 0
+    want[0xD400:0xD800] = 0  # the SID register file at rest
     assert bytes(poweron.power_on_ram()) == want.tobytes()
 
 
@@ -38,6 +48,9 @@ def test_irqhost_shares_the_single_source_of_truth():
     assert poweron.ram_pattern() == irqhost.ram_pattern()
     base = poweron.ram_pattern()
     base[: poweron.PSID_DRIVER_CLEARED] = bytes(poweron.PSID_DRIVER_CLEARED)
+    base[poweron.SID_PORT : poweron.SID_PORT + poweron.SID_PORT_SIZE] = bytes(
+        poweron.SID_PORT_SIZE
+    )
     assert base == poweron.power_on_ram()
 
 

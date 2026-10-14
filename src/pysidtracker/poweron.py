@@ -15,6 +15,9 @@ from __future__ import annotations
 
 #: ``psiddrv::install`` clears ``$0000-$03FE`` (``0x3FF`` bytes) before a PSID runs.
 PSID_DRIVER_CLEARED = 0x3FF
+# The SID occupies ``$D400-$D7FF``; before the tune sets it the register file reads as 0.
+SID_PORT = 0xD400
+SID_PORT_SIZE = 0x400
 
 
 def ram_pattern() -> bytearray:
@@ -31,14 +34,23 @@ def ram_pattern() -> bytearray:
 
 
 def power_on_ram() -> bytearray:
-    """The PSID start-up image: :func:`ram_pattern` with ``$0000-$03FE`` cleared.
+    """The PSID start-up image a player or the flat emulator boots from.
 
-    ``psiddrv::install`` zeroes :data:`PSID_DRIVER_CLEARED` bytes before running
-    init, so a tune reading uninitialised memory there reads zeros as libsidplayfp plays it.
+    The power-on RAM (:func:`ram_pattern`) with the PSID driver's ``$0000-$03FE``
+    clear (``psiddrv::install``) and the uninitialised SID register file at 0
+    (the reSID's reset state; only ``$D418`` is then seeded by the driver). A tune
+    reading uninitialised RAM reads the power-on byte, but a register it never
+    writes reads the oracle's 0 baseline, as libsidplayfp plays it.
     """
     ram = ram_pattern()
     ram[:PSID_DRIVER_CLEARED] = bytes(PSID_DRIVER_CLEARED)
+    ram[SID_PORT : SID_PORT + SID_PORT_SIZE] = bytes(SID_PORT_SIZE)
     return ram
 
 
-__all__ = ["PSID_DRIVER_CLEARED", "power_on_ram", "ram_pattern"]
+__all__ = [
+    "PSID_DRIVER_CLEARED",
+    "SID_PORT",
+    "power_on_ram",
+    "ram_pattern",
+]
