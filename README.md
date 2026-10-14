@@ -56,6 +56,11 @@ API.
   against the `sidtrace` oracle; `sidid` — pure-Python SIDId with the bundled
   `sidid.cfg` (`pysidid` CLI). `pip install "pysidtracker[survey]"`,
   [docs/survey.md](docs/survey.md).
+- `poweron` — the libsidplayfp power-on C64 RAM a PSID boots onto: `ram_pattern`
+  (the `SystemRAMBank::reset` image) and `power_on_ram` (it with the PSID driver's
+  `$0000-$03FE` cleared, `PSID_DRIVER_CLEARED`). `MemPlayer`, the `oracle`
+  `register_grid`, and `irqhost` all start from it, so a tune reading
+  uninitialised memory reads the power-on byte, not zero.
 - `roms` — C64 KERNAL/BASIC/CHARGEN ROM fetch + SHA-256 verified cache
   (`fetch_rom`, `resolve_rom`, `roms_available`) and 64 KiB mapping (`rom_image`,
   `apply_roms`) for tunes that cannot run without the ROMs. The ROMs are

@@ -96,6 +96,7 @@ from .oracle import (
     sidtrace_grid,
 )
 from .player import MemPlayer
+from .poweron import PSID_DRIVER_CLEARED, power_on_ram, ram_pattern
 from .irqhost import InterruptHost, InterruptPlayer, host_cadence
 from .registers import (
     NTSC_CLOCK_HZ,
@@ -154,7 +155,7 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -188,6 +189,7 @@ __all__ = [
     "PAL_CYCLES_PER_FRAME",
     "PAL_FREQ_HI",
     "PAL_FREQ_LO",
+    "PSID_DRIVER_CLEARED",
     "PSID_MAGIC",
     "PW_HI_REGS",
     "PackageErrors",
@@ -264,7 +266,9 @@ __all__ = [
     "parse_prg",
     "parse_sid_header",
     "playroutine_cadence",
+    "power_on_ram",
     "print_info",
+    "ram_pattern",
     "read_bytes",
     "read_d64",
     "read_reglog",
