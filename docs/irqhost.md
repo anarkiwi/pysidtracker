@@ -28,11 +28,13 @@ cadence = host_cadence(data)    # the measured play Cadence
   (`boot_cycle`: 339711 PAL, 315445 NTSC). The beam position at that cycle
   follows from the VIC's reset state.
 - **Memory.** RAM powers up in libsidplayfp's pattern (4-byte runs of `$00` and
-  `$FF`, flipped every 16K). `$0000`-`$03FE` is cleared; an RSID then gets
-  libsidplayfp's `poweron.bin` image of a booted C64, fetched and SHA-256
-  verified like the ROMs (`roms.poweron_writes`, `docs/c64-roms.md`), falling
-  back to the KERNAL's RAM vectors offline. The tune's start/end are stored in
-  `$2D`-`$32` and `$AC`-`$AF` as the BASIC loader leaves them.
+  `$FF`, flipped every 16K — `poweron.ram_pattern`, the single source the
+  `MemPlayer` and `oracle` `register_grid` flat paths also boot from). The PSID
+  driver clears `$0000`-`$03FE` (`poweron.power_on_ram`, `PSID_DRIVER_CLEARED`);
+  an RSID then gets libsidplayfp's `poweron.bin` image of a booted C64, fetched
+  and SHA-256 verified like the ROMs (`roms.poweron_writes`, `docs/c64-roms.md`),
+  falling back to the KERNAL's RAM vectors offline. The tune's start/end are
+  stored in `$2D`-`$32` and `$AC`-`$AF` as the BASIC loader leaves them.
 - **Driver.** The PSID driver (`psiddrv.a65`) is assembled in its relocated page
   and run from reset: it acknowledges everything, sets `$D418`, the CIA #1
   KERNAL latch, `$D011`/`$D012`, arms the VIC (PSID speed bit 0) or CIA #1

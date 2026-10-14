@@ -28,6 +28,7 @@ from .oracle import (
     sidtrace_grid,
 )
 from .player import MemPlayer
+from .poweron import PSID_DRIVER_CLEARED, ram_pattern
 from .roms import poweron_writes
 from .vicii import NTSC_GEOMETRY, PAL_GEOMETRY, Vic
 
@@ -175,19 +176,6 @@ def kernal_stub() -> bytes:
     for addr in _KERNAL_CALLS:
         rom[addr - 0xE000] = 0x60
     return bytes(rom)
-
-
-def ram_pattern() -> bytearray:
-    """libsidplayfp's power-up RAM: 4-byte runs of ``$00``/``$FF``, flipped per 16K."""
-    ram = bytearray()
-    byte = 0
-    for _ in range(4):
-        block = bytearray([byte]) * 0x4000
-        for i in range(2, 0x4000, 8):
-            block[i : i + 4] = bytes([byte ^ 0xFF]) * 4
-        ram += block
-        byte ^= 0xFF
-    return ram
 
 
 def boot_cycle(ntsc: bool) -> int:
@@ -697,7 +685,7 @@ class C64:
         base = _driver_base(image)
         code, labels = assemble(_DRIVER, base)
         ram = self.ram
-        ram[0:0x3FF] = bytes(0x3FF)
+        ram[:PSID_DRIVER_CLEARED] = bytes(PSID_DRIVER_CLEARED)
         if rsid:
             for addr, data in poweron or KERNAL_VECTORS:
                 ram[addr : addr + len(data)] = data

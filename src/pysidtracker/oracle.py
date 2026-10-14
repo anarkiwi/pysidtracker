@@ -38,6 +38,7 @@ from .emu import run_to_rts, wire_mpu
 from .errors import SidError, SidParseError
 from .image import SidImage
 from .player import MemPlayer
+from .poweron import power_on_ram
 
 # preframr-sidtrace ``.sidwr.bin`` record: (clock, addr, reg, val).
 _SIDWR_REC = struct.Struct("<qHBB")
@@ -92,6 +93,10 @@ def register_grid(
     driver's cold-start default, so a tune that relies on the driver's maximum
     volume (rather than setting it itself) matches the sidtrace oracle.
 
+    The image starts as libsidplayfp's power-on RAM (:func:`~pysidtracker.poweron.power_on_ram`),
+    so a register the tune never writes reads the C64 power-on byte, not zero, as
+    the sidtrace oracle records it.
+
     Requires jennings; raises :class:`~pysidtracker.errors.EmulatorUnavailable` if
     it is missing and :class:`~pysidtracker.errors.SidParseError` if the image
     has no init address.
@@ -103,7 +108,8 @@ def register_grid(
     if image.header is None:
         raise SidParseError("cannot build a register grid: image has no SID header")
 
-    subject = image.mem
+    subject = power_on_ram()
+    subject[image.load : image.load + len(image.image)] = image.image
     subject[SID_VOLUME] = DRIVER_VOLUME  # PSID driver cold-start: maximum volume
     mpu, mem = wire_mpu(
         subject, illegal_opcodes, reg.sid_model_for_flags(image.header.flags)
@@ -116,7 +122,16 @@ def register_grid(
     rows: List[List[int]] = []
     for _ in range(nframes):
         run_to_rts(mpu, mem, play_address, 0, max_cycles)
-        rows.append([subject[reg.SID_BASE + i] for i in range(reg.SID_REG_COUNT)])
+        rows.append(
+            [
+                (
+                    (subject[reg.SID_BASE + i] & 0x0F)
+                    if i in reg.PW_HI_REGS
+                    else subject[reg.SID_BASE + i]
+                )
+                for i in range(reg.SID_REG_COUNT)
+            ]
+        )
     return rows
 
 
