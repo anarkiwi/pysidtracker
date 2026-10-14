@@ -48,9 +48,24 @@ def power_on_ram() -> bytearray:
     return ram
 
 
+def psid_init_bank(init_address: int) -> int:
+    """The driver's ``$01`` bank register before running ``init`` at ``init_address``.
+
+    ``psiddrv`` banks the init's own ROM space in (so a tune that reads
+    KERNAL/BASIC sees the oracle's ROMs) and the rest of the map out: ``$37`` for
+    init below BASIC, else the map for the ROM the init lives in.
+    """
+    if init_address < 0xA000:
+        return 0x37
+    if init_address < 0xD000:
+        return 0x36
+    return 0x35 if init_address >= 0xE000 else 0x34
+
+
 __all__ = [
     "PSID_DRIVER_CLEARED",
     "SID_PORT",
     "power_on_ram",
+    "psid_init_bank",
     "ram_pattern",
 ]

@@ -26,6 +26,7 @@ from typing import Dict, Optional, Set
 from . import registers as reg
 from .emu import run_to_rts, wire_mpu
 from .errors import SidParseError
+from .poweron import psid_init_bank
 from .registers import sid_model_for_flags
 from .image import SidImage
 
@@ -163,10 +164,12 @@ def trace_init(
         writes[address] = value & 0xFF
         return None
 
+    init_address = image.header.init_address or image.header.real_load_address
+    # The driver banks the init's ROM space before calling it (KERNAL/BASIC in).
+    image.mem[1] = psid_init_bank(init_address)
     mpu, mem = wire_mpu(image.mem, sid_model=sid_model_for_flags(image.header.flags))
     mem.subscribe_to_write(_WATCH_ADDRS, _record)
 
-    init_address = image.header.init_address or image.header.real_load_address
     run_to_rts(mpu, mem, init_address, subtune, max_cycles)
 
     # Post-init CIA Timer-A latch values, to detect a mid-play reschedule.

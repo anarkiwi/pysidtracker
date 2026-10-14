@@ -87,11 +87,17 @@ raises `EmulatorUnavailable` if jennings is missing.
 illegal set (SLO/RLA/SRE/RRA/SAX/LAX/DCP/ISC, ANC/ALR/ARR/SBX/SBC/LAX#/ANE,
 SHY/SHX/AHX/TAS/LAS and the multi-byte NOPs) natively, byte/cycle-exact, but has
 no C64 reads, so `wire_mpu` synthesises cycle-derived VIC raster (`$D011`/`$D012`)
-and SID osc3/env3 (`$D41B`/`$D41C`) reads to let sync spin loops terminate.
-Without them an init that raster-syncs never reaches its `$DC04`/`$DC05` writes and
-its cadence silently falls back to the video frame. The `illegal_opcodes` flag is
-kept for API compatibility only (jennings is always native). `run_to_rts(mpu, mem,
-pc, acc, max_cycles)` is the shared push-a-return-address-and-step mechanic.
+and SID osc3/env3 (`$D41B`/`$D41C`) reads to let sync spin loops terminate, and
+banks the C64 ROM space off the `$01` register: a read of KERNAL/BASIC/CHAR
+returns sidplayfp's ROM-less ROMs (KERNAL is its stub, the rest read `0`) the way
+the interrupt host (`irqhost.C64`) and the sidtrace oracle do, while writes always
+reach the RAM shadow beneath. Without the synthetic reads an init that
+raster-syncs never reaches its `$DC04`/`$DC05` writes and its cadence silently
+falls back to the video frame. The `illegal_opcodes` flag is kept for API
+compatibility only (jennings is always native). `run_to_rts(mpu, mem, pc, acc,
+max_cycles)` is the shared push-a-return-address-and-step mechanic. The flat boot
+paths seed `$01` the way the PSID driver does (`poweron.psid_init_bank`) so a tune
+that reads KERNAL/BASIC sees the oracle's ROMs, not the RAM.
 
 ## What each format supplies
 

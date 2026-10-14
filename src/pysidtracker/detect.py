@@ -30,6 +30,7 @@ from typing import Callable, Optional, Tuple
 
 from .emu import run_to_rts, wire_mpu
 from .errors import SidParseError
+from .poweron import psid_init_bank
 from .registers import sid_model_for_flags
 from .header import SidHeader
 from .image import MEM_SIZE, SidImage
@@ -177,6 +178,13 @@ def _count_changed(mem: bytearray, load: int, snapshot: bytes) -> int:
     return sum(1 for i, b in enumerate(snapshot) if mem[load + i] != b)
 
 
+def _environment(addr: int) -> bool:
+    """A C64 bank register (``$00``/``$01``) or the I/O hardware page: registers
+    the driver and a tune's init legitimately write, never song data -- so they
+    are excluded from "bytes written outside the loaded region"."""
+    return addr <= 0x01 or 0xD000 <= addr <= 0xDFFF
+
+
 def _count_written_outside(mem: bytearray, load: int, end: int) -> int:
     written = 0
     for addr, value in enumerate(mem):
@@ -185,6 +193,8 @@ def _count_written_outside(mem: bytearray, load: int, end: int) -> int:
         if load <= addr < end:
             continue
         if _STACK_LO <= addr < _STACK_HI:
+            continue
+        if _environment(addr):
             continue
         written += 1
     return written
@@ -231,5 +241,7 @@ def run_init(image: SidImage, subtune: int = 0, max_cycles: int = 8_000_000) -> 
     if image.header is None:
         raise SidParseError("cannot run init: image has no SID header")
     init_address = image.header.init_address or image.header.real_load_address
+    # The driver banks the init's ROM space before calling it (KERNAL/BASIC in).
+    image.mem[1] = psid_init_bank(init_address)
     mpu, mem = wire_mpu(image.mem, sid_model=sid_model_for_flags(image.header.flags))
     run_to_rts(mpu, mem, init_address, subtune, max_cycles)
