@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
-from typing import Dict, Iterable, NamedTuple, Optional
+from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 from .errors import SidError
 from .image import MEM_SIZE
@@ -27,12 +28,16 @@ DDR_DEFAULT, BANK_DEFAULT = 0x2F, 0x37
 
 
 class Rom(NamedTuple):
-    """One C64 ROM: mirror filename, mapped base address, size and SHA-256."""
+    """One C64 ROM: mirror filename, mapped base address, size and SHA-256.
+
+    ``url`` pins an asset to one upstream location instead of the ROM mirror.
+    """
 
     filename: str
     base: int
     size: int
     sha256: str
+    url: Optional[str] = None
 
 
 ROMS: Dict[str, Rom] = {
@@ -53,6 +58,20 @@ ROMS: Dict[str, Rom] = {
         0xD000,
         0x1000,
         "fd0d53b8480e86163ac98998976c72cc58d5dd8eb824ed7b829774e74213b420",
+    ),
+}
+
+# Other fetched, never-committed assets resolved like the ROMs. "poweron" is
+# libsidplayfp's RLE image of the RAM a booted C64 leaves at $0000-$03FF, copied
+# in before a real-C64 (RSID) tune; pinned to the sidtrace oracle's revision.
+ASSETS: Dict[str, Rom] = {
+    "poweron": Rom(
+        "poweron.bin",
+        0x0000,
+        1777,
+        "dcb750bd025598645b89d8fc2840eaa809d0c662bbbf77aa6965442a2d3113fb",
+        "https://raw.githubusercontent.com/libsidplayfp/libsidplayfp/"
+        "9c464110fd471e3989a6c794c0dbf8a218727e13/src/poweron.bin",
     ),
 }
 
@@ -81,12 +100,11 @@ def default_rom_cache(root=None) -> Path:
 
 
 def _spec(name: str) -> Rom:
-    try:
-        return ROMS[name]
-    except KeyError:
-        raise RomFetchError(
-            f"unknown ROM {name!r} (known: {', '.join(sorted(ROMS))})"
-        ) from None
+    spec = ROMS.get(name) or ASSETS.get(name)
+    if spec is None:
+        known = ", ".join(sorted({**ROMS, **ASSETS}))
+        raise RomFetchError(f"unknown ROM {name!r} (known: {known})")
+    return spec
 
 
 def _digest(data: bytes) -> str:
@@ -121,7 +139,7 @@ def fetch_rom(
         return dest
     base = os.environ.get("C64_ROM_MIRROR", mirror).rstrip("/")
     try:
-        data = _download(f"{base}/{spec.filename}")
+        data = _download(spec.url or f"{base}/{spec.filename}")
     except TuneFetchError as exc:
         raise RomFetchError(f"{name}: {exc}") from exc
     if len(data) != spec.size or _digest(data) != spec.sha256:
@@ -178,6 +196,38 @@ def apply_roms(
     return mem
 
 
+def poweron_writes(cache_dir=None) -> Optional[List[Tuple[int, bytes]]]:
+    """sidplayfp's power-on RAM image as ``(address, bytes)`` runs, ``None`` offline.
+
+    Decodes libsidplayfp's ``poweron.bin`` (``copyPoweronPattern``): each run is
+    an offset byte, then a count (bit 7: one repeated value) when the offset's bit 7
+    is set, then the data.
+    """
+    path = resolve_rom("poweron", cache_dir=cache_dir)
+    if path is None:
+        return None
+    text = path.read_text("ascii")
+    stream = [int(v, 16) for v in re.findall(r"0x([0-9a-fA-F]{2})", text)]
+    runs, addr, i = [], 0, 0
+    while i < len(stream):
+        off, count, repeat = stream[i], 0, False
+        i += 1
+        if off & 0x80:
+            off, count = off & 0x7F, stream[i]
+            i += 1
+            repeat, count = bool(count & 0x80), count & 0x7F
+        count += 1
+        addr += off
+        if repeat:
+            runs.append((addr, bytes([stream[i]]) * count))
+            i += 1
+        else:
+            runs.append((addr, bytes(stream[i : i + count])))
+            i += count
+        addr += count
+    return runs
+
+
 def rom_image(names: Iterable[str] = DEFAULT_ROMS, **kwargs) -> bytearray:
     """A ``bytearray(0x10000)`` with the named ROMs mapped (see :func:`apply_roms`)."""
     return apply_roms(bytearray(MEM_SIZE), names, **kwargs)
@@ -194,6 +244,7 @@ def roms_available(
 
 
 __all__ = [
+    "ASSETS",
     "BANK_DEFAULT",
     "BASIC_BOOT",
     "BASIC_RUN",
@@ -206,6 +257,7 @@ __all__ = [
     "apply_roms",
     "default_rom_cache",
     "fetch_rom",
+    "poweron_writes",
     "resolve_rom",
     "rom_image",
     "roms_available",
