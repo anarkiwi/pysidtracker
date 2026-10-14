@@ -12,6 +12,8 @@ python -m pysidtracker.survey run $HVSC tunes.csv --work .hvsc-survey --render m
 python -m pysidtracker.survey report .hvsc-survey/results.csv
 python -m pysidtracker.survey triage .hvsc-survey
 python -m pysidtracker.survey diff $HVSC tunes.csv <md5>_<song> --work .hvsc-survey --render mypkg.survey:render
+python -m pysidtracker.survey leads $HVSC tunes.csv <md5>_<song> --work .hvsc-survey
+python -m pysidtracker.survey leads $HVSC tunes.csv --verdict differs --work .hvsc-survey
 ```
 
 `run` also takes `--player REGEX`, `--limit N` (first N tunes), `--jobs`,
@@ -63,12 +65,19 @@ rows; otherwise they are re-rendered. `results.csv`:
 | `lead` | frames the render is shifted against the oracle (negative: oracle leads) |
 | `first_diff` | first differing oracle frame at that lead |
 | `diff_frames`, `diff_regs` | count of differing frames and the registers involved |
+| `min_lead`, `min_bad` | the lead with the fewest differing frames, and that count |
+| `min_first`, `min_regs` | its first differing frame and the registers differing on its bad frames |
 | `info` | the renderer's dict, as JSON |
 | `oracle_gated`, `library_gated` | whether any voice's gate is ever set |
 | `error` | the failure message for error verdicts |
 
 The lead is the shift (up to `LEAD` frames either way) with the latest first
-mismatch. `diff` prints the oracle (`O`) and render (`L`) register rows around
+mismatch (the smallest `|lead|` on ties). A render wrong only on frame 0 has its
+first mismatch at 0 at the true lead, so another lead can win and `diff_frames`
+then covers nearly the whole song; `min_lead`/`min_bad` expose that case.
+`report` lists the near-exact `differs` subtunes (`min_bad` at most `--near`,
+default 3) grouped by bad-frame count, first bad frame, lead and registers.
+Results written before these columns existed still report, without that list. `diff` prints the oracle (`O`) and render (`L`) register rows around
 a subtune's first difference. The work directory derives from copyright tunes:
 keep it untracked.
 
@@ -85,9 +94,27 @@ rather than ad-hoc scripts:
 | `roles` | voice-agnostic registers involved: `freq`, `pw`, `ctrl`, `ad`, `sr`, `fc`, `res`, `vol` |
 | `diffs` | `[[reg, oracle, render], ...]` at that frame |
 
+`triage.csv` also carries `min_lead`, `min_bad`, `min_first` and `min_regs`,
+computed from the cached grids (so older `results.csv` files get them too), and
+the near-exact list is printed as in `report`.
+
 It also prints the exact rate for every renderer `info` key=value (keys with at
 most 20 distinct values). A renderer that reports the playroutine options it
 decoded therefore shows which options the player does not model yet.
+
+## `leads`
+
+Tabulates every lead from `-LEAD` to `LEAD`: the first differing frame, the
+number of differing frames, and the registers differing on that first frame.
+Cached `oracle/` traces and `library/` grids under `--work` are reused;
+`--render` is needed only for a subtune without a cached library grid (it is
+then rendered and cached). With one key it prints the table, marking the
+chosen lead `*` and `min_lead` `<`. With several keys, `--all` (every `exact`
+or `differs` subtune in `results.csv`) or `--verdict V` (repeatable), it scans
+them in `--jobs` processes into `leads.csv` (`--out` overrides), one row per
+subtune and lead (`key`, `path`, `song`, `frames`, `lead`, `first_diff`, `bad`,
+`regs`), and prints the subtunes whose `lead` and `min_lead` differ and the
+near-exact list.
 
 ## `pysidtracker.sidid`
 

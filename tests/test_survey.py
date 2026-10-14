@@ -443,3 +443,133 @@ def test_check_rerenders_a_cached_trace_without_rti_rows(survey_tree, monkeypatc
     monkeypatch.setattr(oracle, "run_sidtrace", _render)
     assert survey.check(_job(survey_tree, render_exact))["verdict"] == "exact"
     assert len(calls) == 1
+
+
+def render_frame0(data, song, nframes):
+    """Fake renderer: :func:`render_exact` with the volume wrong on frame 0 only."""
+    grid, info = render_exact(data, song, nframes)
+    grid[2, 24] = 14
+    return grid, info
+
+
+def test_scan_leads_matches_aligned_views():
+    rng = np.random.default_rng(1)
+    ref = rng.integers(0, 2, (12, 25)).astype(np.int16)
+    lib = rng.integers(0, 2, (12 + survey.LEAD, 25)).astype(np.int16)
+    lib[3:15] = ref
+    lib[7, 9] ^= 1
+    leads, ne, size, first, nbad = survey.scan_leads(ref, lib)
+    assert list(leads[:3]) == [0, -1, 1] and sorted(leads) == list(range(-8, 9))
+    for i, lead in enumerate(leads):
+        want = np.not_equal(*survey.aligned(ref, lib, lead))
+        assert size[i] == len(want) and (ne[i, : size[i]] == want).all()
+        assert not ne[i, size[i] :].any()
+        rows = want.any(1)
+        assert nbad[i] == rows.sum()
+        assert first[i] == (np.flatnonzero(rows)[0] if rows.any() else len(rows))
+    stats = survey.min_lead((leads, ne, size, first, nbad))
+    assert stats == dict(min_lead=3, min_bad=1, min_first=4, min_regs="v2_pw_lo")
+
+
+def test_check_frame0_fault_min_lead(survey_tree):
+    row = survey.check(_job(survey_tree, render_frame0))
+    assert (row["verdict"], row["lead"], row["first_diff"]) == ("differs", 0, 1)
+    assert row["diff_frames"] > NFRAMES // 2
+    assert (row["min_lead"], row["min_bad"], row["min_first"]) == (2, 1, 0)
+    assert row["min_regs"] == "mode_vol"
+    exact = survey.check(_job(survey_tree, render_exact))
+    assert (exact["min_lead"], exact["min_bad"], exact["min_first"]) == (2, 0, "")
+
+
+def _near_lines(out):
+    lines = out.splitlines()
+    i = next(i for i, ln in enumerate(lines) if ln.startswith("near-exact"))
+    return lines[i : i + 2]
+
+
+def test_report_and_triage_surface_near_exact(survey_tree, capsys):
+    hvsc, tunes, work, tune = survey_tree
+    survey.run(hvsc, tunes, work, render_frame0, jobs=1)
+    rows = survey.load_tunes(work / "results.csv")
+    assert [(r["min_lead"], r["min_bad"], r["min_regs"]) for r in rows] == [
+        ("", "", ""),
+        ("2", "1", "mode_vol"),
+    ]
+    capsys.readouterr()
+    survey.main(["report", str(work / "results.csv")])
+    head, line = _near_lines(capsys.readouterr().out)
+    assert head.endswith(": 1")
+    assert line.split()[:5] == ["1", "bad=1", "first=0", "lead=2", "mode_vol"]
+    survey.main(["report", str(work / "results.csv"), "--near", "0"])
+    assert _near_lines(capsys.readouterr().out)[0].endswith(": 0")
+    survey.main(["triage", str(work), "--jobs", "1"])
+    head, line = _near_lines(capsys.readouterr().out)
+    assert head.endswith(": 1") and "mode_vol" in line
+    (trow,) = survey.load_tunes(work / "triage.csv")
+    assert (trow["key"], trow["first_diff"], trow["min_lead"]) == (
+        f"{tune['md5']}_2",
+        "1",
+        "2",
+    )
+    assert (trow["min_bad"], trow["min_first"], trow["min_regs"]) == (
+        "1",
+        "0",
+        "mode_vol",
+    )
+
+
+def test_old_results_without_min_columns(survey_tree, capsys):
+    hvsc, tunes, work, _ = survey_tree
+    survey.run(hvsc, tunes, work, render_frame0, jobs=1)
+    rows = survey.load_tunes(work / "results.csv")
+    old = [f for f in survey.RESULT_FIELDS if not f.startswith("min_")]
+    with open(work / "results.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, old, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    capsys.readouterr()
+    verdicts = survey.report(work / "results.csv")
+    assert verdicts[("GoatTracker_V2.x", "differs")] == 1
+    assert _near_lines(capsys.readouterr().out)[0].endswith(": 0")
+    (t,), _ = survey.triage(work, jobs=1)
+    assert (t["min_lead"], t["min_bad"], t["min_regs"]) == (2, 1, "mode_vol")
+    assert _near_lines(capsys.readouterr().out)[0].endswith(": 1")
+
+
+def test_leads_one_key(survey_tree, capsys):
+    hvsc, tunes, work, tune = survey_tree
+    key = f"{tune['md5']}_2"
+    args = ["leads", str(hvsc), str(tunes), key, "--work", str(work)]
+    with pytest.raises(ValueError, match="no --render"):
+        survey.main(args)
+    survey.main(args + ["--render", f"{__name__}:render_frame0"])
+    out = capsys.readouterr().out.splitlines()
+    assert "lead 0 (*" in out[0] and "min_lead 2 (<" in out[0]
+    table = {int(ln[:4]): ln[4:].split() for ln in out[2:]}
+    assert sorted(table) == list(range(-8, 9))
+    assert table[0][:2] == ["*", "1"] and table[2] == ["<", "0", "1", "mode_vol"]
+    assert (work / "library" / f"{key}.csv.zst").exists()
+    survey.main(args)
+    assert capsys.readouterr().out.splitlines() == out
+
+
+def test_leads_all_and_verdict(survey_tree, capsys):
+    hvsc, tunes, work, tune = survey_tree
+    survey.run(hvsc, tunes, work, render_frame0, jobs=1)
+    base = ["leads", str(hvsc), str(tunes), "--work", str(work), "--jobs", "1"]
+    capsys.readouterr()
+    survey.main(base + ["--all"])
+    out = capsys.readouterr().out
+    assert "lead != min_lead: [((0, 2), 1)]" in out
+    assert _near_lines(out)[0].endswith(": 1")
+    rows = survey.load_tunes(work / "leads.csv")
+    assert {r["key"] for r in rows} == {f"{tune['md5']}_2"}
+    assert [int(r["lead"]) for r in rows] == list(range(-8, 9))
+    by = {int(r["lead"]): r for r in rows}
+    assert (by[2]["first_diff"], by[2]["bad"], by[2]["regs"]) == ("0", "1", "mode_vol")
+    assert (by[0]["first_diff"], by[0]["frames"]) == ("1", str(NFRAMES))
+    out_csv = work / "x.csv"
+    survey.main(base + ["--verdict", "exact", "--out", str(out_csv)])
+    assert survey.load_tunes(out_csv) == []
+    with pytest.raises(SystemExit):
+        survey.main(base)
