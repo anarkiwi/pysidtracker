@@ -113,7 +113,7 @@ def test_cli_disasm_hex_range_args(tmp_path, capsys):
 def test_cli_disasm_after_init(tmp_path, capsys):
     path = tmp_path / "t.sid"
     path.write_bytes(build_psid(_INIT, load=0x1000, init=0x1000, play=0x1000))
-    _cli(["disasm", str(path), "--after-init", "1000", "1006"])
+    _cli(["disasm", str(path), "1000", "1006", "--after-init"])
     out = capsys.readouterr().out
     assert "STA $2000" in out
 
