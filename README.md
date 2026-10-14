@@ -77,8 +77,13 @@ API.
   `locate_note_freq` (find hi/lo tables from paired absolute-indexed reads).
 - `make_package_errors` — per-package error hierarchy factory whose `*ParseError`
   / `*FormatError` subclass the base ones, so base `except` clauses catch them.
-- `formats` / `maincli` — the one `pysidtracker` CLI (`info` / `reglog` / `wav`)
-  that discovers installed formats through the `pysidtracker.formats`
+- `disasm` — disassemble any range of a `.sid`/`.prg` image (on jennings, so
+  the NMOS illegal opcodes render as real mnemonics), with the header's
+  init/play entries labelled (`entry_labels`) and `image_after_init` the image
+  state after the tune's init ran; backs the `pysidtracker disasm` command and
+  replaces the per-repo disassembler scripts.
+- `formats` / `maincli` — the one `pysidtracker` CLI (`info` / `reglog` / `wav`
+  / `disasm`) that discovers installed formats through the `pysidtracker.formats`
   entry-point group and runs against each format's parser + player, plus any
   subcommands it contributes. A format package registers a `SidFormat` instead
   of shipping its own CLI. `cli` holds the underlying argparse scaffold

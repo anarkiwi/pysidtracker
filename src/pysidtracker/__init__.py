@@ -23,6 +23,7 @@ from .base import BaseSidParser
 from .cadence import Cadence, TriggerSource, cadence_from_latch, playroutine_cadence
 from .cli import add_reglog_command, add_wav_command, print_info, run_cli
 from .codescan import CodePattern, Match, find_code_all, find_code_first
+from .disasm import disassemble, entry_labels, image_after_init
 from .detect import (
     Detection,
     PlayroutineKind,
@@ -153,7 +154,7 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -235,8 +236,10 @@ __all__ = [
     "default_rom_cache",
     "default_tune_cache",
     "detect_playroutine",
+    "disassemble",
     "discover_formats",
     "encode_cstr",
+    "entry_labels",
     "fetch_disk",
     "fetch_prgs",
     "fetch_rom",
@@ -248,6 +251,7 @@ __all__ = [
     "frames_to_seconds",
     "gather_tune_relpaths",
     "grid_from_writes",
+    "image_after_init",
     "is_jmp_vector",
     "locate_note_freq",
     "make_oracle_fixtures",
