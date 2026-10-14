@@ -43,8 +43,12 @@ ignored), and every row belongs to the innermost running handler, or `None`
 outside all of them. `play_source(rows, chip)` is the source whose handlers
 drive the most distinct SID registers, then make the most writes, so a digi
 NMI interrupting the music IRQ never claims the IRQ's writes. A trace without
-`rti` rows (sidtrace < v0.6.0) raises `ValueError`; `cached_sidtrace`,
-`oracle_grid` and the survey caches re-render it.
+`rti` rows (a handler that never returned, or sidtrace < v0.6.0) cannot be
+nested, so `handler_sources` reports `None` for every row and `play_source`
+returns `None`; the cadence and grid helpers then fall back to the most raised
+source. `cached_sidtrace` and `oracle_grid` reuse such a cached trace rather than
+re-rendering it (which cannot add an `rti`); staleness across sidtrace upgrades
+is decided by the caller's `oracle/STAMP` (the sidtrace image id).
 
 ## Using it in a format package
 

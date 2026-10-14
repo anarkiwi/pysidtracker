@@ -352,14 +352,15 @@ def nested(rows: Sequence[SidtraceRow]) -> bool:
 
 
 def handler_sources(rows: Sequence[SidtraceRow]) -> List[Optional[str]]:
-    """The interrupt source whose handler executes each row, ``None`` outside any.
+    """The interrupt source whose handler executes each row, ``None`` otherwise.
 
     Each ``*_entry`` pushes its source (``brk_entry`` the running one) and each
-    ``rti`` pops, so a write belongs to the innermost running handler.
-    ``ValueError`` if the trace has no ``rti`` rows (re-render it).
+    ``rti`` pops, so a write belongs to the innermost running handler. A trace
+    with no ``rti`` rows (a handler that never returned, sidtrace < v0.6.0, or a
+    main loop that set the I flag) cannot be nested, so every row is ``None``.
     """
     if not nested(rows):
-        raise ValueError("sidtrace trace has no rti rows: re-render it")
+        return [None] * len(rows)
     stack: List[Optional[str]] = [None]
     out: List[Optional[str]] = []
     for row in rows:
@@ -405,7 +406,7 @@ def raise_cycles(rows: Sequence[SidtraceRow], source: str) -> List[int]:
 def _raises(rows: Sequence[SidtraceRow], chip: int = 0) -> List[int]:
     """Raise cycles of the :func:`play_source` of ``chip``, else the most raised.
 
-    ``ValueError`` without interrupt or ``rti`` rows.
+    ``ValueError`` without interrupt rows (nothing the tune could play at).
     """
     raised = Counter(r.value for r in rows if r.value in RAISE_SOURCES)
     if not raised:
@@ -417,8 +418,8 @@ def _raises(rows: Sequence[SidtraceRow], chip: int = 0) -> List[int]:
 def sidtrace_cadence(rows: Sequence[SidtraceRow], *, chip: int = 0) -> Optional[int]:
     """The play cadence (cycles per call): the median gap between :func:`_raises`.
 
-    ``None`` with fewer than two raises; ``ValueError`` without interrupt or
-    ``rti`` rows.
+    ``None`` with fewer than two raises, a never-returning tune, or no interrupt
+    rows (the latter raises ``ValueError``).
     """
     raises = _raises(rows, chip)
     diffs = [b - a for a, b in zip(raises, raises[1:])]
@@ -482,17 +483,19 @@ def sidtrace_image_id(image: str = SIDTRACE_IMAGE, docker: str = "docker"):
 
 
 def cached_sidtrace(tune_path, csv_path, *, force: bool = False, **kw):
-    """The rows of the trace cached at ``csv_path``, rendered when needed.
+    """The rows of the trace cached at ``csv_path``, rendered when it is missing.
 
-    :func:`run_sidtrace` (``kw``) renders it when missing, ``force``d or without
-    ``rti`` rows (sidtrace < v0.6.0).
+    :func:`run_sidtrace` (``kw``) renders it only when missing or ``force``d.
+    Whether a cached trace is still current is decided by the caller's oracle
+    cache stamp (the sidtrace image id, see ``survey.oracle_cache``), which
+    wipes traces rendered by an older sidtrace. A valid trace without ``rti``
+    rows (a never-returning main loop) is reused as-is, since re-rendering
+    cannot add one.
     """
     csv_path = Path(csv_path)
-    rows = None if force or not csv_path.exists() else read_sidtrace(csv_path)
-    if rows is None or not nested(rows):
+    if force or not csv_path.exists():
         run_sidtrace(tune_path, csv_path, **kw)
-        rows = read_sidtrace(csv_path)
-    return rows
+    return read_sidtrace(csv_path)
 
 
 def run_sidtrace(

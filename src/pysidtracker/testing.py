@@ -306,9 +306,9 @@ def oracle_grid(
 ):
     """Per-frame reference grid for ``tune_path`` from the sidtrace oracle.
 
-    The CSV is cached at ``oracle_cache/<stem>.csv.zst`` and reused while it has
-    ``rti`` rows (sidtrace >= v0.6.0; ``force`` re-renders). ``cycles_per_frame``
-    fixes the cadence. Returns the first ``frames`` rows (all when ``None``).
+    The CSV is cached at ``oracle_cache/<stem>.csv.zst`` and reused from the
+    cache while present (``force`` re-renders). ``cycles_per_frame`` fixes the
+    cadence. Returns the first ``frames`` rows (all when ``None``).
     """
     tune_path = Path(tune_path)
     csv_path = Path(oracle_cache) / f"{tune_path.stem}.csv.zst"
