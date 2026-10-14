@@ -35,6 +35,11 @@ API.
   programs its interrupts in sidplayfp's PSID driver environment
   ([docs/cadence.md](docs/cadence.md)); `cadence_check` validates it against
   sidtrace interrupt rows.
+- `irqhost` — `InterruptHost` / `InterruptPlayer` boot and run a PSID or RSID as
+  the sidtrace oracle's sidplayfp does, every VIC-II and CIA interrupt and the
+  VIC's stolen cycles modelled, its trace identical to the oracle's;
+  `host_cadence` measures its play cadence and `host_check` compares traces
+  ([docs/irqhost.md](docs/irqhost.md)).
 - `native_decrunch` — native exomizer unpack (pydexomizer), an init-free
   alternative depack path; opt-in via `detect_playroutine(..., native=True)`.
 - `reglog` — `RegWrite` register-log format (`read_reglog` / `write_reglog`) and

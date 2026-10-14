@@ -105,3 +105,18 @@ RAM: CHRGET, `TXTTAB`, `MEMSIZ`) — then place the program at `$0801`, set
 links, apply CLR's effects, and enter the interpreter at `BASIC_RUN` (`$A7B1`)
 with the subtune number in `$030C`. This mirrors what libsidplayfp's `psiddrv`
 does, minus its captured power-on RAM snapshot.
+
+## sidplayfp's power-on RAM image
+
+libsidplayfp copies its own image of the RAM a booted C64 leaves at
+`$0000`-`$03FF` (`src/poweron.bin`, a small RLE stream) before an RSID's init, so a
+tune reading the zero page sees what it sees under sidplayfp. It is GPL data, so
+it is handled like the ROMs: `roms.ASSETS["poweron"]` pins it to the sidtrace
+oracle's libsidplayfp revision, `fetch_rom("poweron")` / `resolve_rom("poweron")`
+fetch and SHA-256 verify it into the same cache, and `poweron_writes()` decodes
+it to `(address, bytes)` runs (or `None` offline). `pysidtracker.irqhost` applies
+it ([irqhost.md](irqhost.md)); the `roms` CI job fetches it for real.
+
+| Asset | Source | Size | SHA-256 |
+|---|---|---|---|
+| `poweron.bin` | `libsidplayfp/libsidplayfp@9c464110/src/poweron.bin` | 1777 | `dcb750bd025598645b89d8fc2840eaa809d0c662bbbf77aa6965442a2d3113fb` |

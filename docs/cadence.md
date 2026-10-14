@@ -110,3 +110,20 @@ after the first, which init can hold back. A row agrees when the source matches
 and the predicted calls over the measured span are within one frame's calls of
 the count. Verdicts: `agree`, `rate`, `source`, `unknown` (no predicted source),
 `no_raises`, `oracle_error`, `cadence_error`.
+
+## Measured cadence from the interrupt host
+
+`playroutine_cadence` models interrupts without the cycles the VIC steals or the
+CIA pipeline, and measures a few frames, so a tempo that varies or a source that
+needs cycle-exact timing can come out wrong. `irqhost.host_cadence(data, *,
+clock=None, subtune=0, seconds=10.0)` instead runs the tune on the
+[interrupt host](irqhost.md), whose trace is the oracle's, and measures it the way
+`cadence_check` measures the oracle: the play source by `play_source` (raised at
+least three times), its rate over the raises after the first. It returns a
+`Cadence` (`latch` is `None`; `dynamic` when a timer source's gaps vary) at the
+cost of emulating `seconds` of the tune.
+
+```bash
+python -m pysidtracker.cadence_check run $HVSC tunes.csv --work .cadence-check \
+    --cadence pysidtracker.irqhost:host_cadence --jobs 6
+```

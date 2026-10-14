@@ -95,6 +95,7 @@ from .oracle import (
     sidtrace_grid,
 )
 from .player import MemPlayer
+from .irqhost import InterruptHost, InterruptPlayer, host_cadence
 from .registers import (
     NTSC_CLOCK_HZ,
     NTSC_CYCLES_PER_FRAME,
@@ -152,7 +153,7 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -224,6 +225,9 @@ __all__ = [
     "attack_decay",
     "byte_range",
     "cadence_from_latch",
+    "host_cadence",
+    "InterruptHost",
+    "InterruptPlayer",
     "check",
     "cycles_per_frame_for_flags",
     "decode_cstr",

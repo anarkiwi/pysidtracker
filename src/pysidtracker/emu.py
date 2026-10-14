@@ -41,13 +41,21 @@ class SidReads:
         """Queue a write to SID ``register`` (offset) at CPU ``cycle``."""
         self._queue.append(cycle << 16 | register << 8 | value)
 
-    def read(self, cycle: int, register: int) -> int:
-        """The chip's value of ``register`` (offset) at CPU ``cycle``."""
+    def flush(self, cycle: int) -> None:
+        """Clock the chip through every queued write up to CPU ``cycle``."""
         for word in self._queue:
             self._clock(word >> 16)
             self._sid.write((word >> 8) & 0xFF, word & 0xFF)
         del self._queue[:]
         self._clock(cycle)
+
+    def pending(self) -> int:
+        """Writes queued since the last read or flush."""
+        return len(self._queue)
+
+    def read(self, cycle: int, register: int) -> int:
+        """The chip's value of ``register`` (offset) at CPU ``cycle``."""
+        self.flush(cycle)
         return self._sid.read(register)
 
 

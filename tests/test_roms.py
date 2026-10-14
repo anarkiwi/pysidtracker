@@ -186,3 +186,35 @@ def test_real_roms_fetch_verify_and_map(c64_roms):
     assert mem[0xA000] | mem[0xA001] << 8 == 0xE394  # BASIC cold start
     assert bytes(mem[0xD000:0xD008]) == bytes.fromhex("3c666e6e60623c00")  # '@' glyph
     assert [c64_roms(n).name for n in ROMS] == [r.filename for r in ROMS.values()]
+
+
+def test_poweron_writes_decode_libsidplayfps_rle(tmp_path, monkeypatch):
+    path = tmp_path / "poweron.bin"
+    path.write_text(
+        "/* addr, off, rle, values */\n"
+        "/*$0003*/ 0x83, 0x01, 0xaa, 0xbb,\n"
+        "/*$0008*/ 0x03,       0x4c,\n"
+        "/*$000c*/ 0x83, 0x82, 0x00,\n"
+    )
+    monkeypatch.setattr(roms, "resolve_rom", lambda *a, **k: path)
+    assert roms.poweron_writes() == [(3, b"\xaa\xbb"), (8, b"\x4c"), (12, bytes(3))]
+
+
+def test_poweron_writes_offline_is_none(monkeypatch):
+    monkeypatch.setattr(roms, "resolve_rom", lambda *a, **k: None)
+    assert roms.poweron_writes() is None
+
+
+def test_poweron_is_pinned_to_the_oracles_libsidplayfp():
+    spec = roms.ASSETS["poweron"]
+    assert spec.url.endswith(f"/{spec.filename}") and "9c464110" in spec.url
+    with pytest.raises(RomFetchError, match="unknown ROM"):
+        fetch_rom("nonesuch")
+
+
+@pytest.mark.roms
+def test_real_poweron_image_holds_the_kernal_vectors():
+    ram = bytearray(0x400)
+    for addr, data in roms.poweron_writes():
+        ram[addr : addr + len(data)] = data
+    assert ram[0x314:0x31A] == bytes.fromhex("31ea66fe47fe")
