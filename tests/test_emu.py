@@ -218,7 +218,7 @@ def test_rom_space_reads_follow_the_01_bank():
     subject[0xA000] = 0xAB  # shadow RAM behind BASIC
     subject[0xD000] = 0xEF  # shadow RAM behind the character ROM / I/O page
     subject[0xE000] = 0xCD  # shadow RAM behind KERNAL
-    mpu, mem = wire_mpu(subject)
+    _, mem = wire_mpu(subject)
     kernal = kernal_stub()
 
     for bank in range(0x00, 0x20):
@@ -242,7 +242,7 @@ def test_rom_space_reads_follow_the_01_bank():
 
 def test_a_rebanked_tune_reads_the_ram_behind_a_rom():
     subject = bytearray(0x10000)
-    mpu, mem = wire_mpu(subject)
+    _, mem = wire_mpu(subject)
     subject[1] = 0x37  # ROMs in (H-IRAM set): KERNAL stub shadows the RAM
     mem[0xE000] = 0x5A
     assert mem[0xE000] == 0xEA  # a read still returns the KERNAL stub (a NOP)
