@@ -14,6 +14,7 @@ python -m pysidtracker.survey triage .hvsc-survey
 python -m pysidtracker.survey diff $HVSC tunes.csv <md5>_<song> --work .hvsc-survey --render mypkg.survey:render
 python -m pysidtracker.survey leads $HVSC tunes.csv <md5>_<song> --work .hvsc-survey
 python -m pysidtracker.survey leads $HVSC tunes.csv --verdict differs --work .hvsc-survey
+python -m pysidtracker.survey variants build1.sid build2.sid --ref base.sid --out variants.csv
 ```
 
 `run` also takes `--player REGEX`, `--limit N` (first N tunes), `--jobs`,
@@ -70,6 +71,33 @@ loses to any candidate of comparable length. The output is TSV: `native`,
 `hvsc`, `length` (the query image length), `ndiff` (differing bytes over the
 overlap at the winning offset), `offset`; `--out` writes it to a file instead
 of stdout.
+
+## `variants`
+
+Cluster the survey's `not_decompiled` and `differs` residue — player builds a
+format's decompiler has not transcribed — by the code that actually runs
+(`pysidtracker.variants`). Each tune's own init/play is run (the `emu` host for
+a direct `play` routine, the `irqhost` C64 for an IRQ tune) and the executed
+instructions in the loaded span are kept; data and never-run code drop out.
+Every instruction is normalised to a relocation-invariant form (immediates
+kept; absolute operands in the span become offsets from the load address;
+zero-page and I/O operands become symbolic classes) and hashed per basic block
+and per JSR-routine. Tunes whose hash sets are identical are one cluster, and
+near-identical ones (one added or moved instruction) are matched by Jaccard
+over those sets (`--threshold`, default 0.8). Each tune's nearest `--ref`
+build (default: none) is scored and diffed instruction-by-instruction.
+
+```bash
+python -m pysidtracker.survey variants tune1.sid tune2.sid --ref base.prg --out variants.csv
+```
+
+`paths` are `.sid`/`.prg` files or a `find` CSV (resolved against `--hvsc`).
+The per-tune CSV (`--out`) has `name, cluster, n_insns, n_blocks, n_routines,
+nearest_ref, distance (= 1 - Jaccard), ndiff` so `report` can break verdicts
+down by cluster. The CLI also prints each cluster and the inserted/removed/
+changed instructions (and the table/cell operands that moved) between a tune
+and its nearest ref — the input a library needs to extend its operand-based
+cell discovery, or to declare a hand-modified one-off.
 
 ## `run`
 

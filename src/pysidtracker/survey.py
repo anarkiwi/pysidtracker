@@ -41,6 +41,7 @@ from .oracle import (
     sidtrace_image_id,
 )
 from .sidid import identify, sidid_signatures
+from .variants import variants_cli
 
 LEAD = 8
 NEAR = 3
@@ -947,6 +948,17 @@ def main(argv=None):
     )
     p.add_argument("--out", help="output TSV (default: stdout)")
     p.add_argument("--max-offset", type=int, default=MAX_OFFSET)
+    pv = sub.add_parser("variants", help=variants_cli.__doc__)
+    pv.add_argument(
+        "paths", nargs="+", help=".sid/.prg tunes, or a find CSV (use --hvsc)"
+    )
+    pv.add_argument(
+        "--ref", action="append", default=[], help="a reference build (repeatable)"
+    )
+    pv.add_argument("--hvsc", help="HVSC root resolving a find CSV's paths")
+    pv.add_argument("--out", help="write the per-tune CSV here")
+    pv.add_argument("--nframes", type=int, default=8)
+    pv.add_argument("--threshold", type=float, default=0.8)
     p = sub.choices["run"]
     p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
     p.add_argument("--limit", type=int, help="only the first N tunes")
@@ -1026,6 +1038,15 @@ def main(argv=None):
             load_render(a.body) if a.body else image_body,
             out=a.out,
             max_offset=a.max_offset,
+        )
+    elif a.cmd == "variants":
+        out = variants_cli(
+            a.paths,
+            a.ref,
+            hvsc=a.hvsc,
+            out=a.out,
+            nframes=a.nframes,
+            threshold=a.threshold,
         )
     else:
         out = report(a.results, a.near)
