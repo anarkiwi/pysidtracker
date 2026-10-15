@@ -80,6 +80,24 @@ This reveals the play address and cadence that an IRQ-driven header hides
 (e.g. Soundmonitor's CIA-timed cohort). Requires the core `jennings` dependency;
 raises `EmulatorUnavailable` if jennings is missing.
 
+### `init_effects` — song -> playroutine resolution
+
+Some header formats do not map a song to a playroutine by arithmetic: the init
+remaps or patches the song number (a table indexed by it) or picks one of several
+bundled modules, so the song -> subtune map only exists after the tune's own init
+has run. `init_effects(image, song, watch=..., max_cycles=...)` runs that init on
+the shared `emu` host with `A = song`, on a private snapshot (the caller's image
+is never mutated), and records what it left in RAM: the final store per cell
+(value and the store's PC) in `writes`, each data read (value and the load's PC,
+in order) in `reads`, and the installed play/IRQ vectors and CIA latches in
+`jumps`. Instruction fetches and stack traffic never appear; on the jennings
+engine they bypass the pcode data path that `emu.observe_data_access` hooks.
+`subtune_selection(image, songs, cell)` runs one song at a time and returns
+`{song: value}` for a known selection cell (raising `SidParseError` when a song
+is outside the header's `1..songs` or two songs alias the same value);
+`init_diff(image, songs)` returns the cells whose final value differs between
+songs, finding the selection cell when a library does not know it.
+
 ### `emu` — the shared jennings 6502 host
 
 `wire_mpu(subject, illegal_opcodes=True)` builds the MPU that `run_init`,
