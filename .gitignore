@@ -220,7 +220,8 @@ __marimo__/
 # sidtrace oracle test cache (HVSC tunes + CSV traces)
 .oracle-cache/
 
-# HVSC tune / C64 ROM fetch cache (never committed: copyright works)
+# HVSC tune / C64 ROM fetch cache (never committed: copyright works); also
+# holds the CSDB native-format fixture cache under .tunecache/native/
 .tunecache/
 
 # cadence_check work dir (sidtrace traces, results, libsidplayfp reference)

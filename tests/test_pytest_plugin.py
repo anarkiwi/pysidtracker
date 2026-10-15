@@ -122,3 +122,41 @@ def test_c64_roms_fixture_skips_when_unavailable(pytester, tmp_path):
         """)
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(skipped=1)
+
+
+def test_native_fixture_resolves_when_warm(pytester, tmp_path):
+    import hashlib
+
+    data = b"\x00GOAT\x01"
+    cache = tmp_path / "cache"
+    native_dir = cache / "native"
+    (native_dir / "dl" / "777").mkdir(parents=True)
+    (native_dir / "dl" / "777" / "101_Blitz.sng").write_bytes(data)
+    sha = hashlib.sha256(data).hexdigest()
+    (native_dir / "SHA256SUMS.txt").write_text(
+        f"{sha}  dl/777/101_Blitz.sng  https://csdb.dk/x\n", encoding="utf-8"
+    )
+    pytester.makepyfile(f"""
+        import os
+        os.environ["PYSID_TUNECACHE"] = {str(cache)!r}
+
+        def test_it(native):
+            path = native("{sha}")
+            assert path is not None and path.read_bytes() == b"\\x00GOAT\\x01"
+            assert native.available("{sha}") is True
+        """)
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+
+
+def test_native_fixture_none_when_cold(pytester, tmp_path):
+    pytester.makepyfile(f"""
+        import os
+        os.environ["PYSID_TUNECACHE"] = {str(tmp_path / "cache")!r}
+
+        def test_it(native):
+            assert native("f" * 64) is None
+            assert native.available("f" * 64) is False
+        """)
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)

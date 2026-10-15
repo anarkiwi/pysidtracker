@@ -66,6 +66,15 @@ API.
   `apply_roms`) for tunes that cannot run without the ROMs. The ROMs are
   copyright works: fetched into a gitignored cache, never committed
   ([docs/c64-roms.md](docs/c64-roms.md)).
+- `fixtures` — CSDB (csdb.dk) native-format editor files (GoatTracker/DMCSID/JCH)
+  are copyright works and never committed: `fetch_csdb` scrapes release pages and
+  downloads every file into a gitignored, resume-safe cache indexed by SHA-256 in
+  `SHA256SUMS.txt`; `fixture(sha256, cache)` resolves a file by hash,
+  `make_native_fixtures` is a pytest factory that resolves or **skips** when the
+  cache is cold, and `load_manifest`/`write_manifest` are the committed
+  hash-only manifest. `pysidtracker fixtures fetch <manifest>` (and the
+  `pysid-fixtures` script) recreate the cache from it
+  ([docs/native-fixtures.md](docs/native-fixtures.md)).
 - `audio` — `render_player_wav` / `render_player_samples` drive a `MemPlayer`
   straight to WAV through an emulated SID (pyresidfp, a core dependency); the
   lower-level `render_wav` / `render_samples` take a bare write stream, plus
