@@ -44,25 +44,65 @@ _E_NOFILE = 40
 _E_EOF = 24
 
 
+_SYS_TOKEN = 0x9E  # the C64 BASIC token for the SYS verb
+
+
+def _sys_operand(tokens: bytes) -> Optional[int]:
+    """The decimal value following the first ``SYS`` token in ``tokens``, or ``None``.
+
+    The target is stored as ASCII digits after ``$9E``; an optional space is skipped
+    so ``SYS 2085`` and ``SYS2085`` (``9E 32 30 38 35``) both read as 2085. A symbolic
+    ``SYS`` (a name, no digits) yields ``None``.
+    """
+    i = tokens.find(bytes([_SYS_TOKEN]))
+    if i < 0:
+        return None
+    k = i + 1
+    n = len(tokens)
+    while k < n and tokens[k] == 0x20:
+        k += 1
+    first = k
+    while k < n and 0x30 <= tokens[k] <= 0x39:
+        k += 1
+    if k == first:
+        return None
+    return int(tokens[first:k].decode("ascii"))
+
+
 def sys_addr(
     ram_or_image: Union["SidImage", bytes, bytearray], base: int = 0x0801
 ) -> int:
-    """A single-line ``SYS`` stub at ``base`` returns the address it hands off to.
+    """The hand-off address of a one-``SYS`` stub line at ``base``.
 
-    ``SYS`` is BASIC token ``$64`` followed by the low then high byte of the target;
-    this finds the first such token in ``base``..``base+256`` and returns it (LE) --
-    enough for a one-``SYS``-line oracle stub. Accepts a ``SidImage`` or a buffer.
+    ``base`` starts a BASIC line (2-byte next-pointer, 2-byte line number, token
+    until ``$00``); this walks the chain and returns the first numeric ``SYS``
+    operand, reading only each line's token so a stray ``$64`` cannot be misread.
 
     Raises:
-      KernalHostError: no ``SYS`` token in the region.
+      KernalHostError: no line in the chain has a numeric ``SYS`` token.
     """
     mem = (
         ram_or_image.mem if isinstance(ram_or_image, SidImage) else bytes(ram_or_image)
     )
-    for i in range(base, min(len(mem) - 2, base + 256)):
-        if mem[i] == 0x64:
-            return mem[i + 1] | (mem[i + 2] << 8)
-    raise KernalHostError(f"no SYS token in [${base:04x}, ${base + 256:04x})")
+    n = len(mem)
+    p = base & 0xFFFF
+    seen: Set[int] = set()
+    for _ in range(4096):
+        if p in seen or p + 5 >= n:
+            break
+        seen.add(p)
+        tok_from = p + 4  # skip the next-pointer and line number
+        tok_end = tok_from
+        while tok_end < n and mem[tok_end] != 0x00:
+            tok_end += 1
+        operand = _sys_operand(bytes(mem[tok_from:tok_end]))
+        if operand is not None:
+            return operand
+        nxt = mem[p] | (mem[p + 1] << 8)
+        if nxt == p or nxt in seen:
+            break
+        p = nxt
+    raise KernalHostError(f"no numeric SYS token in the line chain at ${base:04x}")
 
 
 class KernalHost:
