@@ -3,13 +3,16 @@
 ``find`` lists tunes by SIDId signature, ``run`` compares every subtune's oracle
 and ``module:function`` renderer grids, ``report`` tallies, ``diff`` shows frames,
 ``triage`` classifies first differences and renderer ``info`` exact rates,
-``leads`` tabulates every alignment lead's mismatches.
+``leads`` tabulates every alignment lead's mismatches, ``file`` compares native
+files (bare PRGs wrapped as PSID) with their own player.
 """
 
 import argparse
 import csv
+import functools
 import hashlib
 import importlib
+import importlib.util
 import io
 import json
 import math
@@ -20,7 +23,7 @@ import signal
 import sys
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -28,14 +31,16 @@ import zstandard
 from tqdm import tqdm
 
 from . import registers
+from .cadence import playroutine_cadence
 from .disasm import entry_labels
 from .errors import SidParseError
-from .header import parse_sid_header
+from .header import PSID_MAGIC, RSID_MAGIC, parse_sid_header, write_psid
 from .image import SidImage
 from .oracle import (
     SidtraceUnavailable,
     cached_sidtrace,
     read_sidtrace,
+    register_grid,
     sidtrace_cadence,
     sidtrace_grid,
     sidtrace_image_id,
@@ -91,6 +96,7 @@ RESULT_FIELDS = [
     "library_gated",
     "error",
 ]
+FILE_FIELDS = RESULT_FIELDS + ["oracle"]
 _FIND = {}
 
 
@@ -210,8 +216,9 @@ def aligned(oracle, lib, lead):
     return oracle[-lead:], lib[: len(oracle) + lead]
 
 
-def scan_leads(oracle, lib):
-    """Mismatches of ``lib`` against ``oracle`` at every lead, in ``|lead|`` order.
+def scan_leads(oracle, lib, max_lead=LEAD):
+    """Mismatches of ``lib`` against ``oracle`` at every lead up to ``max_lead``,
+    in ``|lead|`` order (``lib`` holds at least ``len(oracle) + max_lead`` frames).
 
     Returns ``(leads, ne, size, first, nbad)``: ``ne[i, f, r]`` is whether register
     ``r`` differs on aligned frame ``f`` at ``leads[i]`` (False past that lead's
@@ -219,7 +226,7 @@ def scan_leads(oracle, lib):
     when none) and ``nbad[i]`` the count of bad frames.
     """
     n = len(oracle)
-    leads = np.array(sorted(range(-min(LEAD, n - 1), LEAD + 1), key=abs))
+    leads = np.array(sorted(range(-min(max_lead, n - 1), max_lead + 1), key=abs))
     frames = np.arange(n)
     size = n - np.maximum(-leads, 0)
     o = np.minimum(frames + np.maximum(-leads, 0)[:, None], n - 1)
@@ -273,6 +280,20 @@ def verdict_fields(scan):
         diff_regs=reg_names(ne[i, : size[i]].any(0)),
         **min_lead(scan),
     )
+
+
+def compare_grids(a, b, max_shift=LEAD):
+    """:func:`verdict_fields` of render ``b`` against render ``a`` at every
+    constant frame shift up to ``max_shift``, plus the compared ``frames``.
+
+    ``b[f + min_lead]`` best matches ``a[f]``; ``a`` is cut to
+    ``len(b) - max_shift`` frames.
+    """
+    a, b = np.asarray(a, np.int16), np.asarray(b, np.int16)
+    n = min(len(a), len(b) - max_shift)
+    if n < 1:
+        raise ValueError(f"grids of {len(a)} and {len(b)} frames, shift {max_shift}")
+    return dict(frames=n, **verdict_fields(scan_leads(a[:n], b, max_shift)))
 
 
 def gated(grid):
@@ -333,6 +354,32 @@ def deadline(seconds):
         signal.signal(signal.SIGALRM, old)
 
 
+def library_row(row, oracle, render, data, song, *, lead=LEAD, timeout=0, lcsv=None):
+    """``row`` completed by ``render(data, song, len(oracle) + lead)`` against
+    ``oracle``: its :func:`verdict_fields`, or a ``not_decompiled`` /
+    ``library_error`` verdict. The render grid is cached at ``lcsv`` if given."""
+    need = len(oracle) + lead
+    try:
+        with deadline(timeout):
+            lib, info = render(data, song, need)
+        lib = np.asarray(lib, dtype=np.int16)
+        if lib.ndim != 2 or lib.shape[1] != NREGS or len(lib) < need:
+            raise ValueError(f"render grid shape {lib.shape}, need {need}")
+        if lcsv is not None:
+            write_grid(lib, lcsv)
+    except SidParseError as e:
+        return dict(row, verdict="not_decompiled", error=str(e))
+    except Exception as e:  # pylint: disable=broad-except
+        return dict(row, verdict="library_error", error=_err(e))
+    return dict(
+        row,
+        **verdict_fields(scan_leads(oracle, lib, lead)),
+        info=json.dumps(info, sort_keys=True, default=str),
+        oracle_gated=gated(oracle),
+        library_gated=gated(lib),
+    )
+
+
 def check(job):
     """One subtune's oracle-vs-renderer comparison row (see ``RESULT_FIELDS``)."""
     sid_path, tune, song, seconds, work, render, timeout = job
@@ -347,24 +394,87 @@ def check(job):
         row["frames"] = nframes
     except (SidtraceUnavailable, OSError, ValueError) as e:
         return dict(row, verdict="oracle_error", error=_err(e))
+    data = Path(sid_path).read_bytes()
+    return library_row(row, oracle, render, data, song, timeout=timeout, lcsv=lcsv)
+
+
+def as_sid(data, init=None, play=None):
+    """``data`` as a PSID/RSID: a container as is, a bare PRG wrapped by
+    :func:`~pysidtracker.header.write_psid` with ``init`` (default the PRG's
+    load address) and ``play`` (default ``init + 3``)."""
+    data = bytes(data)
+    if data[:4] in (PSID_MAGIC, RSID_MAGIC):
+        return data
+    if len(data) < 3:
+        raise SidParseError(
+            f"a PRG needs a load address and code, got {len(data)} bytes"
+        )
+    init = int.from_bytes(data[:2], "little") if init is None else init
+    play = init + 3 if play is None else play
+    return write_psid(load=0, init=init, play=play & 0xFFFF, image=data)
+
+
+def file_oracle(sid, song, nframes, work=None, sid_path=None):
+    """``(seconds, grid, source)``: ``nframes`` oracle frames of 1-based ``song``.
+
+    With ``work``, the sidtrace trace cached under ``work/oracle`` (rendered
+    over the :func:`~pysidtracker.cadence.playroutine_cadence` duration of
+    ``nframes`` play calls from ``sid_path``, or a copy of ``sid`` under
+    ``work/sid``) is framed by its interrupt rows; without ``work``, or when
+    sidtrace is unavailable, jennings'
+    :func:`~pysidtracker.oracle.register_grid` runs the player instead.
+    """
+    if work is not None:
+        md5 = hashlib.md5(sid).hexdigest()
+        if sid_path is None:
+            sid_path = Path(work) / "sid" / f"{md5}.sid"
+            sid_path.parent.mkdir(parents=True, exist_ok=True)
+            sid_path.write_bytes(sid)
+        cad = playroutine_cadence(sid, subtune=song - 1)
+        seconds = nframes * cad.cycles_per_call / cad.clock_hz
+        ocsv = oracle_cache(work) / f"{md5}_{song}.csv.zst"
+        try:
+            rows = oracle_rows(sid_path, ocsv, seconds, song)
+            return seconds, oracle_frames(rows, nframes=nframes)[1], "sidtrace"
+        except SidtraceUnavailable:
+            pass
+    grid = np.asarray(register_grid(sid, nframes, subtune=song - 1), np.int16)
+    return "", grid, "jennings"
+
+
+def compare_file(
+    path_or_prg,
+    render,
+    *,
+    frames,
+    init=None,
+    play=None,
+    song=1,
+    lead=LEAD,
+    work=None,
+    timeout=0,
+):
+    """A ``results.csv`` row (plus ``oracle``) of ``render`` against a file's own player.
+
+    ``path_or_prg`` (a path, or the bytes) is a PSID/RSID or a bare PRG wrapped
+    by :func:`as_sid`. The oracle (:func:`file_oracle`, ``work`` and the
+    ``oracle`` column choosing sidtrace or jennings) gives ``frames`` frames;
+    the ``render`` hook (as for ``run``) gets ``frames + lead`` and is scanned
+    over leads up to ``lead`` (``verdict``, ``lead``, ``min_lead``, ``min_bad``...).
+    """
+    path = Path(path_or_prg) if isinstance(path_or_prg, (str, Path)) else None
+    raw = path.read_bytes() if path else bytes(path_or_prg)
+    row = dict(path=str(path or ""), song=song, frames=frames)
     try:
-        with deadline(timeout):
-            lib, info = render(Path(sid_path).read_bytes(), song, nframes + LEAD)
-        lib = np.asarray(lib, dtype=np.int16)
-        if lib.ndim != 2 or lib.shape[1] != NREGS or len(lib) < nframes + LEAD:
-            raise ValueError(f"render grid shape {lib.shape}, need {nframes + LEAD}")
-        write_grid(lib, lcsv)
-    except SidParseError as e:
-        return dict(row, verdict="not_decompiled", error=str(e))
+        sid = as_sid(raw, init, play)
+        row.update(key=f"{hashlib.md5(sid).hexdigest()}_{song}", player=identify(sid))
+        own = path if path and sid == raw else None
+        row["seconds"], oracle, row["oracle"] = file_oracle(
+            sid, song, frames, work, own
+        )
     except Exception as e:  # pylint: disable=broad-except
-        return dict(row, verdict="library_error", error=_err(e))
-    return dict(
-        row,
-        **verdict_fields(scan_leads(oracle, lib)),
-        info=json.dumps(info, sort_keys=True, default=str),
-        oracle_gated=gated(oracle),
-        library_gated=gated(lib),
-    )
+        return dict(row, verdict="oracle_error", error=_err(e))
+    return library_row(row, oracle, render, sid, song, lead=lead, timeout=timeout)
 
 
 def load_tunes(path):
@@ -373,10 +483,52 @@ def load_tunes(path):
         return list(csv.DictReader(f))
 
 
+@functools.lru_cache(maxsize=None)
 def load_render(spec):
-    """The ``render`` callable named by ``module:function``."""
-    module, _, name = spec.partition(":")
-    return getattr(importlib.import_module(module), name)
+    """The callable named by ``module:function`` or ``path.py[:function]``
+    (default ``render``)."""
+    target, _, name = spec.partition(":")
+    if target.endswith(".py"):
+        loader = importlib.util.spec_from_file_location(Path(target).stem, target)
+        module = importlib.util.module_from_spec(loader)
+        loader.loader.exec_module(module)
+    else:
+        module = importlib.import_module(target)
+    return getattr(module, name or "render")
+
+
+def _file_row(job):
+    spec, path, kw = job
+    return compare_file(path, load_render(spec), **kw)
+
+
+def file_cli(render, files, *, out=None, jobs=None, **kw):
+    """Compare a renderer with each native file's own player (bare PRGs wrapped).
+
+    ``render`` is a ``load_render`` spec, e.g. a library's ``oracle_hvsc.py``;
+    ``kw`` goes to :func:`compare_file`. Writes ``run``'s ``results.csv``
+    columns plus ``oracle`` to ``out`` (default stdout); returns verdict tallies.
+    """
+    if kw.get("work") is not None:
+        oracle_cache(kw["work"])
+    tally = Counter()
+    with (
+        pool(jobs) if jobs != 1 else nullcontext() as ex,
+        (
+            open(out, "w", newline="", encoding="utf-8")
+            if out
+            else nullcontext(sys.stdout)
+        ) as f,
+    ):
+        w = csv.DictWriter(f, FILE_FIELDS)
+        w.writeheader()
+        rows = (ex.map if ex else map)(_file_row, [(render, p, kw) for p in files])
+        bar = tqdm(rows, total=len(files), unit="file")
+        for row in bar:
+            w.writerow(row)
+            tally[row["verdict"]] += 1
+            bar.set_postfix(tally)
+    return tally
 
 
 def jobs_for(hvsc, tunes, work, render, default_seconds=180, timeout=600):
@@ -899,7 +1051,7 @@ def triage(work, jobs=None, top=15, max_values=20, near=NEAR):
 
 def main(argv=None):
     """``python -m pysidtracker.survey``:
-    ``find run report diff triage leads explain match``."""
+    ``find run report diff triage leads explain match variants file``."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("find", help=find.__doc__)
@@ -959,6 +1111,20 @@ def main(argv=None):
     pv.add_argument("--out", help="write the per-tune CSV here")
     pv.add_argument("--nframes", type=int, default=8)
     pv.add_argument("--threshold", type=float, default=0.8)
+    p = sub.add_parser("file", help=file_cli.__doc__)
+    p.add_argument(
+        "render", help="renderer: oracle_hvsc.py[:function] or module:function"
+    )
+    p.add_argument("files", nargs="+", help=".sid or bare .prg native files")
+    p.add_argument("--frames", type=int, required=True, help="oracle frames")
+    p.add_argument("--song", type=int, default=1, help="1-based subtune")
+    p.add_argument("--init", type=_hex_addr, help="bare PRG init (default: load)")
+    p.add_argument("--play", type=_hex_addr, help="bare PRG play (default: init+3)")
+    p.add_argument("--lead", type=int, default=LEAD, help="largest frame lead")
+    p.add_argument("--work", help="sidtrace oracle cache dir (default: jennings)")
+    p.add_argument("--out", help="output CSV (default: stdout)")
+    p.add_argument("--timeout", type=float, default=600, help="render seconds")
+    p.add_argument("--jobs", type=int, default=os.cpu_count())
     p = sub.choices["run"]
     p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
     p.add_argument("--limit", type=int, help="only the first N tunes")
@@ -1048,6 +1214,21 @@ def main(argv=None):
             nframes=a.nframes,
             threshold=a.threshold,
         )
+    elif a.cmd == "file":
+        out = file_cli(
+            a.render,
+            a.files,
+            out=a.out,
+            jobs=a.jobs,
+            frames=a.frames,
+            init=a.init,
+            play=a.play,
+            song=a.song,
+            lead=a.lead,
+            work=a.work,
+            timeout=a.timeout,
+        )
+        print(dict(out), file=sys.stderr)
     else:
         out = report(a.results, a.near)
     if a.cmd in ("find", "run"):
