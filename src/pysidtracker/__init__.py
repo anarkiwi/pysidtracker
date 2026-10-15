@@ -8,7 +8,7 @@ API.
 """
 
 from . import mos6502, notefreq, registers
-from .d64 import D64File, read_d64
+from .d64 import D64File, iter_prgs, read_d64
 from .audio import (
     default_device,
     frames_to_seconds,
@@ -85,7 +85,7 @@ from .header import (
 )
 from .image import MEM_SIZE, SidImage, parse_prg
 from .io import ByteCursor, byte_range, check
-from .kernalhost import ABI, KernalHost, sys_addr
+from .kernalhost import KernalHost, sys_addr
 from .loader import (
     is_ntsc,
     is_rsid,
@@ -216,7 +216,6 @@ from .trace import InitTrace, trace_init
 __version__ = "0.17.0"
 
 __all__ = [
-    "ABI",
     "AudioUnavailable",
     "BASIC_BOOT",
     "BASIC_RUN",
@@ -242,6 +241,7 @@ __all__ = [
     "read_sums",
     "write_manifest",
     "D64File",
+    "iter_prgs",
     "DEFAULT_MIRROR",
     "DEFAULT_ROMS",
     "DEFAULT_ROM_MIRROR",

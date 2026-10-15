@@ -1,251 +1,63 @@
-"""C64 KERNAL/BASIC/CHARGEN ROM fetch/cache and 64 KiB memory mapping.
+"""C64 ROMs from :mod:`vagrant_moses.roms`, cached beside the HVSC tunes.
 
-BASIC tunes and unclean rips need the real ROMs. Being Commodore copyright works
-they are never committed: they are fetched on demand into the gitignored fixture
-cache and SHA-256 verified, as the HVSC ``.sid`` fixtures are (docs/c64-roms.md).
+The fetch, verify and mapping logic is vagrant-moses'; these wrappers only default
+``cache_dir`` to :func:`default_rom_cache` and raise :class:`RomFetchError` as a
+:class:`~pysidtracker.errors.SidError`. Nothing is committed (docs/c64-roms.md).
 """
 
 from __future__ import annotations
 
-import hashlib
+import functools
 import os
-import re
 from pathlib import Path
-from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 
-from .errors import SidError
-from .image import MEM_SIZE
-from .testing import TuneFetchError, _atomic_write, _download, default_tune_cache
-
-# VICE's own C64 ROM set at an immutable mirror tag; ``$C64_ROM_MIRROR`` overrides.
-DEFAULT_ROM_MIRROR = (
-    "https://raw.githubusercontent.com/VICE-Team/svn-mirror/r46192/vice/data/C64"
+from vagrant_moses import roms as _roms
+from vagrant_moses.roms import (
+    ASSETS,
+    BASIC_BOOT,
+    BASIC_RUN,
+    DEFAULT_ROM_MIRROR,
+    DEFAULT_ROMS,
+    KERNAL_BOOT,
+    ROMS,
+    Rom,
 )
 
-# $00/$01 CPU port power-on state: BASIC + KERNAL + I/O visible, CHARGEN hidden.
-CPU_DDR, CPU_PORT = 0x0000, 0x0001
-DDR_DEFAULT, BANK_DEFAULT = 0x2F, 0x37
+from .errors import SidError
+from .testing import default_tune_cache
 
 
-class Rom(NamedTuple):
-    """One C64 ROM: mirror filename, mapped base address, size and SHA-256.
-
-    ``url`` pins an asset to one upstream location instead of the ROM mirror.
-    """
-
-    filename: str
-    base: int
-    size: int
-    sha256: str
-    url: Optional[str] = None
-
-
-ROMS: Dict[str, Rom] = {
-    "kernal": Rom(
-        "kernal-901227-03.bin",
-        0xE000,
-        0x2000,
-        "83c60d47047d7beab8e5b7bf6f67f80daa088b7a6a27de0d7e016f6484042721",
-    ),
-    "basic": Rom(
-        "basic-901226-01.bin",
-        0xA000,
-        0x2000,
-        "89878cea0a268734696de11c4bae593eaaa506465d2029d619c0e0cbccdfa62d",
-    ),
-    "chargen": Rom(
-        "chargen-901225-01.bin",
-        0xD000,
-        0x1000,
-        "fd0d53b8480e86163ac98998976c72cc58d5dd8eb824ed7b829774e74213b420",
-    ),
-}
-
-# Other fetched, never-committed assets resolved like the ROMs. "poweron" is
-# libsidplayfp's RLE image of the RAM a booted C64 leaves at $0000-$03FF, copied
-# in before a real-C64 (RSID) tune; pinned to the sidtrace oracle's revision.
-ASSETS: Dict[str, Rom] = {
-    "poweron": Rom(
-        "poweron.bin",
-        0x0000,
-        1777,
-        "dcb750bd025598645b89d8fc2840eaa809d0c662bbbf77aa6965442a2d3113fb",
-        "https://raw.githubusercontent.com/libsidplayfp/libsidplayfp/"
-        "9c464110fd471e3989a6c794c0dbf8a218727e13/src/poweron.bin",
-    ),
-}
-
-# CHARGEN excluded: at $D000 it aliases the I/O bank a flat image must keep.
-DEFAULT_ROMS = ("kernal", "basic")
-
-KERNAL_BOOT = (0xFD15, 0xFDA3, 0xFF5B)  # RESTOR, IOINIT, CINT (docs/c64-roms.md)
-BASIC_BOOT = (0xE453, 0xE3BF)  # BASIC vectors, BASIC RAM
-BASIC_RUN = 0xA7B1  # BASIC interpreter main loop, where RUN enters
-
-
-class RomFetchError(SidError):
+class RomFetchError(SidError, _roms.RomFetchError):
     """A C64 ROM is unavailable, or the fetched bytes failed their checksum."""
 
 
 def default_rom_cache(root=None) -> Path:
-    """The ROM-cache directory: ``$PYSID_ROMCACHE`` or ``<tune cache>/roms``.
-
-    Nested inside :func:`~pysidtracker.testing.default_tune_cache` so one
-    gitignore entry and one CI ``actions/cache`` step cover both.
-    """
+    """``$PYSID_ROMCACHE`` or ``<tune cache>/roms``, one CI cache with the tunes."""
     env = os.environ.get("PYSID_ROMCACHE")
-    if env:
-        return Path(env)
-    return default_tune_cache(root) / "roms"
+    return Path(env) if env else default_tune_cache(root) / "roms"
 
 
-def _spec(name: str) -> Rom:
-    spec = ROMS.get(name) or ASSETS.get(name)
-    if spec is None:
-        known = ", ".join(sorted({**ROMS, **ASSETS}))
-        raise RomFetchError(f"unknown ROM {name!r} (known: {known})")
-    return spec
+def _cached(func):
+    @functools.wraps(func)
+    def wrapper(*args, cache_dir=None, **kwargs):
+        try:
+            return func(*args, cache_dir=cache_dir or default_rom_cache(), **kwargs)
+        except _roms.RomFetchError as exc:
+            raise RomFetchError(*exc.args) from exc
+
+    return wrapper
 
 
-def _digest(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _matches(spec: Rom, path: Path) -> bool:
-    data = path.read_bytes()
-    return len(data) == spec.size and _digest(data) == spec.sha256
-
-
-def fetch_rom(
-    name: str,
-    *,
-    cache_dir=None,
-    mirror: str = DEFAULT_ROM_MIRROR,
-    force: bool = False,
-) -> Path:
-    """Fetch the ``name`` ROM into ``cache_dir``; return its verified path.
-
-    A cached copy whose SHA-256 matches is returned untouched, so a warm cache
-    never hits the network; otherwise ``mirror``/``filename`` is downloaded
-    (``$C64_ROM_MIRROR`` overrides), checked against :data:`ROMS`, written atomically.
-
-    Raises:
-      RomFetchError: the mirror is unreachable or the bytes fail their checksum.
-    """
-    spec = _spec(name)
-    root = default_rom_cache() if cache_dir is None else Path(cache_dir)
-    dest = root / spec.filename
-    if dest.exists() and not force and _matches(spec, dest):
-        return dest
-    base = os.environ.get("C64_ROM_MIRROR", mirror).rstrip("/")
-    try:
-        data = _download(spec.url or f"{base}/{spec.filename}")
-    except TuneFetchError as exc:
-        raise RomFetchError(f"{name}: {exc}") from exc
-    if len(data) != spec.size or _digest(data) != spec.sha256:
-        raise RomFetchError(
-            f"{name}: checksum mismatch ({len(data)} bytes, sha256 {_digest(data)})"
-        )
-    _atomic_write(dest, data)
-    return dest
-
-
-def resolve_rom(name: str, *, cache_dir=None, local_env: str = "C64_ROMS"):
-    """Path to the ``name`` ROM, or ``None`` when it is genuinely unavailable.
-
-    Checks a local ROM directory (``$C64_ROMS``, holding either the dated VICE
-    filename or the plain ``kernal``/``basic``/``chargen`` name), then the cache,
-    then the mirror; ``None`` only when uncached and offline.
-    """
-    spec = _spec(name)
-    local = os.environ.get(local_env)
-    if local:
-        for cand in (Path(local) / spec.filename, Path(local) / name):
-            if cand.exists() and _matches(spec, cand):
-                return cand
-    try:
-        return fetch_rom(name, cache_dir=cache_dir)
-    except RomFetchError:
-        return None
-
-
-def apply_roms(
-    mem: bytearray,
-    names: Iterable[str] = DEFAULT_ROMS,
-    *,
-    cache_dir=None,
-    local_env: str = "C64_ROMS",
-    bank: Optional[int] = BANK_DEFAULT,
-) -> bytearray:
-    """Map the named ROMs into the 64 KiB image ``mem``; return ``mem``.
-
-    Bases come from :data:`ROMS`; ``bank`` (``None`` to skip) is stored to ``$01``
-    with :data:`DDR_DEFAULT` in ``$00``. A flat image has no shadow RAM, so a tune
-    writing under a ROM or re-banking ``$01`` itself needs a paging host.
-    """
-    if len(mem) != MEM_SIZE:
-        raise RomFetchError(f"image is {len(mem)} bytes, expected {MEM_SIZE}")
-    for name in names:
-        spec = _spec(name)
-        path = resolve_rom(name, cache_dir=cache_dir, local_env=local_env)
-        if path is None:
-            raise RomFetchError(f"{name}: unavailable (offline, not cached)")
-        mem[spec.base : spec.base + spec.size] = path.read_bytes()
-    if bank is not None:
-        mem[CPU_DDR], mem[CPU_PORT] = DDR_DEFAULT, bank
-    return mem
-
-
-def poweron_writes(cache_dir=None) -> Optional[List[Tuple[int, bytes]]]:
-    """sidplayfp's power-on RAM image as ``(address, bytes)`` runs, ``None`` offline.
-
-    Decodes libsidplayfp's ``poweron.bin`` (``copyPoweronPattern``): each run is
-    an offset byte, then a count (bit 7: one repeated value) when the offset's bit 7
-    is set, then the data.
-    """
-    path = resolve_rom("poweron", cache_dir=cache_dir)
-    if path is None:
-        return None
-    text = path.read_text("ascii")
-    stream = [int(v, 16) for v in re.findall(r"0x([0-9a-fA-F]{2})", text)]
-    runs, addr, i = [], 0, 0
-    while i < len(stream):
-        off, count, repeat = stream[i], 0, False
-        i += 1
-        if off & 0x80:
-            off, count = off & 0x7F, stream[i]
-            i += 1
-            repeat, count = bool(count & 0x80), count & 0x7F
-        count += 1
-        addr += off
-        if repeat:
-            runs.append((addr, bytes([stream[i]]) * count))
-            i += 1
-        else:
-            runs.append((addr, bytes(stream[i : i + count])))
-            i += count
-        addr += count
-    return runs
-
-
-def rom_image(names: Iterable[str] = DEFAULT_ROMS, **kwargs) -> bytearray:
-    """A ``bytearray(0x10000)`` with the named ROMs mapped (see :func:`apply_roms`)."""
-    return apply_roms(bytearray(MEM_SIZE), names, **kwargs)
-
-
-def roms_available(
-    names: Iterable[str] = DEFAULT_ROMS, *, cache_dir=None, local_env: str = "C64_ROMS"
-) -> bool:
-    """True when every named ROM resolves (local, cached, or fetchable)."""
-    return all(
-        resolve_rom(n, cache_dir=cache_dir, local_env=local_env) is not None
-        for n in names
-    )
-
+fetch_rom = _cached(_roms.fetch_rom)
+resolve_rom = _cached(_roms.resolve_rom)
+load_roms = _cached(_roms.load_roms)
+apply_roms = _cached(_roms.apply_roms)
+rom_image = _cached(_roms.rom_image)
+roms_available = _cached(_roms.roms_available)
+poweron_writes = _cached(_roms.poweron_writes)
 
 __all__ = [
     "ASSETS",
-    "BANK_DEFAULT",
     "BASIC_BOOT",
     "BASIC_RUN",
     "DEFAULT_ROMS",
@@ -257,6 +69,7 @@ __all__ = [
     "apply_roms",
     "default_rom_cache",
     "fetch_rom",
+    "load_roms",
     "poweron_writes",
     "resolve_rom",
     "rom_image",

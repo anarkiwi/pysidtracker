@@ -16,16 +16,18 @@ from __future__ import annotations
 import argparse
 from typing import List, Optional, Sequence, Tuple
 
+from vagrant_moses.memmap import PAL
+
 from .audio import CHIP_MODELS, render_player_wav, seconds_to_frames
 from .cadence import playroutine_cadence
 from .cli import print_info, run_cli
+from .d64 import add_media_commands
 from .disasm import disassemble, entry_labels, image_after_init
 from .editorio import editor_io
 from .errors import SidError, SidParseError
 from .fixtures import add_fixtures_commands
 from .formats import SidFormat, discover_formats, recognize_format
 from .image import SidImage
-from .registers import PAL_CLOCK_HZ, PAL_CYCLES_PER_FRAME
 from .reglog import register_writes_from_player, write_reglog
 from .source import read_bytes
 
@@ -49,7 +51,7 @@ def _cadence(data: bytes) -> Tuple[int, float]:
         if image.header is not None:
             cadence = playroutine_cadence(image)
             return cadence.cycles_per_call, float(cadence.clock_hz)
-    return PAL_CYCLES_PER_FRAME, float(PAL_CLOCK_HZ)
+    return PAL.cycles_per_frame, float(PAL.clock_hz)
 
 
 def _info(args, formats: Sequence[SidFormat]) -> None:
@@ -181,6 +183,11 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
         help="manage the CSDB native-fixture cache (fetch / manifest / verify)",
     )
     add_fixtures_commands(fixtures)
+
+    media = subparsers.add_parser(
+        "media", help="extract PRGs from release media (zip/gz, d64/d71/d81, t64)"
+    )
+    add_media_commands(media)
 
     for fmt in formats:
         for command in fmt.commands:

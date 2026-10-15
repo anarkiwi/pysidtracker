@@ -7,13 +7,11 @@ zeroed SID port on it. RSID tunes boot from the fetched ``roms.poweron_writes``.
 
 from __future__ import annotations
 
-from vagrant_moses import c64  # core dependency
+from vagrant_moses import c64
+from vagrant_moses.memmap import SID_BASE, SID_LAST
 
 #: ``psiddrv::install`` clears ``$0000-$03FE`` (``0x3FF`` bytes) before a PSID runs.
 PSID_DRIVER_CLEARED = 0x3FF
-# The SID occupies ``$D400-$D7FF``; before the tune sets it the register file reads as 0.
-SID_PORT = 0xD400
-SID_PORT_SIZE = 0x400
 
 
 def ram_pattern() -> bytearray:
@@ -32,7 +30,7 @@ def power_on_ram() -> bytearray:
     """
     ram = ram_pattern()
     ram[:PSID_DRIVER_CLEARED] = bytes(PSID_DRIVER_CLEARED)
-    ram[SID_PORT : SID_PORT + SID_PORT_SIZE] = bytes(SID_PORT_SIZE)
+    ram[SID_BASE : SID_LAST + 1] = bytes(SID_LAST + 1 - SID_BASE)
     return ram
 
 
@@ -52,7 +50,6 @@ def psid_init_bank(init_address: int) -> int:
 
 __all__ = [
     "PSID_DRIVER_CLEARED",
-    "SID_PORT",
     "power_on_ram",
     "psid_init_bank",
     "ram_pattern",

@@ -2,6 +2,8 @@
 
 import struct
 
+from vagrant_moses.media import GEOMETRIES
+
 from pysidtracker.oracle import SidtraceRow
 
 DATA_OFFSET = 0x7C
@@ -101,3 +103,48 @@ def trace_csv(rows):
         reg = "" if r.reg is None else r.reg
         lines.append(f"{r.cycle},,,,{chip},{reg},{r.value}")
     return "\n".join(lines) + "\n"
+
+
+def build_disk(files, geometry="d64", error_block=False, first_track=1):
+    """A synthetic CBM DOS image of ``geometry`` holding ``files``.
+
+    ``files`` is ``[(name, data, type_byte)]`` (at most 8, one directory sector);
+    chains take the free sectors from ``first_track`` on, skipping the directory track.
+    """
+    geom = next(g for g in GEOMETRIES if g.name == geometry)
+    img = bytearray(geom.blocks * 256)
+    dir_track = geom.dir_ts[0]
+    free = (
+        (track, sector)
+        for track, count in enumerate(geom.sectors, 1)
+        if track != dir_track and track >= first_track
+        for sector in range(count)
+    )
+    dir_off = geom.offset(*geom.dir_ts)
+    img[dir_off + 1] = 0xFF
+    for slot, (name, data, ftype) in enumerate(files):
+        chunks = [data[i : i + 254] for i in range(0, len(data), 254)]
+        chain = [next(free) for _ in chunks]
+        links = chain[1:] + [(0, len(chunks[-1]) + 1)]
+        for chunk, (track, sector), link in zip(chunks, chain, links):
+            off = geom.offset(track, sector)
+            img[off : off + 2 + len(chunk)] = bytes(link) + chunk
+        entry = dir_off + 2 + 32 * slot
+        img[entry : entry + 3] = bytes((ftype, *chain[0]))
+        img[entry + 3 : entry + 19] = name.encode("latin-1").ljust(16, b"\xa0")
+    return bytes(img) + (bytes(geom.blocks) if error_block else b"")
+
+
+def build_t64(files):
+    """A synthetic ``.t64`` holding ``files`` ``[(name, prg)]``, end addresses 0."""
+    head = bytearray(0x40 + 32 * len(files))
+    head[:3] = b"C64"
+    head[0x22] = head[0x24] = len(files)
+    body = bytearray()
+    for i, (name, prg) in enumerate(files):
+        entry = 0x40 + 32 * i
+        head[entry : entry + 4] = bytes((1, 0x82)) + prg[:2]
+        head[entry + 8 : entry + 12] = (len(head) + len(body)).to_bytes(4, "little")
+        head[entry + 16 : entry + 32] = name.encode("latin-1").ljust(16, b" ")
+        body += prg[2:]
+    return bytes(head + body)

@@ -19,8 +19,9 @@ import io
 from pathlib import Path
 from typing import IO, Iterable, Iterator, NamedTuple, Optional, Tuple, Union
 
+from vagrant_moses.memmap import PAL
+
 from .errors import SidParseError
-from .registers import PAL_CYCLES_PER_FRAME
 
 # Cycles between consecutive writes within one frame, approximating the store
 # instructions of the 6502 playroutine.
@@ -140,7 +141,7 @@ def frame_writes(
 def register_writes_from_player(
     player,
     max_frames: Optional[int] = None,
-    cycles_per_frame: int = PAL_CYCLES_PER_FRAME,
+    cycles_per_frame: int = PAL.cycles_per_frame,
     write_spacing: int = DEFAULT_WRITE_SPACING,
 ) -> Iterator[RegWrite]:
     """Frame a :class:`~pysidtracker.player.MemPlayer` into a :class:`RegWrite` log.

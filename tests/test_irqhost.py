@@ -4,21 +4,17 @@ import collections
 
 import pytest
 
+from vagrant_moses import memmap as mm
+
 from pysidtracker import irqhost
 from pysidtracker import registers as reg
 from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidParseError
 from pysidtracker.irqhost import (
-    BR,
-    F,
-    X2,
     InterruptHost,
     InterruptPlayer,
     boot_cycle,
     host_cadence,
-    kernal_stub,
-    opcode_layout,
-    ram_pattern,
 )
 from pysidtracker.oracle import SidtraceRow, read_sidtrace, sidtrace_cadence
 from pysidtracker.oracle import sidtrace_grid
@@ -26,7 +22,7 @@ from pysidtracker.oracle import sidtrace_grid
 from . import irqhost_tunes as tunes
 from .helpers import build_psid, build_psid_embedded_load
 
-PAL_LINE, PAL_FRAME = reg.PAL_CYCLES_PER_LINE, reg.PAL_CYCLES_PER_FRAME
+PAL_LINE, PAL_FRAME = mm.PAL.cycles_per_line, reg.PAL_CYCLES_PER_FRAME
 QUIET = """
 init: SEI
   LDA #$7F
@@ -75,58 +71,6 @@ def test_trace_matches_the_recorded_oracle(name):
     end = host.start + tunes.FIXTURE_CYCLES
     host.run(end + 1 - host.cycle)
     assert [r for r in host.rows() if r.cycle <= end] == want
-
-
-def test_every_opcode_takes_its_documented_cycles():
-    from deity_informant import CYCLETIME, EXTRACYCLES
-    from jennings.opcodes import OPCODES
-
-    for op in range(256):
-        ents, exec_at, kind = opcode_layout(op)
-        if OPCODES[op][0] == "JAM":
-            continue
-        fetch = next(i for i, k in enumerate(ents) if k in irqhost._FETCHES or k == BR)
-        base = 1 + fetch - (X2 in ents)
-        if kind == "branch":
-            assert (base, EXTRACYCLES[op]) == (2, 2)
-        else:
-            assert base == CYCLETIME[op], hex(op)
-            assert (X2 in ents) == bool(EXTRACYCLES[op]), hex(op)
-        assert 0 <= exec_at < len(ents) or OPCODES[op][0] in ("BRK", "ANE")
-
-
-def test_layouts_put_writes_last_and_reads_before():
-    assert opcode_layout(0x8D)[0] == (irqhost.R, irqhost.R, irqhost.W, F)
-    assert opcode_layout(0xEE)[0][-3:] == (irqhost.W, irqhost.W, F)
-    assert opcode_layout(0xEE)[2] == "rmw"
-    assert opcode_layout(0x20)[0] == (
-        irqhost.R,
-        irqhost.R,
-        irqhost.W,
-        irqhost.W,
-        irqhost.R,
-        F,
-    )
-    assert opcode_layout(0x00)[0] == irqhost.BRK_ENTRIES
-    assert opcode_layout(0x02)[0] == (irqhost.HALT,)
-
-
-def test_kernal_stub_is_sidplayfps_rom_less_kernal():
-    rom = kernal_stub()
-    word = lambda a: rom[a - 0xE000] | rom[a - 0xDFFF] << 8  # noqa: E731
-    assert (word(0xFFFA), word(0xFFFC), word(0xFFFE)) == (0xFE43, 0xFCE2, 0xFF48)
-    assert rom[0xEA31 - 0xE000 : 0xEA34 - 0xE000] == b"\x4c\x7e\xea"
-    assert rom[0xEA7E - 0xE000 : 0xEA81 - 0xE000] == b"\x0c\x0d\xdc"
-    assert rom[0xFF48 - 0xE000 : 0xFF50 - 0xE000] == bytes.fromhex("488a4898486c1403")
-    assert rom[0xFFD2 - 0xE000] == rom[0xF1CA - 0xE000] == 0x60
-    assert rom[0xE100 - 0xE000] == 0xEA
-
-
-def test_ram_powers_up_in_four_byte_runs():
-    ram = ram_pattern()
-    assert ram[:16] == bytes.fromhex("0000ffffffff00000000ffffffff0000")
-    assert ram[0x4000:0x4008] == bytes.fromhex("ffff00000000ffff")
-    assert ram[0xC000:0xC008] == ram[0x4000:0x4008]
 
 
 def test_the_driver_writes_volume_where_the_oracle_logs_it():

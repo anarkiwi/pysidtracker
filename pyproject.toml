@@ -28,15 +28,15 @@ classifiers = [
 # pydexomizer: native pure-Python exomizer decrunch (native_decrunch), the
 # init-free alternative unpack path. pyresidfp: the emulated SID every tracker's
 # WAV render (pysidtracker.audio) drives -- core, not an extra, because rendering
-# audio is core functionality. vagrant-moses: the C64 machine model the interrupt
-# host is composed of -- VIC-II raster/badline/sprite-BA, the two CIA timers, the
-# two-phase event scheduler, and the power-on RAM fill. numpy: sample buffers and
-# the image anchor scan.
+# audio is core functionality. vagrant-moses: the C64 machine model -- memory map,
+# banked bus, ROMs, the cycle-exact machine the interrupt host runs on, the KERNAL
+# host and release-media readers; its cpu extra is the jennings-backed flat host.
+# numpy: sample buffers and the image anchor scan.
 dependencies = [
   "jennings>=0.1.1",
   "pydexomizer>=0.1",
   "pyresidfp>=0.17",
-  "vagrant-moses>=0.2.0",
+  "vagrant-moses[cpu]>=0.4.0",
   "numpy>=1.23",
 ]
 

@@ -2,6 +2,8 @@
 
 import pytest
 
+from vagrant_moses import memmap as mm
+
 from pysidtracker import Cadence, SidImage, TriggerSource, playroutine_cadence
 from pysidtracker import registers as reg
 from pysidtracker.cadence import _cadence, _driver_base, _Machine
@@ -28,7 +30,7 @@ def vector(addr_lo, target):
     return sta(target & 0xFF, addr_lo) + sta(target >> 8, addr_lo + 1)
 
 
-def latch(value, base=reg.CIA1_BASE):
+def latch(value, base=mm.CIA1_BASE):
     """Program Timer A's latch."""
     return sta(value & 0xFF, base + 4) + sta(value >> 8, base + 5)
 
@@ -66,7 +68,7 @@ def test_psid_vbi_bit_with_no_init_programming_is_one_raster_per_frame():
 
 @pytest.mark.parametrize(
     "clock,latch_value",
-    [("PAL", reg.KERNAL_CIA1_LATCH_PAL), ("NTSC", reg.KERNAL_CIA1_LATCH_NTSC)],
+    [("PAL", mm.PAL.kernal_latch), ("NTSC", mm.NTSC.kernal_latch)],
 )
 def test_psid_cia_bit_with_no_init_programming_is_the_driver_timer(clock, latch_value):
     cad = _cad(psid(b"", speed=1), clock=clock)
@@ -82,16 +84,16 @@ def test_speed_bit_is_per_subtune():
 
 
 def test_init_overrides_vbi_bit_with_an_armed_cia_timer():
-    init = sta(0x00, reg.VIC_IRQ_ENABLE) + latch(0x5BF9)
-    init += sta(0x81, reg.CIA1_ICR) + sta(0x11, reg.CIA1_CRA)
+    init = sta(0x00, mm.VIC_IRQ_ENABLE) + latch(0x5BF9)
+    init += sta(0x81, mm.CIA1_ICR) + sta(0x11, mm.CIA1_CRA)
     cad = _cad(psid(init))
     assert (cad.source, cad.cycles_per_call) == (TriggerSource.CIA_TIMER, 0x5BFA)
     assert not cad.dynamic
 
 
 def test_init_overrides_cia_bit_with_a_raster_irq():
-    init = sta(0x7F, reg.CIA1_ICR) + sta(0x01, reg.VIC_IRQ_ENABLE)
-    init += sta(0x80, reg.VIC_RASTER)
+    init = sta(0x7F, mm.CIA1_ICR) + sta(0x01, mm.VIC_IRQ_ENABLE)
+    init += sta(0x80, mm.VIC_RASTER)
     cad = _cad(psid(init, speed=1))
     assert (cad.source, cad.raster_lines) == (TriggerSource.PAL_VIDEO, (0x80,))
 
@@ -116,7 +118,7 @@ def test_multispeed_raster_chain_counts_calls_per_frame():
         + bytes((0xE8, 0x8A, 0x29, 0x03, 0x8D, 0x7F, LOAD >> 8))  # idx = idx+1 & 3
         + PLAY_SID
     )
-    body = image(init_00=sta(lines[0], reg.VIC_RASTER) + RTS, play_20=play)
+    body = image(init_00=sta(lines[0], mm.VIC_RASTER) + RTS, play_20=play)
     body = body[:0x80] + bytes(lines) + body[0x84:]
     cad = _cad(build_psid(body, LOAD, LOAD, LOAD + 0x20))
     assert cad.source is TriggerSource.PAL_VIDEO
@@ -125,19 +127,19 @@ def test_multispeed_raster_chain_counts_calls_per_frame():
 
 
 def test_disarmed_timer_with_no_raster_plays_nothing():
-    for disarm in (sta(0x01, reg.CIA1_ICR), sta(0x00, reg.CIA1_CRA)):
+    for disarm in (sta(0x01, mm.CIA1_ICR), sta(0x00, mm.CIA1_CRA)):
         cad = _cad(psid(disarm, speed=1))
         assert cad.source is None
         assert cad.cycles_per_call == PAL
 
 
 def test_one_shot_timer_is_not_periodic():
-    cad = _cad(psid(sta(0x19, reg.CIA1_CRA), speed=1))
+    cad = _cad(psid(sta(0x19, mm.CIA1_CRA), speed=1))
     assert cad.source is None
 
 
 def test_one_shot_timer_restarted_by_play_is_measured():
-    play = sta(0x19, reg.CIA1_CRA) + PLAY_SID
+    play = sta(0x19, mm.CIA1_CRA) + PLAY_SID
     cad = _cad(psid(latch(4999), play, speed=1))
     assert cad.source is TriggerSource.CIA_TIMER
     assert 5000 < cad.cycles_per_call < 5100
@@ -166,26 +168,26 @@ IDLE = bytes((0x4C, 0x40, LOAD >> 8))  # JMP LOAD+$40 (at LOAD+$40)
 
 
 def test_rsid_raster_through_the_kernal_vector():
-    init = SEI + sta(0x7F, reg.CIA1_ICR) + sta(0x01, reg.VIC_IRQ_ENABLE)
-    init += sta(0x40, reg.VIC_RASTER) + sta(0x1B, reg.VIC_CONTROL_1)
-    init += vector(reg.RAM_IRQ_VECTOR_LO, LOAD + 0x80) + CLI + RTS
+    init = SEI + sta(0x7F, mm.CIA1_ICR) + sta(0x01, mm.VIC_IRQ_ENABLE)
+    init += sta(0x40, mm.VIC_RASTER) + sta(0x1B, mm.VIC_CONTROL_1)
+    init += vector(mm.RAM_IRQ_VECTOR_LO, LOAD + 0x80) + CLI + RTS
     handler = _raster_handler(bytes((0x4C, 0x31, 0xEA)))  # JMP $EA31
     cad = _cad(rsid(image(init_00=init, irq_80=handler)))
     assert (cad.source, cad.raster_lines) == (TriggerSource.PAL_VIDEO, (0x40,))
 
 
 def test_rsid_raster_through_the_hardware_vector_with_kernal_banked_out():
-    init = SEI + sta(0x35, 0x01) + sta(0x7F, reg.CIA1_ICR)
-    init += sta(0x01, reg.VIC_IRQ_ENABLE)
-    init += vector(reg.CPU_IRQ_VECTOR, LOAD + 0x80) + CLI + bytes((0x4C, 0x40, 0x10))
+    init = SEI + sta(0x35, 0x01) + sta(0x7F, mm.CIA1_ICR)
+    init += sta(0x01, mm.VIC_IRQ_ENABLE)
+    init += vector(mm.CPU_IRQ_VECTOR, LOAD + 0x80) + CLI + bytes((0x4C, 0x40, 0x10))
     cad = _cad(rsid(image(init_00=init, idle_40=IDLE, irq_80=_raster_handler(RTI))))
     assert (cad.source, cad.raster_lines) == (TriggerSource.PAL_VIDEO, (311,))
 
 
 def test_rsid_nmi_timer():
-    init = sta(0x7F, reg.CIA1_ICR) + latch(PAL // 2 - 1, reg.CIA2_BASE)
-    init += vector(reg.RAM_NMI_VECTOR_LO, LOAD + 0x80)
-    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + RTS
+    init = sta(0x7F, mm.CIA1_ICR) + latch(PAL // 2 - 1, mm.CIA2_BASE)
+    init += vector(mm.RAM_NMI_VECTOR_LO, LOAD + 0x80)
+    init += sta(0x81, mm.CIA2_ICR) + sta(0x11, mm.CIA2_CRA) + RTS
     handler = bytes((0xEE, 0x00, 0xD4)) + ACK_CIA2 + RTI
     cad = _cad(rsid(image(init_00=init, nmi_80=handler)))
     assert (cad.source, cad.cycles_per_call) == (TriggerSource.NMI_TIMER, PAL // 2)
@@ -193,11 +195,11 @@ def test_rsid_nmi_timer():
 
 
 def test_a_raster_player_beats_a_faster_nmi_sample_player():
-    init = sta(0x7F, reg.CIA1_ICR) + sta(0x01, reg.VIC_IRQ_ENABLE)
-    init += vector(reg.RAM_IRQ_VECTOR_LO, LOAD + 0x80)
-    init += latch(PAL // 8 - 1, reg.CIA2_BASE)
-    init += vector(reg.RAM_NMI_VECTOR_LO, LOAD + 0xC0)
-    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + CLI + RTS
+    init = sta(0x7F, mm.CIA1_ICR) + sta(0x01, mm.VIC_IRQ_ENABLE)
+    init += vector(mm.RAM_IRQ_VECTOR_LO, LOAD + 0x80)
+    init += latch(PAL // 8 - 1, mm.CIA2_BASE)
+    init += vector(mm.RAM_NMI_VECTOR_LO, LOAD + 0xC0)
+    init += sta(0x81, mm.CIA2_ICR) + sta(0x11, mm.CIA2_CRA) + CLI + RTS
     music = bytes((0xEE, 0x00, 0xD4, 0xEE, 0x01, 0xD4)) + ACK_VIC
     digi = bytes((0xEE, 0x18, 0xD4)) + ACK_CIA2 + RTI
     body = image(init_00=init, irq_80=music + bytes((0x4C, 0x81, 0xEA)), nmi_C0=digi)
@@ -206,9 +208,9 @@ def test_a_raster_player_beats_a_faster_nmi_sample_player():
 
 
 def test_an_unacknowledged_nmi_is_raised_once():
-    init = sta(0x7F, reg.CIA1_ICR) + latch(PAL // 2 - 1, reg.CIA2_BASE)
-    init += vector(reg.RAM_NMI_VECTOR_LO, LOAD + 0x80)
-    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + RTS
+    init = sta(0x7F, mm.CIA1_ICR) + latch(PAL // 2 - 1, mm.CIA2_BASE)
+    init += vector(mm.RAM_NMI_VECTOR_LO, LOAD + 0x80)
+    init += sta(0x81, mm.CIA2_ICR) + sta(0x11, mm.CIA2_CRA) + RTS
     cad = _cad(rsid(image(init_00=init, nmi_80=bytes((0xEE, 0x00, 0xD4)) + RTI)))
     assert cad.source is None
 
@@ -261,7 +263,7 @@ def test_real_tune_cadence(relpath, expected, tmp_path):
 
 
 def test_writes_with_io_banked_out_reach_ram_not_the_chips():
-    init = sta(0x34, 0x01) + sta(0x01, reg.VIC_IRQ_ENABLE) + sta(0x7F, reg.CIA1_ICR)
+    init = sta(0x34, 0x01) + sta(0x01, mm.VIC_IRQ_ENABLE) + sta(0x7F, mm.CIA1_ICR)
     init += sta(0x37, 0x01)
     cad = _cad(psid(init, speed=1))
     assert cad.source is TriggerSource.CIA_TIMER
@@ -277,11 +279,11 @@ def test_driver_page_is_the_headers_free_page_else_the_first_free_page():
 
 
 def test_nmis_nested_in_a_timer_irq_do_not_take_its_writes():
-    init = sta(0x7F, reg.CIA1_ICR) + latch(PAL - 1)
-    init += sta(0x81, reg.CIA1_ICR) + sta(0x11, reg.CIA1_CRA)
-    init += vector(reg.RAM_IRQ_VECTOR_LO, LOAD + 0x80)
-    init += latch(144, reg.CIA2_BASE) + vector(reg.RAM_NMI_VECTOR_LO, LOAD + 0xF0)
-    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + CLI + RTS
+    init = sta(0x7F, mm.CIA1_ICR) + latch(PAL - 1)
+    init += sta(0x81, mm.CIA1_ICR) + sta(0x11, mm.CIA1_CRA)
+    init += vector(mm.RAM_IRQ_VECTOR_LO, LOAD + 0x80)
+    init += latch(144, mm.CIA2_BASE) + vector(mm.RAM_NMI_VECTOR_LO, LOAD + 0xF0)
+    init += sta(0x81, mm.CIA2_ICR) + sta(0x11, mm.CIA2_CRA) + CLI + RTS
     delay = bytes((0xA2, 0x30, 0xCA, 0xD0, 0xFD))  # LDX #$30 ; DEX ; BNE *-1
     music = b"".join(bytes((0xEE, r, 0xD4)) + delay for r in range(7))
     music += bytes((0xAD, 0x0D, 0xDC, 0x4C, 0x81, 0xEA))  # LDA $DC0D ; JMP $EA81
@@ -291,9 +293,9 @@ def test_nmis_nested_in_a_timer_irq_do_not_take_its_writes():
 
 
 def test_a_brk_inside_a_handler_runs_on_its_behalf():
-    init = SEI + sta(0x35, 0x01) + sta(0x7F, reg.CIA1_ICR)
-    init += sta(0x01, reg.VIC_IRQ_ENABLE)
-    init += vector(reg.CPU_IRQ_VECTOR, LOAD + 0x80) + CLI + bytes((0x4C, 0x40, 0x10))
+    init = SEI + sta(0x35, 0x01) + sta(0x7F, mm.CIA1_ICR)
+    init += sta(0x01, mm.VIC_IRQ_ENABLE)
+    init += vector(mm.CPU_IRQ_VECTOR, LOAD + 0x80) + CLI + bytes((0x4C, 0x40, 0x10))
     pull = bytes((0x68, 0xAA, 0x68)) + RTI  # PLA ; TAX ; PLA ; RTI
     handler = bytes((0x48, 0x8A, 0x48, 0xBA, 0xBD, 0x03, 0x01, 0x29, 0x10))
     handler += bytes((0xD0, 0x0C, 0x00, 0xEA, 0xEE, 0x01, 0xD4)) + ACK_VIC + pull
@@ -310,7 +312,7 @@ def test_a_brk_inside_a_handler_runs_on_its_behalf():
     "exit_to,source", [(0xEA31, TriggerSource.CIA_TIMER), (0xEA81, None)]
 )
 def test_the_romless_kernal_acknowledges_cia1_only_up_to_ea7e(exit_to, source):
-    init = latch(PAL - 1) + vector(reg.RAM_IRQ_VECTOR_LO, LOAD + 0x80) + CLI + RTS
+    init = latch(PAL - 1) + vector(mm.RAM_IRQ_VECTOR_LO, LOAD + 0x80) + CLI + RTS
     handler = PLAY_SID[:-1] + bytes((0x4C, exit_to & 0xFF, exit_to >> 8))
     cad = _cad(rsid(image(init_00=init, irq_80=handler)))
     assert cad.source is source
@@ -319,9 +321,9 @@ def test_the_romless_kernal_acknowledges_cia1_only_up_to_ea7e(exit_to, source):
 def _nmi_tune(target, nmi_exit=RTI):
     """An RSID NMI timer vectored to ``target``; the handler at ``LOAD + 0x80``
     bumps ``$D400`` and leaves by ``nmi_exit`` (``$DD0C`` holds an RTI)."""
-    init = sta(0x7F, reg.CIA1_ICR) + latch(PAL // 2 - 1, reg.CIA2_BASE)
-    init += sta(0x40, reg.CIA2_BASE + 0xC) + vector(reg.RAM_NMI_VECTOR_LO, target)
-    init += sta(0x81, reg.CIA2_ICR) + sta(0x11, reg.CIA2_CRA) + RTS
+    init = sta(0x7F, mm.CIA1_ICR) + latch(PAL // 2 - 1, mm.CIA2_BASE)
+    init += sta(0x40, mm.CIA2_BASE + 0xC) + vector(mm.RAM_NMI_VECTOR_LO, target)
+    init += sta(0x81, mm.CIA2_ICR) + sta(0x11, mm.CIA2_CRA) + RTS
     handler = bytes((0xEE, 0x00, 0xD4)) + ACK_CIA2 + nmi_exit
     return SidImage.from_bytes(rsid(image(init_00=init, nmi_80=handler)))
 
@@ -342,5 +344,5 @@ def test_a_handler_returning_through_io_unwinds_its_frame():
 
 def test_a_recurring_handler_vectored_into_io_makes_the_source_unknown():
     assert _cad(_nmi_tune(LOAD + 0x80)).source == TriggerSource.NMI_TIMER
-    machine = _run(_nmi_tune(reg.CIA1_BASE + 4))
+    machine = _run(_nmi_tune(mm.CIA1_BASE + 4))
     assert machine.opaque == {(1, 0)} and _cadence(machine, 0, 4).source is None

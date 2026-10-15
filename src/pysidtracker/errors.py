@@ -8,6 +8,8 @@ staying catchable through the shared base.
 
 from typing import NamedTuple
 
+from vagrant_moses import kernal as _kernal
+
 
 class SidError(Exception):
     """Base class for all pysidtracker errors."""
@@ -29,11 +31,11 @@ class EmulatorUnavailable(SidError):
     """
 
 
-class KernalHostError(SidError):
+class KernalHostError(SidError, _kernal.KernalHostError):
     """A whole-program KERNAL run (:mod:`pysidtracker.kernalhost`) could not finish.
 
-    The step cap was reached before the requested exit condition (an ``until``
-    predicate, or the depacker entering a freshly-written region) was met.
+    The step cap was reached before the exit condition, or a BASIC stub has no
+    numeric ``SYS``. Also a :class:`vagrant_moses.kernal.KernalHostError`.
     """
 
 

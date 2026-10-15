@@ -4,7 +4,7 @@ Exercised end to end with ``pytester``, so a dependent suite gets the retriever
 fixtures with no conftest of its own -- just by installing pysidtracker.
 """
 
-from .test_d64 import _build_d64
+from .helpers import build_disk
 
 _SID = b"PSID" + b"\x00" * 60
 
@@ -49,7 +49,7 @@ def test_hvsc_fixture_raises_when_unreachable(pytester, tmp_path):
 
 def test_disk_prgs_fixture_reads_d64(pytester, tmp_path):
     d64 = tmp_path / "game.d64"
-    d64.write_bytes(_build_d64([("TUNE", b"\x00\x20abc")]))
+    d64.write_bytes(build_disk([("TUNE", b"\x00\x20abc", 0x82)]))
     pytester.makepyfile(f"""
         import os
         os.environ["PYSID_TUNECACHE"] = {str(tmp_path / "cache")!r}
@@ -111,9 +111,9 @@ def test_c64_roms_fixture_skips_when_unavailable(pytester, tmp_path):
         import os, pytest
         os.environ.pop("C64_ROMS", None)
         os.environ["PYSID_TUNECACHE"] = {str(tmp_path / "cache")!r}
-        import pysidtracker.roms as r
+        import vagrant_moses.roms as r
         r._download = lambda url, **k: (_ for _ in ()).throw(
-            r.TuneFetchError("offline"))
+            r.RomFetchError("offline"))
 
         def test_it(c64_roms):
             if not c64_roms.available():

@@ -1,12 +1,11 @@
-"""C64 hardware register map and absolute-store scanning.
+"""SID register semantics, PSID flag helpers and absolute-store scanning.
 
-The addresses and layouts below are documented C64 hardware facts (SID, CIA, VIC,
-the RAM interrupt vectors and the CPU vector table), not copyrightable expression.
-Several ``py*`` parsers key their relocation-invariant fingerprints on stores to
-these fixed addresses (Soundmonitor on the CIA-timer latch ``$DC04``/``$DC05``,
-defMON on the SID write band ``$D400..$D406``, JCH on ``STA $D405``/``$D40C``),
-so this module gives them shared named constants, predicates, and a scanner for
-absolute stores that target any of a set of addresses.
+The C64 memory map (chip windows, vectors, video timing) is
+:mod:`vagrant_moses.memmap`; the few of its names dependent packages import from
+here are re-exported. Several ``py*`` parsers key their relocation-invariant
+fingerprints on stores to fixed hardware addresses (Soundmonitor on the CIA-timer
+latch ``$DC04``/``$DC05``, defMON on the SID write band ``$D400..$D406``, JCH on
+``STA $D405``/``$D40C``), found with :func:`find_register_stores`.
 """
 
 from __future__ import annotations
@@ -14,15 +13,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Sequence, Set
 
+import numpy as _np
+from vagrant_moses import memmap as _mm
+from vagrant_moses.memmap import (  # pylint: disable=unused-import
+    # re-exported for dependent packages
+    CIA1_TIMER_A_HI,
+    CIA1_TIMER_A_LO,
+    SID_BASE,
+    SID_LAST,
+    SID_STRIDE,
+)
+
 from .image import SidImage
 
-import numpy as _np
+PAL_CLOCK_HZ, NTSC_CLOCK_HZ = _mm.PAL.clock_hz, _mm.NTSC.clock_hz
+PAL_CYCLES_PER_FRAME = _mm.PAL.cycles_per_frame
+NTSC_CYCLES_PER_FRAME = _mm.NTSC.cycles_per_frame
 
 # --- SID (MOS 6581/8580) ----------------------------------------------------
-# The SID occupies $D400..$D41F and is mirrored every $20 up to $D7FF.
-SID_BASE = 0xD400
-SID_LAST = 0xD7FF
-SID_STRIDE = 0x20
+# The SID decodes in the vagrant_moses.memmap SID window, mirrored every $20.
 SID_REG_COUNT = 0x19  # $D400..$D418 are the real registers
 SID_CTRL_V1 = 0xD404  # voice-1 control (waveform + gate)
 SID_CTRL_V2 = 0xD40B  # voice-2 control
@@ -56,19 +65,6 @@ MODE_VOL = 0x18
 # significant (12-bit pulse width), so a register grid masks them to a nibble.
 PW_HI_REGS = (0x03, 0x0A, 0x11)
 
-# --- C64 frame timing (documented hardware facts) ---------------------------
-# CPU cycles in one video frame and the CPU clock, per video standard.
-PAL_CYCLES_PER_FRAME = 19656
-NTSC_CYCLES_PER_FRAME = 17095
-PAL_CLOCK_HZ = 985248
-NTSC_CLOCK_HZ = 1022727
-# CPU cycles per raster line, per video standard.
-PAL_CYCLES_PER_LINE = 63
-NTSC_CYCLES_PER_LINE = 65
-# CIA #1 Timer-A latch the KERNAL leaves for its 60 Hz IRQ, per video standard.
-KERNAL_CIA1_LATCH_PAL = 0x4025
-KERNAL_CIA1_LATCH_NTSC = 0x4295
-
 
 def cycles_per_frame_for_flags(flags: int) -> int:
     """PAL/NTSC CPU cycles per frame from PSID header ``flags`` (clock bits 2-3).
@@ -90,54 +86,6 @@ def sid_model_for_flags(flags: int) -> str:
     """
     return "8580" if ((flags >> 4) & 0b11) == 0b10 else "6581"
 
-
-# --- CIA #1 ($DC00..$DC0F) --------------------------------------------------
-CIA1_BASE = 0xDC00
-CIA1_LAST = 0xDC0F
-CIA1_TIMER_A_LO = 0xDC04
-CIA1_TIMER_A_HI = 0xDC05
-CIA1_TIMER_B_LO = 0xDC06
-CIA1_TIMER_B_HI = 0xDC07
-CIA1_ICR = 0xDC0D
-CIA1_CRA = 0xDC0E
-CIA1_CRB = 0xDC0F
-
-# --- CIA #2 ($DD00..$DD0F) --------------------------------------------------
-CIA2_BASE = 0xDD00
-CIA2_LAST = 0xDD0F
-CIA2_TIMER_A_LO = 0xDD04
-CIA2_TIMER_A_HI = 0xDD05
-CIA2_TIMER_B_LO = 0xDD06
-CIA2_TIMER_B_HI = 0xDD07
-CIA2_ICR = 0xDD0D
-CIA2_CRA = 0xDD0E
-CIA2_CRB = 0xDD0F
-
-_CIA1_TIMERS = frozenset(
-    (CIA1_TIMER_A_LO, CIA1_TIMER_A_HI, CIA1_TIMER_B_LO, CIA1_TIMER_B_HI)
-)
-_CIA2_TIMERS = frozenset(
-    (CIA2_TIMER_A_LO, CIA2_TIMER_A_HI, CIA2_TIMER_B_LO, CIA2_TIMER_B_HI)
-)
-
-# --- VIC-II ($D000..$D02E) --------------------------------------------------
-VIC_BASE = 0xD000
-VIC_LAST = 0xD02E
-VIC_CONTROL_1 = 0xD011  # bit7 = raster compare bit 8; also screen control
-VIC_RASTER = 0xD012  # raster compare lo (also raster read)
-VIC_IRQ_STATUS = 0xD019
-VIC_IRQ_ENABLE = 0xD01A
-
-# --- RAM interrupt vectors --------------------------------------------------
-RAM_IRQ_VECTOR_LO = 0x0314
-RAM_IRQ_VECTOR_HI = 0x0315
-RAM_NMI_VECTOR_LO = 0x0318
-RAM_NMI_VECTOR_HI = 0x0319
-
-# --- CPU vector table (top of memory) ---------------------------------------
-CPU_NMI_VECTOR = 0xFFFA
-CPU_RESET_VECTOR = 0xFFFC
-CPU_IRQ_VECTOR = 0xFFFE
 
 # Absolute-store opcodes and their addressing mode (for the scanner).
 STA_ABS = 0x8D
@@ -175,41 +123,6 @@ def is_sid_control(addr: int) -> bool:
         SID_CTRL_V2,
         SID_CTRL_V3,
     )
-
-
-def is_cia1_reg(addr: int) -> bool:
-    """True if ``addr`` is a CIA #1 register."""
-    return CIA1_BASE <= addr <= CIA1_LAST
-
-
-def is_cia2_reg(addr: int) -> bool:
-    """True if ``addr`` is a CIA #2 register."""
-    return CIA2_BASE <= addr <= CIA2_LAST
-
-
-def is_cia_timer(addr: int) -> bool:
-    """True if ``addr`` is a CIA #1 or #2 timer latch/counter register."""
-    return addr in _CIA1_TIMERS or addr in _CIA2_TIMERS
-
-
-def is_vic_reg(addr: int) -> bool:
-    """True if ``addr`` is a VIC-II register."""
-    return VIC_BASE <= addr <= VIC_LAST
-
-
-def is_irq_vector(addr: int) -> bool:
-    """True if ``addr`` is a RAM IRQ vector byte ($0314/$0315)."""
-    return addr in (RAM_IRQ_VECTOR_LO, RAM_IRQ_VECTOR_HI)
-
-
-def is_nmi_vector(addr: int) -> bool:
-    """True if ``addr`` is a RAM NMI vector byte ($0318/$0319)."""
-    return addr in (RAM_NMI_VECTOR_LO, RAM_NMI_VECTOR_HI)
-
-
-def is_cpu_vector(addr: int) -> bool:
-    """True if ``addr`` is a CPU vector byte ($FFFA..$FFFF)."""
-    return CPU_NMI_VECTOR <= addr <= 0xFFFF
 
 
 @dataclass(frozen=True)

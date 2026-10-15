@@ -1,295 +1,212 @@
-"""Offline tests for the headless KERNAL host (file and keyboard traps to a host dir).
+"""The headless KERNAL host: real jump table and register ABI, files under a host dir.
 
-These run real 6502 programs (:func:`asm6502.assemble`) on :class:`KernalHost` with
-the KERNAL I/O answered in Python against ``tmp_path`` -- no VICE, no network.
+Real 6502 programs (:func:`asm6502.assemble`) call the KERNAL entries as a C64
+program does; the calls are answered in Python against ``tmp_path``.
 """
 
 import pytest
+from vagrant_moses import kernal as vm_kernal
 
-from jennings.devices.mpu6502 import MPU
-
-from pysidtracker import KernalHost, KernalHostError, SidImage, editor_io, sys_addr
-from pysidtracker import kernalhost
+from pysidtracker import KernalHost, KernalHostError, SidError, SidImage, sys_addr
+from pysidtracker import editor_io
 from pysidtracker.asm6502 import assemble
 
 from .helpers import build_prg
 
+DONE = 0x1701
+SETUP = """
+  LDA #4
+  LDX #<name
+  LDY #>name
+  JSR $FFBD
+  LDA #1
+  LDX #8
+  LDY #{sa}
+  JSR $FFBA
+"""
 
-def _prg(text, org=0x0801):
-    """``text`` assembled at ``org`` as a bare PRG (2-byte load + code)."""
-    code, _ = assemble(text, org)
-    return build_prg(bytes(code), org)
+
+def _run(tmp_path, body, sa=0, name=b"WORK", **kwargs):
+    """Run ``body`` after SETNAM ``name`` / SETLFS 1,8,``sa``; return the host."""
+    text = SETUP.format(sa=sa) + body + "\n  INC $1701\nloop: JMP loop\nname: .byte "
+    code, _ = assemble(text + ",".join(f"${b:02X}" for b in name), 0x0801)
+    host = KernalHost(tmp_path, **kwargs)
+    host.load_prg(build_prg(bytes(code), 0x0801))
+    return host.run(until=lambda h: h.ram[DONE], max_steps=20000)
 
 
-def test_save_then_getin_round_trips_through_the_host_dir(tmp_path):
+def test_save_and_load_round_trip_through_the_host_dir(tmp_path):
+    payload = bytes(range(256))
+    program = """
+  LDA #$00
+  STA $FB
+  LDA #$10
+  STA $FC
+  LDA #$FB
+  LDX #$00
+  LDY #$11
+  JSR $FFD8
+  LDA #0
+  LDX #$00
+  LDY #$30
+  JSR $FFD5
+  STX $1702
+  STY $1703
+"""
+    text = SETUP.format(sa=0) + program + "\n  INC $1701\nloop: JMP loop\nname: .byte "
+    code, _ = assemble(text + "$57,$4F,$52,$4B", 0x0801)
     host = KernalHost(tmp_path)
-    ram = host.ram()
-    ram[0x1000:0x1100] = bytes(range(256))  # the payload to be saved
-    ram[0x1300] = 4
-    ram[0x1301:0x1305] = b"WORK"  # SETNAM target: name "WORK", SEQ
-    ram[0x02], ram[0x03] = 0x00, 0x10  # SAVE start word -> $1000
-    host.tap_key(ord("A"))
-    host.load_prg(
-        _prg(
-            "SEI\n"
-            "LDA #$13\nLDX #$00\nLDY #$01\nJSR $FFD2\n"  # SETNAM $1300 (SEQ)
-            "LDA #$01\nLDX #$08\nLDY #$08\nJSR $FFCF\n"  # SETLFS 1,8,8
-            "LDA #$02\nLDX #$00\nLDY #$11\nJSR $FFD8\n"  # SAVE $1000:$1100
-            "JSR $FFCC\nSTA $1400\nloop: JMP loop\n"  # GETIN -> $1400
-        )
+    host.ram[0x1000:0x1100] = payload
+    host.load_prg(build_prg(bytes(code), 0x0801))
+    host.run(until=lambda h: h.ram[DONE], max_steps=20000)
+    assert (tmp_path / "8" / "WORK").read_bytes() == b"\x00\x10" + payload
+    assert host.ram[0x3000:0x3100] == payload
+    assert host.ram[0x1702:0x1704] == b"\x00\x31"  # X/Y: the end address
+
+
+def test_open_chkout_chrout_close_then_chkin_chrin_reads_back(tmp_path):
+    _run(
+        tmp_path,
+        """
+  JSR $FFC0
+  LDX #1
+  JSR $FFC9
+  LDA #$41
+  JSR $FFD2
+  LDA #$42
+  JSR $FFD2
+  JSR $FFCC
+  LDA #1
+  JSR $FFC3
+""",
+        sa=1,
     )
-    host.run(until=lambda h: h.ram()[0x1400] != 0, max_steps=4096)
-    assert (tmp_path / "8" / "WORK.seq").read_bytes() == bytes(range(256))
-    assert ram[0x1400] == ord("A")
+    assert (tmp_path / "8" / "WORK").read_bytes() == b"AB"
+    host = _run(
+        tmp_path,
+        """
+  JSR $FFC0
+  LDX #1
+  JSR $FFC6
+  JSR $FFCF
+  STA $1702
+  JSR $FFCF
+  STA $1703
+  JSR $FFB7
+  STA $1704
+  JSR $FFE7
+""",
+    )
+    assert host.ram[0x1702:0x1704] == b"AB"
+    assert host.ram[0x1704] & vm_kernal.ST_EOF
 
 
-def test_tap_key_chains_and_screen_is_one_kilobyte(tmp_path):
+def test_getin_reads_the_tapped_keys(tmp_path):
     host = KernalHost(tmp_path)
     assert host.tap_key(ord("A")) is host
-    assert host.tap_key(ord("B")) is host
+    code, _ = assemble("JSR $FFE4\nSTA $1702\nINC $1701\nloop: JMP loop", 0x0801)
+    host.load_prg(build_prg(bytes(code), 0x0801))
+    host.run(until=lambda h: h.ram[DONE], max_steps=1000)
+    assert host.ram[0x1702] == ord("A")
     assert len(host.screen()) == 1024
 
 
-def test_run_to_unpacked_lands_on_the_freshly_written_entry(tmp_path):
-    payload = bytes(range(256))  # -> $2000..$20FF (page 2)
-    marker = 0x5A  # -> $3000 (page 3, contiguous, extends the written run)
-    code = bytearray()
-    for i, b in enumerate(payload):
-        code += (
-            b"\xa9"
-            + bytes([b])
-            + b"\x8d"
-            + bytes([(0x2000 + i) & 0xFF, (0x2000 + i) >> 8])
-        )
-    code += b"\xa9" + bytes([marker]) + b"\x8d\x00\x30"  # LDA #marker / STA $3000
-    code += b"\x4c\x00\x20"  # JMP $2000
-    host = KernalHost(tmp_path)
-    image = host.run_to_unpacked(build_prg(bytes(code), 0x0801))
-    assert isinstance(image, SidImage)
-    assert image.load == 0x2000
-    assert bytes(image.mem[0x2000 : 0x2000 + 256]) == payload
-    assert image.mem[0x3000] == marker
-    assert image.end >= 0x4000  # the written run extended over the contiguous page 3
+def test_a_missing_file_sets_carry_and_its_error(tmp_path):
+    host = _run(tmp_path, "JSR $FFC0\nBCC ok\nSTA $1702\nok:", name=b"NONE")
+    assert host.ram[0x1702] == vm_kernal.FILE_NOT_FOUND
 
 
-def test_run_to_unpacked_raises_when_never_expanding(tmp_path):
+def test_untrapped_jsr_and_a_banked_out_kernal_run_on_the_cpu(tmp_path):
+    code, _ = assemble(
+        "JSR $1000\nLDA #$35\nSTA $01\nJSR $FFE4\nINC $1701\nloop: JMP loop", 0x0801
+    )
+    host = KernalHost(tmp_path).tap_key(1)
+    host.ram[0x1000] = 0x60  # RTS
+    host.ram[0xFFE4] = 0x60  # the RAM under the KERNAL entry
+    host.load_prg(build_prg(bytes(code), 0x0801))
+    host.run(until=lambda h: h.ram[DONE], max_steps=1000)
+    assert list(host.keys) == [1]  # GETIN was not trapped
+
+
+def test_given_roms_are_banked_in(tmp_path):
+    host = KernalHost(
+        tmp_path, roms={0xE000: b"\xc0" * 0x2000, 0xA000: b"\x11" * 0x2000}
+    )
+    assert (host.bus[0xE000], host.bus[0xA000]) == (0xC0, 0x11)
+
+
+def test_run_to_unpacked_returns_the_entry_and_the_written_run(tmp_path):
+    code, _ = assemble(
+        """
+  LDX #0
+copy: TXA
+  STA $2000,X
+  INX
+  BNE copy
+  LDA #$5A
+  STA $3000
+  JMP $2000
+""",
+        0x0801,
+    )
+    entry, data = KernalHost(tmp_path).run_to_unpacked(build_prg(bytes(code), 0x0801))
+    assert entry == 0x2000
+    assert data[:256] == bytes(range(256))
+    assert data[0x1000] == 0x5A and len(data) == 0x2000
+
+
+def test_step_caps_raise_a_sid_error(tmp_path):
     host = KernalHost(tmp_path)
+    spin = build_prg(b"\x4c\x01\x08", 0x0801)
+    with pytest.raises(KernalHostError) as exc:
+        host.run_to_unpacked(spin, max_steps=500)
+    assert isinstance(exc.value, SidError)
+    assert isinstance(exc.value, vm_kernal.KernalHostError)
+    host.load_prg(spin)
     with pytest.raises(KernalHostError):
-        host.run_to_unpacked(build_prg(b"\x4c\x01\x08", 0x0801), max_steps=500)
+        host.run(until=lambda h: False, max_steps=100)
 
 
-def test_run_raises_on_the_step_cap(tmp_path):
-    host = KernalHost(tmp_path)
-    host.load_prg(build_prg(b"\x4c\x01\x08", 0x0801))
-    with pytest.raises(KernalHostError):
-        host.run(max_steps=100)
-
-
-def _tokenized_line(next_ptr: int, line_no: int, tokens: bytes) -> bytes:
-    """A C64 BASIC line at ``base``: next-pointer, line number, token, ``$00``."""
+def _line(next_ptr: int, line_no: int, tokens: bytes) -> bytes:
+    """A tokenised BASIC line: next-line pointer, line number, tokens, ``$00``."""
     return (
-        bytes([next_ptr & 0xFF, next_ptr >> 8, line_no & 0xFF, line_no >> 8])
-        + bytes(tokens)
-        + b"\x00"
+        next_ptr.to_bytes(2, "little") + line_no.to_bytes(2, "little") + tokens + b"\0"
     )
 
 
-def _put_sys_line(host, line: bytes) -> None:
-    """Place ``line`` at the stub base ``$0801`` without resizing the RAM array."""
-    host.ram()[0x0801 : 0x0801 + len(line)] = line
+def _basic(*lines):
+    mem = bytearray(0x10000)
+    program = b"".join(lines)
+    mem[0x0801 : 0x0801 + len(program)] = program
+    return mem
 
 
-def test_sys_addr_reads_a_tokenised_sys_stub(tmp_path):
-    host = KernalHost(tmp_path)
-    # 10 SYS2085  tokenizes to the SYS token then the digits: 9E 32 30 38 35
-    _put_sys_line(host, _tokenized_line(0xFFFF, 0x0A, bytes([0x9E]) + b"2085"))
-    assert sys_addr(host.ram(), base=0x0801) == 2085
-
-
-def test_sys_addr_reads_sys_with_an_explicit_space(tmp_path):
-    host = KernalHost(tmp_path)
-    # 10 SYS 2085  : a leading space before the digits is skipped
-    _put_sys_line(host, _tokenized_line(0xFFFF, 0x0A, bytes([0x9E, 0x20]) + b"2085"))
-    assert sys_addr(host.ram(), base=0x0801) == 2085
+@pytest.mark.parametrize("tokens", [b"\x9e2085", b"\x9e 2085"])
+def test_sys_addr_reads_a_tokenised_sys_stub(tokens):
+    assert sys_addr(_basic(_line(0x0900, 10, tokens))) == 2085
 
 
 def test_sys_addr_scans_a_sid_image():
-    # 10 SYS 2085
-    stub = _tokenized_line(0xFFFF, 0x0A, bytes([0x9E]) + b"2085")
-    image = SidImage.from_bytes(build_prg(stub, 0x0801))
-    assert sys_addr(image, base=0x0801) == 2085
+    stub = _line(0x0900, 10, b"\x9e2085")
+    assert sys_addr(SidImage.from_bytes(build_prg(stub, 0x0801))) == 2085
 
 
-def test_sys_addr_ignores_a_64_byte_in_the_line_number(tmp_path):
-    host = KernalHost(tmp_path)
-    # a line number of $6400 carries a stray $64 byte; no SYS token means no match
-    _put_sys_line(host, _tokenized_line(0xFFFF, 0x6400, bytes([0x90])))
+def test_sys_addr_walks_the_next_line_link():
+    first = _line(0x0809, 10, b"\x9510")  # 10 POKE10
+    assert sys_addr(_basic(first, _line(0x0900, 20, b"\x9e2085"))) == 2085
+
+
+@pytest.mark.parametrize("mem", [_basic(_line(0x0900, 0x6400, b"\x90")), _basic()])
+def test_sys_addr_without_a_sys_raises(mem):
     with pytest.raises(KernalHostError):
-        sys_addr(host.ram(), base=0x0801)
-
-
-def test_sys_addr_walks_the_next_line_link_to_find_sys(tmp_path):
-    host = KernalHost(tmp_path)
-    first = _tokenized_line(0x0809, 0x0A, bytes([0x95]) + b"10")  # 10 POKE  (no SYS)
-    second = _tokenized_line(0xFFFF, 0x14, bytes([0x9E]) + b"2085")  # 20 SYS 2085
-    _put_sys_line(host, first + second)
-    assert sys_addr(host.ram(), base=0x0801) == 2085
-
-
-def test_sys_addr_raises_when_no_token(tmp_path):
-    with pytest.raises(KernalHostError):
-        sys_addr(KernalHost(tmp_path).ram(), base=0x0801)
+        sys_addr(mem)
 
 
 def test_editor_io_lists_the_transfer_call_sites():
-    prg = _prg(
-        "LDA #$01\nLDX #$00\nJSR $FFD5\n"  # LOAD
-        "LDA #$02\nJSR $FFD8\n"  # SAVE
-        "LDA #$03\nJSR $FFC0\n"  # OPEN
-        "loop: JMP loop\n"
+    code, _ = assemble(
+        "LDA #$01\nJSR $FFD5\nLDA #$02\nJSR $FFD8\nJSR $FFC0\nloop: JMP loop", 0x0801
     )
-    image = SidImage.from_bytes(prg)
+    image = SidImage.from_bytes(build_prg(bytes(code), 0x0801))
     sites = {name: (addr, rows) for name, addr, rows in editor_io(image)}
     assert set(sites) == {"LOAD", "SAVE", "OPEN"}
-    byte = {"LOAD": b"\x20\xd5\xff", "SAVE": b"\x20\xd8\xff", "OPEN": b"\x20\xc0\xff"}
-    for name, (addr, rows) in sites.items():
-        assert bytes(image.mem[addr : addr + 3]) == byte[name]
-        assert rows
-
-
-def test_open_chout_close_writes_a_work_file(tmp_path):
-    host = KernalHost(tmp_path)
-    ram = host.ram()
-    ram[0x1480] = 2
-    ram[0x1481:0x1483] = b"CH"  # SETNAM target: name "CH", SEQ @ $1480
-    host.load_prg(
-        _prg(
-            "SEI\n"
-            "LDA #$14\nLDX #$80\nLDY #$01\nJSR $FFD2\n"  # SETNAM "CH" SEQ
-            "LDA #$01\nLDX #$08\nLDY #$08\nJSR $FFCF\n"  # SETLFS
-            "JSR $FFC0\n"  # OPEN (write channel)
-            "LDA #$41\nJSR $FFC6\nLDA #$42\nJSR $FFC6\n"  # CHROUT 'A','B'
-            "LDA #$01\nJSR $FFC3\n"  # CLOSE 1
-            "STA $1700\nLDA #$01\nSTA $1701\nloop: JMP loop\n"
-        )
-    )
-    host.run(until=lambda h: h.ram()[0x1701] != 0, max_steps=4096)
-    assert (tmp_path / "8" / "CH.seq").read_bytes() == b"AB"
-
-
-def test_chrin_reads_back_from_an_opened_work_file(tmp_path):
-    drive = tmp_path / "8"
-    drive.mkdir(parents=True, exist_ok=True)
-    (drive / "RD.seq").write_bytes(b"READ")
-    host = KernalHost(tmp_path)
-    ram = host.ram()
-    ram[0x14C0] = 2
-    ram[0x14C1:0x14C3] = b"RD"  # SETNAM target: name "RD", SEQ @ $14C0
-    host.load_prg(
-        _prg(
-            "SEI\n"
-            "LDA #$14\nLDX #$C0\nLDY #$01\nJSR $FFD2\n"  # SETNAM "RD" SEQ
-            "LDA #$01\nLDX #$08\nLDY #$08\nJSR $FFCF\n"  # SETLFS
-            "JSR $FFC0\n"  # OPEN (existing -> read channel)
-            "JSR $FFC9\nSTA $1702\n"  # CHRIN -> 'R'
-            "JSR $FFC9\nSTA $1703\n"  # CHRIN -> 'E'
-            "LDA #$01\nSTA $1701\nloop: JMP loop\n"
-        )
-    )
-    host.run(until=lambda h: h.ram()[0x1701] != 0, max_steps=4096)
-    assert ram[0x1702] == 0x52 and ram[0x1703] == 0x45  # 'R', 'E'
-
-
-def test_save_load_round_trip_and_verify(tmp_path):
-    host = KernalHost(tmp_path)
-    ram = host.ram()
-    payload = bytes(range(256))
-    ram[0x1000:0x1100] = payload
-    ram[0x1500] = 1
-    ram[0x1501] = 0x56  # name "V", SEQ @ $1500
-    ram[0x02], ram[0x03] = 0x00, 0x10  # SAVE start word -> $1000
-    host.load_prg(
-        _prg(
-            "SEI\n"
-            "LDA #$15\nLDX #$00\nLDY #$01\nJSR $FFD2\n"  # SETNAM "V" SEQ
-            "LDA #$01\nLDX #$08\nLDY #$08\nJSR $FFCF\n"  # SETLFS
-            "LDA #$02\nLDX #$00\nLDY #$11\nJSR $FFD8\n"  # SAVE $1000:$1100
-            "LDA #$00\nLDX #$00\nLDY #$30\nJSR $FFD5\n"  # LOAD -> $3000
-            "LDA #$01\nLDX #$00\nLDY #$30\nJSR $FFD5\n"  # VERIFY $3000
-            "STA $1704\nLDA #$01\nSTA $1701\nloop: JMP loop\n"
-        )
-    )
-    host.run(until=lambda h: h.ram()[0x1701] != 0, max_steps=4096)
-    assert (tmp_path / "8" / "V.seq").read_bytes() == payload
-    assert ram[0x3000:0x3100] == payload
-    assert ram[0x1704] == 0  # verify: equal -> A=0
-
-
-def test_explicit_roms_and_ntsc_bypass_resolution(tmp_path):
-    host = KernalHost(
-        tmp_path, ntsc=True, kernal_rom=b"\xc0" * 0x2000, basic_rom=b"\x11" * 0x2000
-    )
-    assert host.ntsc is True
-    assert host.mem[0xE000] == 0xC0 and host.mem[0xA000] == 0x11
-
-
-def test_resolved_roms_are_banked_in_when_available(tmp_path, monkeypatch):
-    kernal = tmp_path / "k.bin"
-    kernal.write_bytes(b"\xe4" * 0x2000)
-    basic = tmp_path / "b.bin"
-    basic.write_bytes(b"\x5a" * 0x2000)
-    monkeypatch.setattr(
-        kernalhost.roms,
-        "resolve_rom",
-        lambda name, **_kw: {"kernal": kernal, "basic": basic}[name],
-    )
-    host = KernalHost(tmp_path / "h")
-    assert host.ram()[1] == 0x37  # power-on bank selects the ROMs
-    assert host.mem[0xE000] == 0xE4  # real KERNAL, not the stub
-    assert host.mem[0xA000] == 0x5A  # real BASIC, not zero
-
-
-def test_verb_error_paths_set_carry(tmp_path):
-    host = KernalHost(tmp_path)
-    mpu = host.mpu
-    mpu.a = mpu.x = mpu.y = 0
-    host._getin()
-    assert mpu.a == 0 and mpu.p & MPU.CARRY  # empty keyboard queue
-    mpu.a = 0x41
-    host._chout()
-    assert mpu.a != 0 and mpu.p & MPU.CARRY  # no write channel open
-    host._chrin()
-    assert mpu.a != 0 and mpu.p & MPU.CARRY  # no input channel open
-    empty = tmp_path / "empty"
-    empty.write_bytes(b"")
-    host._lfn = 1
-    host._channels[1] = {"fh": open(empty, "rb"), "mode": "r", "path": empty}
-    host._chrin()
-    assert mpu.a != 0 and mpu.p & MPU.CARRY  # input channel at EOF
-    host._channels[1]["fh"].close()
-    host._name, host._filetype = "MISSING", 1
-    host._load()
-    assert mpu.a != 0 and mpu.p & MPU.CARRY  # file not found
-    host._host_dir = tmp_path / "a-file" / "8"
-    (tmp_path / "a-file").write_bytes(b"x")  # the drive dir is a file
-    host._name, host._filetype = "X", 1
-    host._open()
-    assert mpu.p & MPU.CARRY  # OSError -> carry set
-    mpu.a = 1
-    host._close()
-    assert mpu.a == 0 and not (mpu.p & MPU.CARRY)  # closing is not an error
-
-
-def test_load_prg_accepts_a_sidimage(tmp_path):
-    host = KernalHost(tmp_path)
-    image = SidImage.from_bytes(build_prg(b"\xa9\x01\x8d\x00\x14\x60", 0x1000))
-    assert host.load_prg(image) == 0x1000
-    assert host.ram()[0x1000] == 0xA9
-
-
-def test_untrapped_jsr_runs_on_the_cpu(tmp_path):
-    host = KernalHost(tmp_path)
-    host.ram()[0x1000] = 0x60  # an RTS living in the (untrapped) RAM behind the call
-    host.load_prg(_prg("JSR $1000\nLDA #$01\nSTA $1701\nloop: JMP loop\n"))
-    host.run(until=lambda h: h.ram()[0x1701] != 0, max_steps=4096)
-    assert host.ram()[0x1701] == 1
+    assert all(rows for _, rows in sites.values())

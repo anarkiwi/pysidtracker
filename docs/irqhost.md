@@ -49,22 +49,23 @@ cadence = host_cadence(data)    # the measured play Cadence
 
 ## The model
 
-The chips are vagrant-moses' ports of libsidplayfp's onto its two-phase event
-scheduler (`vagrant_moses.eventsched`, re-exported as `pysidtracker.eventsched`:
-PHI1 for the chips, PHI2 for the CPU, ties in scheduling order).
+The machine is vagrant-moses' `machine.Machine`, a port of libsidplayfp's C64
+onto its two-phase event scheduler (`vagrant_moses.eventsched`: PHI1 for the
+chips, PHI2 for the CPU, ties in scheduling order). The host plugs its SID
+devices into it and logs the machine's interrupt events as sidtrace rows.
 
-- **VIC-II** (`vagrant_moses.vicii`, re-exported as `pysidtracker.vicii`): raster
+- **VIC-II** (`vagrant_moses.vicii`): raster
   IRQ edge detection (line 0 starts one cycle late),
   `$D019` acknowledge and `$D01A` mask, and BA: a badline (`raster & 7 ==
   YSCROLL`, lines `$30`-`$F7`, DEN seen on line `$30`) pulls BA low from line cycle
   11 to 54; `$D011` writes create or cancel a badline mid-line; sprite DMA pulls
   BA low around each enabled sprite's fetch, with Y-expansion and crunch.
-- **CIA** (`vagrant_moses.cia`, re-exported as `pysidtracker.cia`): both timers
+- **CIA** (`vagrant_moses.cia`): both timers
   as VICE's `ciatimer` pipeline (start delay, force load, one-shot, Timer B
   counting Timer A), ICR masks and read-to-clear, the
   6526's interrupt one cycle after an underflow (sidplayfp's default CIA). CIA
   #1 drives the IRQ line with the VIC; CIA #2's interrupt is an NMI edge.
-- **CPU** (`irqhost.C64`): jennings executes each instruction at its data access;
+- **CPU** (`vagrant_moses.machine.Machine`): jennings executes each instruction at its data access;
   around it the host follows libsidplayfp's `MOS6510` cycle tables. Each cycle
   is a read or a write; a read waits while BA is low (a write does not), so the
   VIC steals 40-43 cycles on a badline depending on the instruction. Interrupts

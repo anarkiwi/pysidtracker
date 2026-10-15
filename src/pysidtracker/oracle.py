@@ -33,6 +33,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple, Union
 
+from vagrant_moses import memmap as mm
+
 from . import registers as reg
 from .emu import run_to_rts, wire_mpu
 from .errors import SidError, SidParseError
@@ -65,7 +67,7 @@ ENTRY_SOURCES = {f"{s}_entry": s for s in RAISE_SOURCES}
 # The libsidplayfp PSID driver (``psiddrv.a65``) writes maximum volume to $D418
 # before running a tune's init, so a tune that never sets volume itself is still
 # audible. Mirror that cold-start default when rendering a reference grid.
-SID_VOLUME = reg.SID_BASE + 0x18
+SID_VOLUME = mm.SID_BASE + 0x18
 DRIVER_VOLUME = 0x0F
 
 
@@ -128,9 +130,9 @@ def register_grid(
         rows.append(
             [
                 (
-                    (subject[reg.SID_BASE + i] & 0x0F)
+                    (subject[mm.SID_BASE + i] & 0x0F)
                     if i in reg.PW_HI_REGS
-                    else subject[reg.SID_BASE + i]
+                    else subject[mm.SID_BASE + i]
                 )
                 for i in range(reg.SID_REG_COUNT)
             ]
@@ -232,7 +234,7 @@ def _frame_grid(
 def grid_from_writes(
     writes: Sequence[Tuple[int, int, int]],
     *,
-    cycles_per_frame: int = reg.PAL_CYCLES_PER_FRAME,
+    cycles_per_frame: int = mm.PAL.cycles_per_frame,
     reg_count: int = 25,
     pw_hi_regs: Iterable[int] = reg.PW_HI_REGS,
     gap: int = 10000,

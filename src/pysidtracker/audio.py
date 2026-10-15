@@ -23,9 +23,9 @@ from pathlib import Path
 from typing import Iterable, Tuple
 
 import numpy as _np
+from vagrant_moses.memmap import PAL
 
 from .errors import AudioUnavailable
-from .registers import PAL_CLOCK_HZ, PAL_CYCLES_PER_FRAME
 from .reglog import DEFAULT_WRITE_SPACING
 
 CHIP_MODELS = ("6581", "8580")
@@ -207,10 +207,10 @@ def render_player_samples(
     device = resolve_device(device, model, sampling_frequency)
     if cycles_per_frame is None:
         cycles_per_frame = getattr(player, "cycles_per_frame", None) or (
-            PAL_CYCLES_PER_FRAME
+            PAL.cycles_per_frame
         )
     if clock_frequency is None:
-        clock_frequency = float(getattr(device, "clock_frequency", PAL_CLOCK_HZ))
+        clock_frequency = float(getattr(device, "clock_frequency", PAL.clock_hz))
     nframes = seconds_to_frames(seconds, cycles_per_frame, clock_frequency)
     frames = (player.play_frame() for _ in range(nframes))
     samples = render_samples(
