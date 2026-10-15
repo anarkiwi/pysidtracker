@@ -85,15 +85,55 @@ def test_run_raises_on_the_step_cap(tmp_path):
         host.run(max_steps=100)
 
 
-def test_sys_addr_reads_the_sys_operand_from_ram(tmp_path):
+def _tokenized_line(next_ptr: int, line_no: int, tokens: bytes) -> bytes:
+    """A C64 BASIC line at ``base``: next-pointer, line number, token, ``$00``."""
+    return (
+        bytes([next_ptr & 0xFF, next_ptr >> 8, line_no & 0xFF, line_no >> 8])
+        + bytes(tokens)
+        + b"\x00"
+    )
+
+
+def _put_sys_line(host, line: bytes) -> None:
+    """Place ``line`` at the stub base ``$0801`` without resizing the RAM array."""
+    host.ram()[0x0801 : 0x0801 + len(line)] = line
+
+
+def test_sys_addr_reads_a_tokenised_sys_stub(tmp_path):
     host = KernalHost(tmp_path)
-    host.ram()[0x0801:0x0809] = bytes([0x00, 0x0A, 0xFF, 0xFF, 0x64, 0x00, 0x20, 0x0D])
-    assert sys_addr(host.ram(), base=0x0801) == 0x2000
+    # 10 SYS2085  tokenizes to the SYS token then the digits: 9E 32 30 38 35
+    _put_sys_line(host, _tokenized_line(0xFFFF, 0x0A, bytes([0x9E]) + b"2085"))
+    assert sys_addr(host.ram(), base=0x0801) == 2085
+
+
+def test_sys_addr_reads_sys_with_an_explicit_space(tmp_path):
+    host = KernalHost(tmp_path)
+    # 10 SYS 2085  : a leading space before the digits is skipped
+    _put_sys_line(host, _tokenized_line(0xFFFF, 0x0A, bytes([0x9E, 0x20]) + b"2085"))
+    assert sys_addr(host.ram(), base=0x0801) == 2085
 
 
 def test_sys_addr_scans_a_sid_image():
-    stub = bytes([0x00, 0x0A, 0xFF, 0xFF, 0x64, 0x00, 0x20, 0x0D])
-    assert sys_addr(SidImage.from_bytes(build_prg(stub, 0x0801)), base=0x0801) == 0x2000
+    # 10 SYS 2085
+    stub = _tokenized_line(0xFFFF, 0x0A, bytes([0x9E]) + b"2085")
+    image = SidImage.from_bytes(build_prg(stub, 0x0801))
+    assert sys_addr(image, base=0x0801) == 2085
+
+
+def test_sys_addr_ignores_a_64_byte_in_the_line_number(tmp_path):
+    host = KernalHost(tmp_path)
+    # a line number of $6400 carries a stray $64 byte; no SYS token means no match
+    _put_sys_line(host, _tokenized_line(0xFFFF, 0x6400, bytes([0x90])))
+    with pytest.raises(KernalHostError):
+        sys_addr(host.ram(), base=0x0801)
+
+
+def test_sys_addr_walks_the_next_line_link_to_find_sys(tmp_path):
+    host = KernalHost(tmp_path)
+    first = _tokenized_line(0x0809, 0x0A, bytes([0x95]) + b"10")  # 10 POKE  (no SYS)
+    second = _tokenized_line(0xFFFF, 0x14, bytes([0x9E]) + b"2085")  # 20 SYS 2085
+    _put_sys_line(host, first + second)
+    assert sys_addr(host.ram(), base=0x0801) == 2085
 
 
 def test_sys_addr_raises_when_no_token(tmp_path):
