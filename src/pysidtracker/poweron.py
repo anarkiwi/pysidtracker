@@ -13,6 +13,8 @@ falling back to the KERNAL vectors in :mod:`~pysidtracker.irqhost`.
 
 from __future__ import annotations
 
+from deity_informant import poweron_ram as _deity_poweron_ram
+
 #: ``psiddrv::install`` clears ``$0000-$03FE`` (``0x3FF`` bytes) before a PSID runs.
 PSID_DRIVER_CLEARED = 0x3FF
 # The SID occupies ``$D400-$D7FF``; before the tune sets it the register file reads as 0.
@@ -21,16 +23,8 @@ SID_PORT_SIZE = 0x400
 
 
 def ram_pattern() -> bytearray:
-    """libsidplayfp's power-up RAM: 4-byte runs of ``$00``/``$FF``, flipped per 16K bank."""
-    ram = bytearray()
-    byte = 0
-    for _ in range(4):
-        block = bytearray([byte]) * 0x4000
-        for i in range(2, 0x4000, 8):
-            block[i : i + 4] = bytes([byte ^ 0xFF]) * 4
-        ram += block
-        byte ^= 0xFF
-    return ram
+    """C64 power-on RAM (libsidplayfp ``SystemRAMBank::reset``), as a mutable image."""
+    return bytearray(_deity_poweron_ram())
 
 
 def power_on_ram() -> bytearray:
