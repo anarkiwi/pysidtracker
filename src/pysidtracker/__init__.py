@@ -186,6 +186,18 @@ from .roms import (
     roms_available,
 )
 from .source import Source, read_bytes
+from .variants import (
+    Block,
+    NormInsn,
+    ROW_FIELDS,
+    Signature,
+    build_signature,
+    cluster,
+    diff_signatures,
+    format_diff,
+    nearest_ref,
+    variants,
+)
 from .testing import (
     DEFAULT_MIRROR,
     TuneFetchError,
@@ -396,4 +408,14 @@ __all__ = [
     "wire_mpu",
     "write_psid",
     "write_reglog",
+    "Block",
+    "NormInsn",
+    "ROW_FIELDS",
+    "Signature",
+    "build_signature",
+    "cluster",
+    "diff_signatures",
+    "format_diff",
+    "nearest_ref",
+    "variants",
 ]
