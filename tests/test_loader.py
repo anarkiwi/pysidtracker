@@ -74,6 +74,7 @@ def test_rsid_vs_psid():
     assert not is_rsid(_container())
     mem, load, init, play = load_psid(rsid)
     assert (load, init, play) == (0x2000, 0x2100, 0x2200)
+    assert mem[0x2000 : 0x2000 + len(BODY)] == BODY
 
 
 def test_rejects_non_sid_bytes():
