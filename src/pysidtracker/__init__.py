@@ -115,6 +115,18 @@ from .oracle import (
 )
 from .player import MemPlayer
 from .poweron import PSID_DRIVER_CLEARED, power_on_ram, psid_init_bank, ram_pattern
+from .provenance import (
+    Insn,
+    Provenance,
+    Step,
+    Write,
+    decode_insn,
+    explain,
+    format_explain,
+    format_watch,
+    trace_frames,
+    watch_grid,
+)
 from .irqhost import InterruptHost, InterruptPlayer, host_cadence
 from .registers import (
     NTSC_CLOCK_HZ,
@@ -252,8 +264,18 @@ __all__ = [
     "Source",
     "TriggerSource",
     "TuneFetchError",
+    "Insn",
+    "Provenance",
+    "Step",
+    "Write",
     "__version__",
     "adc",
+    "decode_insn",
+    "explain",
+    "format_explain",
+    "format_watch",
+    "trace_frames",
+    "watch_grid",
     "add_reglog_command",
     "add_wav_command",
     "aligned_match",
