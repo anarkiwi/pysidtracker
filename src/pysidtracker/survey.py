@@ -28,8 +28,10 @@ import zstandard
 from tqdm import tqdm
 
 from . import registers
+from .disasm import entry_labels
 from .errors import SidParseError
 from .header import parse_sid_header
+from .image import SidImage
 from .oracle import (
     SidtraceUnavailable,
     cached_sidtrace,
@@ -480,6 +482,71 @@ def diff(hvsc, tunes_csv, key, work, render, context=3):
     return row
 
 
+def _hex_addr(value):
+    """A hex C64 address: ``1000``, ``0x1000``, or ``$1000``."""
+    text = value[1:] if value[:1] == "$" else value
+    try:
+        return int(text, 16)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"expected a hex address, got {value!r}"
+        ) from exc
+
+
+def _render_value(render, sid_path, song, frame, reg):
+    """The library renderer's value of ``reg`` at ``frame`` (the side-by-side compare)."""
+    lib, _info = render(Path(sid_path).read_bytes(), song, frame + LEAD + 1)
+    grid = np.asarray(lib, dtype=np.int16)
+    if grid.size == 0 or grid.ndim < 2:
+        return None
+    return int(grid[min(frame, len(grid) - 1)][reg])
+
+
+def explain(
+    hvsc,
+    tunes_csv,
+    key,
+    work,
+    *,
+    frame,
+    reg=None,
+    watch=(),
+    render=None,
+    depth=8,
+):
+    """Run the tune's own 6502 play routine to ``frame`` and explain its SID writes.
+
+    For each write in frame ``frame`` (or just ``reg``), prints the writing
+    instruction with its disassembly, the load chain that produced the value, and the
+    frame/cycle; with ``--watch`` also prints the chosen RAM cells per frame. When
+    ``--reg`` and a ``render`` hook are given, the library's rendered value for that
+    ``(frame, reg)`` appears next to the real player's write.
+    """
+    work = Path(work)
+    md5, song = key.split("_")
+    tune = next(t for t in load_tunes(tunes_csv) if t["md5"] == md5)
+    sid_path = Path(hvsc) / tune["path"]
+    image = SidImage.from_bytes(sid_path.read_bytes())
+    from .provenance import explain as _explain
+    from .provenance import format_explain, format_watch, trace_frames
+
+    labels = entry_labels(image)
+    ntsc = tune.get("clock", "PAL") == "NTSC"
+    pro = trace_frames(image, frame + 1, watch=list(watch), labels=labels, ntsc=ntsc)
+    if watch:
+        print(format_watch(pro, list(watch)))
+        print()
+    print(format_explain(pro, frame, reg=reg, depth=depth))
+    if render is not None and reg is not None:
+        real = next((w.value for w in _explain(pro, frame, reg=reg)), None)
+        libv = _render_value(render, sid_path, int(song), frame, int(reg))
+        if libv is not None or real is not None:
+            real_note = "" if real is None else f"   real ${real:02X}"
+            lib_note = "n/a" if libv is None else f"${libv:02X}"
+            print(f"library (frame {frame}, reg {reg}): {lib_note}{real_note}")
+    return pro
+
+
 def cached_grids(work, key, nframes):
     """``(oracle, lib)`` grids of a subtune's cached ``work`` traces."""
     _, oracle = oracle_frames(Path(work) / "oracle" / f"{key}.csv.zst", nframes=nframes)
@@ -680,7 +747,7 @@ def triage(work, jobs=None, top=15, max_values=20, near=NEAR):
 
 
 def main(argv=None):
-    """``python -m pysidtracker.survey {find,run,report,diff,triage,leads}``."""
+    """``python -m pysidtracker.survey {find,run,report,diff,triage,leads,explain}``."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("find", help=find.__doc__)
@@ -689,18 +756,35 @@ def main(argv=None):
     p.add_argument("--out", required=True)
     p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
     p.add_argument("--jobs", type=int, default=os.cpu_count())
-    for name, fn in (("run", run), ("diff", diff), ("leads", leads)):
+    for name, fn in (
+        ("run", run),
+        ("diff", diff),
+        ("leads", leads),
+        ("explain", explain),
+    ):
         p = sub.add_parser(name, help=fn.__doc__)
         p.add_argument("hvsc")
         p.add_argument("tunes")
         p.add_argument("--work", required=True)
         p.add_argument(
             "--render",
-            required=name != "leads",
+            required=name not in ("leads", "explain"),
             help="module:function renderer (leads: only for uncached grids)",
         )
     sub.choices["diff"].add_argument("key")
     sub.choices["diff"].add_argument("--context", type=int, default=3)
+    pe = sub.choices["explain"]
+    pe.add_argument("key", help="<md5>_<song> subtune key")
+    pe.add_argument("--frame", type=int, required=True, help="frame to explain")
+    pe.add_argument("--reg", type=int, help="restrict to this SID register offset")
+    pe.add_argument(
+        "--watch",
+        action="append",
+        type=_hex_addr,
+        default=[],
+        help="a RAM cell ($XXXX) to watch per frame (repeatable)",
+    )
+    pe.add_argument("--depth", type=int, default=8, help="load-chain back-track depth")
     p = sub.choices["run"]
     p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
     p.add_argument("--limit", type=int, help="only the first N tunes")
@@ -746,6 +830,18 @@ def main(argv=None):
         )
     elif a.cmd == "diff":
         out = diff(a.hvsc, a.tunes, a.key, a.work, load_render(a.render), a.context)
+    elif a.cmd == "explain":
+        explain(
+            a.hvsc,
+            a.tunes,
+            a.key,
+            a.work,
+            frame=a.frame,
+            reg=a.reg,
+            watch=a.watch,
+            render=a.render and load_render(a.render),
+            depth=a.depth,
+        )
     elif a.cmd == "leads":
         leads(
             a.hvsc,
