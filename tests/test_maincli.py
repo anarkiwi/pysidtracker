@@ -183,3 +183,17 @@ def test_main_discovers_and_runs(monkeypatch, capsys, tune):
     rc = maincli.main(["info", str(tune)])
     assert rc == 0
     assert "format:   fake" in capsys.readouterr().out
+
+
+def test_editor_io_cli_lists_the_transfer_call_sites(tmp_path, capsys):
+    code = (
+        b"\xa9\x01\xa2\x00\x20\xd5\xff"  # LDA #$01 / LDX #$00 / JSR $FFD5  -> LOAD @ $1004
+        b"\xa9\x02\x20\xd8\xff"  # LDA #$02 / JSR $FFD8  -> SAVE @ $1009
+        b"\xa9\x03\x20\xc0\xff"  # LDA #$03 / JSR $FFC0  -> OPEN @ $100E
+    )
+    path = tmp_path / "editor.prg"
+    path.write_bytes(bytes([0x00, 0x10]) + code)
+    _run([], ["editor-io", str(path)])
+    out = capsys.readouterr().out
+    assert "LOAD  $1004" in out and "SAVE  $1009" in out and "OPEN  $100E" in out
+    assert "JSR $ffd5" in out  # the call site's disassembled row

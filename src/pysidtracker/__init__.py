@@ -24,6 +24,7 @@ from .cadence import Cadence, TriggerSource, cadence_from_latch, playroutine_cad
 from .cli import add_reglog_command, add_wav_command, print_info, run_cli
 from .codescan import CodePattern, Match, find_code_all, find_code_first
 from .disasm import disassemble, entry_labels, image_after_init
+from .editorio import editor_io
 from .detect import (
     Detection,
     PlayroutineKind,
@@ -38,6 +39,7 @@ from .emu import run_to_rts, wire_mpu
 from .errors import (
     AudioUnavailable,
     EmulatorUnavailable,
+    KernalHostError,
     PackageErrors,
     SidError,
     SidFormatError,
@@ -61,6 +63,7 @@ from .header import (
 )
 from .image import MEM_SIZE, SidImage, parse_prg
 from .io import ByteCursor, byte_range, check
+from .kernalhost import ABI, KernalHost, sys_addr
 from .mos6502 import (
     OP_LEN,
     SidWriteCapturingMemory,
@@ -158,6 +161,7 @@ from .trace import InitTrace, trace_init
 __version__ = "0.16.0"
 
 __all__ = [
+    "ABI",
     "AudioUnavailable",
     "BASIC_BOOT",
     "BASIC_RUN",
@@ -176,6 +180,8 @@ __all__ = [
     "FormatCommand",
     "InitTrace",
     "KERNAL_BOOT",
+    "KernalHost",
+    "KernalHostError",
     "MEM_SIZE",
     "Match",
     "MemPlayer",
@@ -240,6 +246,7 @@ __all__ = [
     "detect_playroutine",
     "disassemble",
     "discover_formats",
+    "editor_io",
     "encode_cstr",
     "entry_labels",
     "fetch_disk",
@@ -303,6 +310,7 @@ __all__ = [
     "sidtrace_cadence",
     "sidtrace_grid",
     "sustain_release",
+    "sys_addr",
     "trace_init",
     "walk_until",
     "wire_mpu",
