@@ -15,6 +15,7 @@ python -m pysidtracker.survey diff $HVSC tunes.csv <md5>_<song> --work .hvsc-sur
 python -m pysidtracker.survey leads $HVSC tunes.csv <md5>_<song> --work .hvsc-survey
 python -m pysidtracker.survey leads $HVSC tunes.csv --verdict differs --work .hvsc-survey
 python -m pysidtracker.survey variants build1.sid build2.sid --ref base.sid --out variants.csv
+python -m pysidtracker.survey file scripts/oracle_hvsc.py native.prg --frames 3000
 ```
 
 `run` also takes `--player REGEX`, `--limit N` (first N tunes), `--jobs`,
@@ -51,7 +52,7 @@ bundled `sidid.cfg`. `tunes.csv` columns: `path` (relative to the HVSC root),
 Find the HVSC tune for a native file (e.g. a CSDB editor dump) by byte-matching
 their resident images — the matcher the `py*` format packages previously each
 wrote as `match_hvsc.py`, and the input for the single-file oracle compare
-(#47).
+(`file`, below).
 
 ```bash
 python -m pysidtracker.survey match $HVSC tunes.csv native1.sid native2.sid
@@ -171,6 +172,42 @@ them in `--jobs` processes into `leads.csv` (`--out` overrides), one row per
 subtune and lead (`key`, `path`, `song`, `frames`, `lead`, `first_diff`, `bad`,
 `regs`), and prints the subtunes whose `lead` and `min_lead` differ and the
 near-exact list.
+
+## `file`
+
+Compares a renderer with a native file's own player, giving native fixtures
+the same verdicts as the HVSC survey.
+
+```bash
+python -m pysidtracker.survey file scripts/oracle_hvsc.py natives/*.prg --frames 3000 --out native.csv
+python -m pysidtracker.survey file mypkg.survey:render tune.prg --frames 3000 --init 1000 --play 1003 --work .native-survey
+```
+
+The renderer is the library's `oracle_hvsc.py` (its `render`, or
+`path.py:function`) or a `module:function`, called as for `run`. A PSID/RSID
+file is used as is. A bare PRG is wrapped with `header.write_psid`
+(`survey.as_sid`): `--init` defaults to its load address and `--play` to
+init+3. The oracle gives `--frames` play calls of `--song` (default 1):
+
+- With `--work` (a directory the Docker daemon can bind, e.g. under `/scratch`),
+  the sidtrace trace is cached as `oracle/<md5>_<song>.csv.zst`, as in `run`.
+  It is rendered over the `playroutine_cadence` duration of those calls and
+  framed by its interrupt rows.
+- Without `--work`, or when sidtrace is unavailable, jennings'
+  `oracle.register_grid` runs the player instead.
+
+The CSV (stdout unless `--out`) has the `run` columns plus `oracle`
+(`sidtrace` or `jennings`); `seconds` is empty for jennings. `--lead`
+(default `LEAD`) bounds the frame shift, and `--jobs`/`--timeout` are as for
+`run`. `report` reads the CSV like a `results.csv`.
+
+From Python:
+
+- `survey.compare_file(path_or_prg, render, *, frames, init=None, play=None,
+  song=1, lead=LEAD, work=None, timeout=0)` returns one such row.
+- `survey.compare_grids(a, b, max_shift=LEAD)` compares two renders, such as an
+  editor file and its packed `.sid`. It returns the `verdict_fields` columns
+  and `frames`; `b[f + min_lead]` best matches `a[f]`.
 
 ## `pysidtracker.sidid`
 

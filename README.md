@@ -57,7 +57,8 @@ API.
   `oracle_grid` — a reusable byte-exact player-vs-`sidtrace`-oracle test
   ([docs/oracle-testing.md](docs/oracle-testing.md)).
 - `survey` — whole-song HVSC survey and failure triage of any format's renderer
-  against the `sidtrace` oracle; `sidid` — pure-Python SIDId with the bundled
+  against the `sidtrace` oracle, and the same compare for single native files
+  (`survey file`, bare PRGs wrapped); `sidid` — pure-Python SIDId with the bundled
   `sidid.cfg` (`pysidid` CLI). `pip install "pysidtracker[survey]"`,
   [docs/survey.md](docs/survey.md).
 - `poweron` — the libsidplayfp power-on C64 RAM a PSID boots onto: `ram_pattern`
