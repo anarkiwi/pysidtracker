@@ -61,10 +61,18 @@ API.
   `sidid.cfg` (`pysidid` CLI). `pip install "pysidtracker[survey]"`,
   [docs/survey.md](docs/survey.md).
 - `poweron` — the libsidplayfp power-on C64 RAM a PSID boots onto: `ram_pattern`
-  (the `SystemRAMBank::reset` image) and `power_on_ram` (it with the PSID driver's
-  `$0000-$03FE` cleared, `PSID_DRIVER_CLEARED`). `MemPlayer`, the `oracle`
-  `register_grid`, and `irqhost` all start from it, so a tune reading
-  uninitialised memory reads the power-on byte, not zero.
+  (the `SystemRAMBank::reset` image, vagrant-moses' `c64.poweron_ram` as a
+  mutable copy) and `power_on_ram` (it with the PSID driver's `$0000-$03FE`
+  cleared, `PSID_DRIVER_CLEARED`). `MemPlayer`, the `oracle` `register_grid`,
+  and `irqhost` all start from it, so a tune reading uninitialised memory reads
+  the power-on byte, not zero.
+- `loader` — the flat PSID/RSID loader for hosts with their own 64 KiB memory:
+  `load_psid` (`(mem, load, init, play)`, honouring the in-body load address),
+  `psid_image` (load bounds), `psid_songs`, `is_ntsc`, `is_rsid`, `psid_speed`
+  and `speed_cia` — every one over the shared `parse_sid_header` / `SidImage`
+  container parsing.
+- `cia` / `vicii` / `eventsched` — the vic/cia/scheduler surface of the machine,
+  re-exported from vagrant-moses for `pysidtracker.*` import compatibility.
 - `roms` — C64 KERNAL/BASIC/CHARGEN ROM fetch + SHA-256 verified cache
   (`fetch_rom`, `resolve_rom`, `roms_available`) and 64 KiB mapping (`rom_image`,
   `apply_roms`) for tunes that cannot run without the ROMs. The ROMs are
@@ -119,7 +127,8 @@ pip install pysidtracker   # core: jennings (init emulation), numpy, pyresidfp (
 
 All dependencies are core: jennings (detection runs a tune's 6502 init), pydexomizer
 (`native_decrunch` unpacks exomizer-packed images natively), pyresidfp (the
-emulated SID the WAV render drives), and numpy (sample buffers and the image
+emulated SID the WAV render drives), vagrant-moses (the VIC-II/CIA machine model
+the interrupt host is composed of), and numpy (sample buffers and the image
 anchor scan).
 
 ## Usage
