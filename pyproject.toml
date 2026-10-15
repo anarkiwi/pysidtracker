@@ -53,6 +53,9 @@ pysidtracker = "pysidtracker.maincli:main"
 # Pre-cache HVSC tunes into the shared tune cache (CI populates a persisted
 # actions/cache before the suite runs).
 pysid-tune-fetch = "pysidtracker.testing:main"
+# Recreate the CSDB native-fixture cache from a committed hash manifest (#45);
+# also ``pysidtracker fixtures ...`` in the main CLI.
+pysid-fixtures = "pysidtracker.fixtures:main"
 # Pure-Python SIDId playroutine identification (bundled sidid.cfg).
 pysidid = "pysidtracker.sidid:main"
 

@@ -1,5 +1,7 @@
 """Tests for the generic ``pysidtracker`` CLI and its format registry."""
 
+import hashlib
+
 import pytest
 
 from pysidtracker import (
@@ -197,3 +199,21 @@ def test_editor_io_cli_lists_the_transfer_call_sites(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "LOAD  $1004" in out and "SAVE  $1009" in out and "OPEN  $100E" in out
     assert "JSR $ffd5" in out  # the call site's disassembled row
+
+
+def test_fixtures_subcommand_is_wired_into_the_cli(tmp_path):
+    data = b"\x00GOAT\x01"
+    sha = hashlib.sha256(data).hexdigest()
+    native = tmp_path / "native"
+    (native / "dl" / "777").mkdir(parents=True)
+    (native / "dl" / "777" / "101_Blitz.sng").write_bytes(data)
+    (native / "SHA256SUMS.txt").write_text(
+        f"{sha}  dl/777/101_Blitz.sng  https://csdb.dk/x\n", encoding="utf-8"
+    )
+    out = tmp_path / "m.txt"
+    parser = maincli.build_parser([])
+    args = parser.parse_args(
+        ["fixtures", "manifest", "--cache", str(native), "--out", str(out)]
+    )
+    assert args.func(args) == 0
+    assert out.exists() and sha in out.read_text()

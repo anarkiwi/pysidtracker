@@ -1,9 +1,9 @@
 """Pytest plugin giving any ``py*`` parser's suite HVSC tunes, disk PRGs and ROMs.
 
 Registered as a ``pytest11`` entry point, so merely installing ``pysidtracker``
-exposes the :func:`hvsc`, :func:`sidtrace_oracle`, :func:`disk_prgs` and
-:func:`c64_roms` fixtures to every dependent test suite with **no per-package
-conftest**. Each downstream
+exposes the :func:`hvsc`, :func:`sidtrace_oracle`, :func:`disk_prgs`,
+:func:`c64_roms` and :func:`native` fixtures to every dependent test suite with
+**no per-package conftest**. Each downstream
 suite keeps only its *list* of HVSC relpaths / disk URLs (test data); all the
 resolve -> local-tree / cache / mirror-fetch machinery lives in
 :mod:`pysidtracker.testing`.
@@ -23,8 +23,10 @@ the tests import ``pysidtracker`` themselves.
 * :func:`disk_prgs` -- ``disk_prgs(url)`` -> the PRG files inside a cached ``.d64``
   (or zipped ``.d64``) disk image.
 * :func:`c64_roms` -- ``c64_roms("kernal")`` -> the cached C64 ROM path,
-  ``c64_roms.image()`` a 64 KiB image with KERNAL + BASIC mapped, and
-  ``c64_roms.available()`` for a suite that skips without them.
+  ``c64_roms.image()`` a flat C64 memory image (``MEM_SIZE``) with KERNAL + BASIC
+  mapped, and ``c64_roms.available()`` for a suite that skips without them.
+* :func:`native` -- ``native(sha256)`` -> the cached CSDB native-format file for
+  that hash, or ``None`` (a suite skips); ``native.available(sha256)`` checks.
 
 The cache directory defaults to ``<rootdir>/.tunecache`` (what GitHub
 ``actions/cache`` persists); ``$PYSID_TUNECACHE`` overrides it. Local HVSC trees
@@ -36,6 +38,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -140,6 +143,25 @@ class DiskFixtures:
     __call__ = prgs
 
 
+class NativeFixtures:
+    """Session retriever for CSDB native-format files addressed by SHA-256."""
+
+    def __init__(self, cache_dir):
+        self._cache = Path(cache_dir)
+
+    def file(self, sha256) -> Optional[Path]:
+        """The cached file for ``sha256``, or ``None`` when the cache is cold."""
+        from pysidtracker.fixtures import fixture
+
+        return fixture(sha256, self._cache)
+
+    def available(self, sha256: str) -> bool:
+        """True when ``sha256`` is cached; a suite skips otherwise."""
+        return self.file(sha256) is not None
+
+    __call__ = file
+
+
 class C64Roms:
     """Session retriever for the fetch-cached C64 KERNAL/BASIC/CHARGEN ROMs."""
 
@@ -162,7 +184,10 @@ class C64Roms:
         return roms_available(names or DEFAULT_ROMS, cache_dir=self._cache)
 
     def image(self, names=None) -> bytearray:
-        """A 64 KiB image with the named ROMs mapped (KERNAL + BASIC by default)."""
+        """A flat C64 memory image (``MEM_SIZE``) with the named ROMs mapped.
+
+        KERNAL + BASIC are mapped by default.
+        """
         from pysidtracker.roms import DEFAULT_ROMS, rom_image
 
         return rom_image(names or DEFAULT_ROMS, cache_dir=self._cache)
@@ -186,6 +211,14 @@ def sidtrace_oracle(pytestconfig: pytest.Config) -> SidtraceOracle:
 def disk_prgs(pytestconfig: pytest.Config) -> DiskFixtures:
     """Session PRG-fixture retriever: ``disk_prgs(url)`` -> cached ``[D64File]``."""
     return DiskFixtures(_cache_dir(pytestconfig))
+
+
+@pytest.fixture(scope="session")
+def native(pytestconfig: pytest.Config) -> NativeFixtures:
+    """Session CSDB native-file retriever: ``native(sha256)`` -> cached path or None."""
+    from pysidtracker.fixtures import default_native_cache
+
+    return NativeFixtures(default_native_cache(pytestconfig.rootpath))
 
 
 @pytest.fixture(scope="session")

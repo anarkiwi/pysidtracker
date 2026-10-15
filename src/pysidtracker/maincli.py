@@ -22,6 +22,7 @@ from .cli import print_info, run_cli
 from .disasm import disassemble, entry_labels, image_after_init
 from .editorio import editor_io
 from .errors import SidError, SidParseError
+from .fixtures import add_fixtures_commands
 from .formats import SidFormat, discover_formats, recognize_format
 from .image import SidImage
 from .registers import PAL_CLOCK_HZ, PAL_CYCLES_PER_FRAME
@@ -174,6 +175,12 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
     )
     eio.add_argument("song", help="input tune")
     eio.set_defaults(func=_editor_io)
+
+    fixtures = subparsers.add_parser(
+        "fixtures",
+        help="manage the CSDB native-fixture cache (fetch / manifest / verify)",
+    )
+    add_fixtures_commands(fixtures)
 
     for fmt in formats:
         for command in fmt.commands:
