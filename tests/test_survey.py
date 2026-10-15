@@ -14,7 +14,7 @@ from pysidtracker import oracle, registers, survey
 from pysidtracker.errors import SidFormatError
 from pysidtracker.oracle import SIDTRACE_COLUMNS, SidtraceRow, SidtraceUnavailable
 
-from .helpers import build_psid, event, trace_csv
+from .helpers import build_psid, build_psid_embedded_load, event, trace_csv
 
 CFG = """Other_Player\r
 A9 00 8D END\r
@@ -591,3 +591,157 @@ def test_leads_all_and_verdict(survey_tree, capsys):
     assert survey.load_tunes(out_csv) == []
     with pytest.raises(SystemExit):
         survey.main(base)
+
+
+# --- survey match -------------------------------------------------------------
+
+
+def match_body(raw):
+    """A raw-byte body hook: the whole input as the (96-wide) vector."""
+    vec = np.zeros(96, np.uint8)
+    vec[: len(raw)] = np.frombuffer(raw, np.uint8)
+    return vec, len(raw)
+
+
+def _rawbody(width):
+    def body(raw):
+        vec = np.zeros(width, np.uint8)
+        vec[: len(raw)] = np.frombuffer(raw, np.uint8)
+        return vec, len(raw)
+
+    return body
+
+
+def test_image_body_rebasing_to_load():
+    img = bytes(range(256))
+    for sid in (build_psid(img, 0x2000), build_psid_embedded_load(img, 0x2000)):
+        vec, length = survey.image_body(sid)
+        assert length == 256 and vec[:256].tobytes() == img
+        assert vec.shape == (survey.IMAGE_WIDTH,) and vec[256:].sum() == 0
+
+
+def test_match_images_requires_candidates():
+    with pytest.raises(ValueError, match="no candidate"):
+        survey.match_images([], [b"xy"], body=match_body)
+
+
+def test_match_images_exact_and_mutated():
+    rng = np.random.default_rng(0)
+    img = rng.integers(0, 256, 100).astype(np.uint8).tobytes()
+    other = rng.integers(0, 256, 64).astype(np.uint8).tobytes()
+    body = _rawbody(128)
+    rows = survey.match_images([img, other], [img], body=body)
+    assert rows == [dict(candidate=0, length=100, ndiff=0, offset=0)]
+    mut = bytearray(img)
+    mut[3] ^= 0x21
+    mut[77] ^= 0xC0
+    mut[99] ^= 0x41
+    rows = survey.match_images([img, other], [bytes(mut)], body=body)
+    assert rows == [dict(candidate=0, length=100, ndiff=3, offset=0)]
+
+
+def test_match_images_relocates_candidates():
+    rng = np.random.default_rng(1)
+    img = rng.integers(1, 256, 90, dtype=np.uint8).tobytes()
+    body = _rawbody(128)
+    rows = survey.match_images([b"\x00" * 7 + img], [img], body=body)
+    assert rows == [dict(candidate=0, length=90, ndiff=0, offset=7)]
+    rows = survey.match_images([img[5:]], [img], body=body)
+    assert rows == [dict(candidate=0, length=90, ndiff=0, offset=-5)]
+
+
+def test_match_images_length_guard():
+    rng = np.random.default_rng(2)
+    img = rng.integers(0, 256, 90).astype(np.uint8)
+    long_ = (
+        img.astype(np.uint8).tobytes()
+        + rng.integers(0, 256, 600).astype(np.uint8).tobytes()
+    )
+    close = img.copy()
+    close[:40] = (close[:40].astype(np.int16) + 1) % 256
+    rows = survey.match_images([long_, close], [img], body=_rawbody(0x400))
+    assert rows[0] == dict(candidate=1, length=90, ndiff=40, offset=0)
+
+
+def _match_tree(tmp_path):
+    rng = np.random.default_rng(3)
+    img = rng.integers(0, 256, 150).astype(np.uint8).tobytes()
+    other = rng.integers(0, 256, 150).astype(np.uint8).tobytes()
+    hvsc = tmp_path / "hvsc"
+    hvsc.mkdir()
+    tunes = {}
+    for rel, blob in [("MUSICIANS/A/s1.sid", img), ("MUSICIANS/B/s2.sid", other)]:
+        data = build_psid(blob, 0x1000)
+        (hvsc / rel).parent.mkdir(parents=True, exist_ok=True)
+        (hvsc / rel).write_bytes(data)
+        tunes[rel] = data
+    tunes_csv = tmp_path / "tunes.csv"
+    with open(tunes_csv, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, survey.TUNE_FIELDS)
+        w.writeheader()
+        for rel, data in tunes.items():
+            w.writerow(
+                dict(
+                    path=rel,
+                    md5=hashlib.md5(data).hexdigest(),
+                    player="x",
+                    songs="1",
+                    clock="PAL",
+                    lengths="1",
+                )
+            )
+    return hvsc, tunes_csv, img, other
+
+
+def test_match_cli(tmp_path, capsys):
+    hvsc, tunes_csv, img, other = _match_tree(tmp_path)
+    native = tmp_path / "native.sid"
+    native.write_bytes(build_psid(img, 0x7000))
+    foreign = tmp_path / "foreign.sid"
+    foreign.write_bytes(build_psid(other, 0x7000))
+    assert (
+        survey.main(["match", str(hvsc), str(tunes_csv), str(native), str(foreign)])
+        == 0
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "native\thvsc\tlength\tndiff\toffset"
+    assert lines[1].split("\t")[:2] == [str(native), "MUSICIANS/A/s1.sid"]
+    assert lines[1].split("\t")[2:] == ["150", "0", "0"]
+    assert lines[2].split("\t")[1] == "MUSICIANS/B/s2.sid"
+
+
+def test_match_cli_out_and_body(tmp_path, capsys):
+    hvsc = tmp_path / "hvsc"
+    hvsc.mkdir()
+    hvsc.joinpath("a.sid").write_bytes(b"\x11" * 80)
+    hvsc.joinpath("b.sid").write_bytes(b"\x22" * 70)
+    tunes_csv = tmp_path / "tunes.csv"
+    with open(tunes_csv, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, survey.TUNE_FIELDS)
+        w.writeheader()
+        for rel in ("a.sid", "b.sid"):
+            w.writerow(
+                dict(path=rel, md5="m", player="p", songs="1", clock="PAL", lengths="1")
+            )
+    native = tmp_path / "n.sid"
+    native.write_bytes(b"\x11" * 80)
+    out = tmp_path / "work" / "match.tsv"
+    assert (
+        survey.main(
+            [
+                "match",
+                str(hvsc),
+                str(tunes_csv),
+                str(native),
+                "--body",
+                f"{__name__}:match_body",
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    lines = out.read_text("utf-8").splitlines()
+    assert lines[0] == "native\thvsc\tlength\tndiff\toffset"
+    assert lines[1].split("\t")[1:] == ["a.sid", "80", "0", "0"]
+    assert capsys.readouterr().out == ""

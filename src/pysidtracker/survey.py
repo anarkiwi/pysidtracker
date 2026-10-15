@@ -65,6 +65,10 @@ TRIAGE_FIELDS = ["key", "path", "player", "song", "first_diff", "when", "kind"]
 TRIAGE_FIELDS += ["roles", "diffs", "min_lead", "min_bad", "min_first", "min_regs"]
 LEAD_FIELDS = ["key", "path", "song", "frames", "lead", "first_diff", "bad", "regs"]
 TUNE_FIELDS = ["path", "md5", "player", "songs", "clock", "lengths"]
+IMAGE_WIDTH = 0x4000
+MAX_OFFSET = 0x200
+LENGTH_GUARD = 0x200
+MATCH_FIELDS = ["native", "hvsc", "length", "ndiff", "offset"]
 RESULT_FIELDS = [
     "key",
     "path",
@@ -421,6 +425,152 @@ def run(
     return tally
 
 
+def image_body(raw, width=IMAGE_WIDTH):
+    """Comparable body: the loaded image rebased to the load address.
+
+    Returns ``(body, length)``: ``body`` a uint8 vector of width ``width``
+    (the first ``length`` bytes the image, the rest zero).
+    """
+    image = SidImage.from_bytes(raw)
+    body = np.zeros(width, np.uint8)
+    img = bytes(image.image)[:width]
+    body[: len(img)] = np.frombuffer(img, np.uint8)
+    return body, len(img)
+
+
+def _bodies(raws, body):
+    """Stacked bodies (one per input) and their lengths (``raws`` non-empty)."""
+    vecs, lens = [], []
+    for raw in raws:
+        vec, length = body(raw)
+        vecs.append(np.asarray(vec, np.uint8))
+        lens.append(int(length))
+    if not vecs:
+        raise ValueError("no candidate images to match")
+    return np.stack(vecs), np.array(lens, np.int64)
+
+
+def _overlap(cands, clens, q, qlen, d):
+    """Per-candidate ``(valid, equal)`` comparing ``q`` with each candidate
+    rebased by ``d``, over the bytes both images hold at that offset."""
+    width = cands.shape[1]
+    if d >= 0:
+        a = cands[:, d:]
+        b = q[: a.shape[1]]
+        m = np.minimum(qlen, clens - d)
+    else:
+        h = -d
+        a = cands[:, : width - h]
+        b = q[h : h + a.shape[1]]
+        m = np.minimum(qlen - h, clens)
+    m = np.maximum(m, 0)
+    k = np.arange(a.shape[1])[None, :]
+    return m, np.count_nonzero((a == b) & (k < m[:, None]), axis=1)
+
+
+def match_images(
+    candidates,
+    queries,
+    body=image_body,
+    *,
+    max_offset=MAX_OFFSET,
+    length_guard=LENGTH_GUARD,
+):
+    """Closest candidate per query, over every rebase offset in
+    ``-max_offset .. max_offset``.
+
+    Every candidate and query container's bytes pass through ``body`` (default
+    :func:`image_body`) into a fixed-width uint8 vector and its loaded length.
+    At each offset (in ``|d|`` order) a candidate row is compared with the
+    query over the bytes both images hold there; per row the offset with the
+    most equal bytes wins (smallest ``|d|``, then fewest differing bytes on
+    ties) and a row whose image length differs from the query's by more than
+    ``length_guard`` bytes is penalised out of contention. One
+    ``dict(candidate, length, ndiff, offset)`` is returned per query: the
+    chosen candidate's index, the query image length, the differing bytes over
+    that overlap at the winning offset, and the offset itself.
+    """
+    cands, clens = _bodies(candidates, body)
+    width = cands.shape[1]
+    bound = min(max_offset, width - 1)
+    penalty = 3 * width + 1
+    rows = []
+    for qraw in tqdm(queries, desc="match", unit="query"):
+        q, qlen = body(qraw)
+        q, qlen = np.asarray(q, np.uint8), int(qlen)
+        score = np.full(cands.shape[0], 2 * penalty + width, np.int64)
+        off = np.zeros(cands.shape[0], np.int64)
+        ndiff = np.zeros(cands.shape[0], np.int64)
+        for d in sorted(range(-bound, bound + 1), key=abs):
+            m, eq = _overlap(cands, clens, q, qlen, d)
+            nd = m - eq
+            s = (
+                (np.abs(clens - qlen) > length_guard) * penalty
+                + (m == 0) * penalty
+                - 2 * eq
+                + nd
+            )
+            better = s < score
+            score[better] = s[better]
+            off[better] = d
+            ndiff[better] = nd[better]
+        i = int(np.argmin(score))
+        rows.append(
+            dict(candidate=i, length=qlen, ndiff=int(ndiff[i]), offset=int(off[i]))
+        )
+    return rows
+
+
+def match(
+    hvsc,
+    tunes_csv,
+    natives,
+    body=image_body,
+    *,
+    out=None,
+    max_offset=MAX_OFFSET,
+    length_guard=LENGTH_GUARD,
+):
+    """TSV (``native, hvsc, length, ndiff, offset``) of the closest HVSC tune
+    per native file.
+
+    The tunes of a ``find`` CSV and each native file are run through ``body``
+    and compared with :func:`match_images`. The TSV goes to stdout unless
+    ``out`` (a file path) is given.
+    """
+    hvsc = Path(hvsc)
+    tunes = load_tunes(tunes_csv)
+    rows = match_images(
+        [(hvsc / t["path"]).read_bytes() for t in tunes],
+        [Path(n).read_bytes() for n in natives],
+        body,
+        max_offset=max_offset,
+        length_guard=length_guard,
+    )
+    lines = ["\t".join(MATCH_FIELDS)]
+    for n, r in zip(natives, rows):
+        lines.append(
+            "\t".join(
+                str(x)
+                for x in (
+                    n,
+                    tunes[r["candidate"]]["path"],
+                    r["length"],
+                    r["ndiff"],
+                    r["offset"],
+                )
+            )
+        )
+    text = "\n".join(lines) + "\n"
+    if out is None:
+        sys.stdout.write(text)
+    else:
+        out = Path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, "utf-8")
+    return rows
+
+
 def near_exact(rows, near=NEAR, top=20):
     """Print and return the ``differs`` rows with at most ``near`` bad frames at
     their ``min_lead`` (rows without ``min_bad``, from older surveys, are skipped).
@@ -747,7 +897,8 @@ def triage(work, jobs=None, top=15, max_values=20, near=NEAR):
 
 
 def main(argv=None):
-    """``python -m pysidtracker.survey {find,run,report,diff,triage,leads,explain}``."""
+    """``python -m pysidtracker.survey``:
+    ``find run report diff triage leads explain match``."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("find", help=find.__doc__)
@@ -785,6 +936,17 @@ def main(argv=None):
         help="a RAM cell ($XXXX) to watch per frame (repeatable)",
     )
     pe.add_argument("--depth", type=int, default=8, help="load-chain back-track depth")
+    p = sub.add_parser("match", help=match.__doc__)
+    p.add_argument("hvsc")
+    p.add_argument("tunes")
+    p.add_argument("natives", nargs="+", help="native files to find the HVSC tune of")
+    p.add_argument(
+        "--body",
+        help="module:function body hook (default: the loaded image rebased "
+        "to the load address)",
+    )
+    p.add_argument("--out", help="output TSV (default: stdout)")
+    p.add_argument("--max-offset", type=int, default=MAX_OFFSET)
     p = sub.choices["run"]
     p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
     p.add_argument("--limit", type=int, help="only the first N tunes")
@@ -856,6 +1018,15 @@ def main(argv=None):
         )
     elif a.cmd == "triage":
         triage(a.work, a.jobs, a.top, near=a.near)
+    elif a.cmd == "match":
+        match(
+            a.hvsc,
+            a.tunes,
+            a.natives,
+            load_render(a.body) if a.body else image_body,
+            out=a.out,
+            max_offset=a.max_offset,
+        )
     else:
         out = report(a.results, a.near)
     if a.cmd in ("find", "run"):
