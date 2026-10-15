@@ -48,7 +48,8 @@ def _sha(b):
 
 
 def _page_html(dids):
-    return f"<html>{''.join(f'<a href=\"/release/download.php?id={d}\">x</a>' for d in dids)}</html>"
+    links = "".join(f'<a href="/release/download.php?id={d}">x</a>' for d in dids)
+    return f"<html>{links}</html>"
 
 
 @pytest.fixture(autouse=True)
@@ -361,7 +362,7 @@ def test_make_native_fixtures_resolves_when_warm(pytester, tmp_path):
             assert native_id == "x"
             assert native_file.read_bytes() == {_GOAT!r}
         """)
-    result = pytester.runpytest_inprocess("-p", "no:cacheprovider")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1)
 
 
@@ -373,7 +374,7 @@ def test_make_native_fixtures_skips_when_cold(pytester, tmp_path):
         def test_it(native_file):
             assert False, "should have skipped"
         """)
-    result = pytester.runpytest_inprocess("-p", "no:cacheprovider")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(skipped=1)
 
 
