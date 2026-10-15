@@ -28,8 +28,9 @@ cadence = host_cadence(data)    # the measured play Cadence
   (`boot_cycle`: 339711 PAL, 315445 NTSC). The beam position at that cycle
   follows from the VIC's reset state.
 - **Memory.** RAM powers up in libsidplayfp's pattern (4-byte runs of `$00` and
-  `$FF`, flipped every 16K — `poweron.ram_pattern`, the single source the
-  `MemPlayer` and `oracle` `register_grid` flat paths also boot from). The PSID
+  `$FF`, flipped every 16K — vagrant-moses' `c64.poweron_ram`, `poweron.ram_pattern`
+  the single source the `MemPlayer` and `oracle` `register_grid` flat paths also
+  boot from). The PSID
   driver clears `$0000`-`$03FE` (`poweron.power_on_ram`, `PSID_DRIVER_CLEARED`);
   an RSID then gets libsidplayfp's `poweron.bin` image of a booted C64, fetched
   and SHA-256 verified like the ROMs (`roms.poweron_writes`, `docs/c64-roms.md`),
@@ -48,16 +49,19 @@ cadence = host_cadence(data)    # the measured play Cadence
 
 ## The model
 
-The chips are ports of libsidplayfp's onto a two-phase event scheduler
-(`eventsched`: PHI1 for the chips, PHI2 for the CPU, ties in scheduling order).
+The chips are vagrant-moses' ports of libsidplayfp's onto its two-phase event
+scheduler (`vagrant_moses.eventsched`, re-exported as `pysidtracker.eventsched`:
+PHI1 for the chips, PHI2 for the CPU, ties in scheduling order).
 
-- **VIC-II** (`vicii`): raster IRQ edge detection (line 0 starts one cycle late),
+- **VIC-II** (`vagrant_moses.vicii`, re-exported as `pysidtracker.vicii`): raster
+  IRQ edge detection (line 0 starts one cycle late),
   `$D019` acknowledge and `$D01A` mask, and BA: a badline (`raster & 7 ==
   YSCROLL`, lines `$30`-`$F7`, DEN seen on line `$30`) pulls BA low from line cycle
   11 to 54; `$D011` writes create or cancel a badline mid-line; sprite DMA pulls
   BA low around each enabled sprite's fetch, with Y-expansion and crunch.
-- **CIA** (`cia`): both timers as VICE's `ciatimer` pipeline (start delay, force
-  load, one-shot, Timer B counting Timer A), ICR masks and read-to-clear, the
+- **CIA** (`vagrant_moses.cia`, re-exported as `pysidtracker.cia`): both timers
+  as VICE's `ciatimer` pipeline (start delay, force load, one-shot, Timer B
+  counting Timer A), ICR masks and read-to-clear, the
   6526's interrupt one cycle after an underflow (sidplayfp's default CIA). CIA
   #1 drives the IRQ line with the VIC; CIA #2's interrupt is an NMI edge.
 - **CPU** (`irqhost.C64`): jennings executes each instruction at its data access;

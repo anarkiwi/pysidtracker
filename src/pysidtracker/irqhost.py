@@ -10,13 +10,15 @@ from __future__ import annotations
 from collections import Counter
 from typing import Dict, Iterator, List, Optional, Tuple, Union
 
+from vagrant_moses.cia import Cia  # core dependency
+from vagrant_moses.eventsched import PHI1, Event, Scheduler  # core dependency
+from vagrant_moses.vicii import NTSC_GEOMETRY, PAL_GEOMETRY, Vic  # core dependency
+
 from . import registers as reg
 from .asm6502 import assemble
 from .cadence import Cadence, TriggerSource, _driver_base, _iomap
-from .cia import Cia
 from .emu import SidReads
 from .errors import EmulatorUnavailable, SidParseError
-from .eventsched import PHI1, Event, Scheduler
 from .image import SidImage
 from .oracle import (
     SidtraceRow,

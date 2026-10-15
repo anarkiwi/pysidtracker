@@ -86,6 +86,15 @@ from .header import (
 from .image import MEM_SIZE, SidImage, parse_prg
 from .io import ByteCursor, byte_range, check
 from .kernalhost import ABI, KernalHost, sys_addr
+from .loader import (
+    is_ntsc,
+    is_rsid,
+    load_psid,
+    psid_image,
+    psid_speed,
+    psid_songs,
+    speed_cia,
+)
 from .mos6502 import (
     OP_LEN,
     SidWriteCapturingMemory,
@@ -215,6 +224,7 @@ __all__ = [
     "fetch_csdb",
     "fixture",
     "load_manifest",
+    "load_psid",
     "make_native_fixtures",
     "manifest_from_cache",
     "read_sums",
@@ -325,6 +335,8 @@ __all__ = [
     "grid_from_writes",
     "image_after_init",
     "is_jmp_vector",
+    "is_ntsc",
+    "is_rsid",
     "locate_note_freq",
     "make_oracle_fixtures",
     "make_package_errors",
@@ -338,7 +350,10 @@ __all__ = [
     "parse_sid_header",
     "playroutine_cadence",
     "power_on_ram",
+    "psid_image",
     "psid_init_bank",
+    "psid_speed",
+    "psid_songs",
     "print_info",
     "ram_pattern",
     "read_bytes",
@@ -371,6 +386,7 @@ __all__ = [
     "s8",
     "sbc",
     "seconds_to_frames",
+    "speed_cia",
     "sidtrace_cadence",
     "sidtrace_grid",
     "sustain_release",

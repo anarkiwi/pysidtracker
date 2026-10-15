@@ -1,19 +1,13 @@
 """libsidplayfp's power-on C64 RAM: the machine a PSID or RSID boots onto.
 
-A tune reads uninitialised memory as the C64 had it at power-on, not as zeros.
-libsidplayfp models that RAM analytically (``SystemRAMBank::reset``,
-:func:`ram_pattern`) and its PSID driver clears ``$0000-$03FE`` before running
-init (``psiddrv::install``, :func:`power_on_ram`). That start-up image describes
-the oracle's machine, not any one tracker, so it lives here as the single source
-the flat :class:`~pysidtracker.player.MemPlayer` path and the
-:func:`~pysidtracker.emu.wire_mpu` wiring build on. RSID (real-C64) tunes boot
-from the fetched power-on image instead -- :func:`~pysidtracker.roms.poweron_writes`,
-falling back to the KERNAL vectors in :mod:`~pysidtracker.irqhost`.
+The fill is vagrant-moses' ``c64.poweron_ram`` (``ram_pattern`` wraps it
+mutable); ``power_on_ram`` layers the PSID driver's ``$0000-$03FE`` clear and
+zeroed SID port on it. RSID tunes boot from the fetched ``roms.poweron_writes``.
 """
 
 from __future__ import annotations
 
-from deity_informant import poweron_ram as _deity_poweron_ram
+from vagrant_moses import c64  # core dependency
 
 #: ``psiddrv::install`` clears ``$0000-$03FE`` (``0x3FF`` bytes) before a PSID runs.
 PSID_DRIVER_CLEARED = 0x3FF
@@ -23,8 +17,8 @@ SID_PORT_SIZE = 0x400
 
 
 def ram_pattern() -> bytearray:
-    """C64 power-on RAM (libsidplayfp ``SystemRAMBank::reset``), as a mutable image."""
-    return bytearray(_deity_poweron_ram())
+    """libsidplayfp's power-up RAM (vagrant-moses ``c64.poweron_ram``), mutable."""
+    return bytearray(c64.poweron_ram())
 
 
 def power_on_ram() -> bytearray:
