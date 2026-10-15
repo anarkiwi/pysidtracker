@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-from .emu import run_to_rts, wire_mpu
+from . import registers as reg
+from .emu import observe_data_access, run_to_rts, wire_mpu
 from .errors import SidParseError
 from .poweron import psid_init_bank
 from .registers import sid_model_for_flags
@@ -60,10 +61,10 @@ class Detection:
       anchor: whatever the ``recognize`` callback returned (``None`` if
         unrecognised) -- often the address/offset it found, reusable by the
         caller's full parse.
-      changed_inside: bytes within the originally loaded region that init
-        altered (self-modifying / in-place unpacking).
-      written_outside: bytes outside the originally loaded region that init
-        wrote (relocation targets / decompression output).
+      changed_inside: bytes within the as-loaded region that init rewrote
+        (self-modifying / in-place unpacking).
+      written_outside: bytes outside the as-loaded region that init wrote
+        (relocation targets / decompression output).
     """
 
     kind: PlayroutineKind
@@ -245,3 +246,209 @@ def run_init(image: SidImage, subtune: int = 0, max_cycles: int = 8_000_000) -> 
     image.mem[1] = psid_init_bank(init_address)
     mpu, mem = wire_mpu(image.mem, sid_model=sid_model_for_flags(image.header.flags))
     run_to_rts(mpu, mem, init_address, subtune, max_cycles)
+
+
+# init effects: what one song's init leaves behind (song -> subtune resolution).
+
+# Hardware registers, not song data: excluded from recorded cell traffic.
+_IO_PAGE_LO = 0xD000
+_IO_PAGE_HI = 0xDFFF
+
+# The play/IRQ vectors and timer latches a tune installs (as trace_init reports).
+_JUMP_CELLS = frozenset(
+    (
+        reg.RAM_IRQ_VECTOR_LO,
+        reg.RAM_IRQ_VECTOR_HI,
+        reg.CPU_IRQ_VECTOR,
+        reg.CPU_IRQ_VECTOR + 1,
+        reg.CIA1_TIMER_A_LO,
+        reg.CIA1_TIMER_A_HI,
+        reg.CIA2_TIMER_A_LO,
+        reg.CIA2_TIMER_A_HI,
+    )
+)
+
+
+@dataclass(frozen=True)
+class CellWrite:
+    """The final store init made to one RAM cell: the value left and the PC of
+    the store that left it."""
+
+    value: int
+    pc: int
+
+
+@dataclass(frozen=True)
+class CellRead:
+    """One read of a RAM cell during init: the value returned and the PC of the
+    load (which table the song number indexed)."""
+
+    value: int
+    pc: int
+
+
+@dataclass
+class Jumps:
+    """The play/IRQ vectors and timer latches a tune's init installed.
+
+    A vector is ``None`` when neither of its two bytes was written, exactly as
+    in :class:`~pysidtracker.trace.InitTrace`.
+    """
+
+    irq_vector: Optional[int] = None
+    hw_irq_vector: Optional[int] = None
+    cia1_timer_latch: Optional[int] = None
+    cia2_timer_latch: Optional[int] = None
+
+
+@dataclass
+class InitEffects:
+    """What one song's init left in RAM.
+
+    Attributes:
+      song: the song number that was passed in the accumulator.
+      writes: the final store per cell (value, store PC); stack and I/O pages
+        excluded, or only the ``watch``ed cells when given.
+      reads: each cell read in execution order (value, load PC), same scoping.
+      jumps: the installed play/IRQ vectors and CIA latches (always complete).
+    """
+
+    song: int
+    writes: Dict[int, CellWrite]
+    reads: Dict[int, List[CellRead]]
+    jumps: Jumps
+
+
+def _cell_watched(address: int, watch: Optional[Set[int]]) -> bool:
+    if watch is not None:
+        return address in watch
+    if _STACK_LO <= address < _STACK_HI:
+        return False
+    return not _IO_PAGE_LO <= address <= _IO_PAGE_HI
+
+
+def _vector(writes: Dict[int, int], lo: int, hi: int) -> Optional[int]:
+    if lo not in writes and hi not in writes:
+        return None
+    return writes.get(lo, 0) | (writes.get(hi, 0) << 8)
+
+
+def init_effects(
+    image: SidImage,
+    song: int,
+    *,
+    watch: Optional[Iterable[int]] = None,
+    max_cycles: int = 8_000_000,
+) -> InitEffects:
+    """Run the tune's init once with ``A = song`` and record what it left in RAM.
+
+    Records the data stores init makes to RAM cells (final value per cell and
+    the store's PC), the data reads (value and the load's PC, in execution
+    order) -- instruction fetches and stack traffic stay out -- and the
+    installed play/IRQ vectors and CIA latches (``jumps``), like
+    :func:`trace_init`. The run happens on a private snapshot, so the caller's
+    ``image`` is never mutated; ``watch`` limits ``writes``/``reads`` to the
+    given cells. ``song`` goes to init in the accumulator (the SID calling
+    convention) and is not range-checked here.
+
+    Raises:
+      SidParseError: the image has no SID header.
+    """
+    if image.header is None:
+        raise SidParseError("cannot observe init effects: image has no SID header")
+    init_address = image.header.init_address or image.header.real_load_address
+    if watch is not None:
+        watch = set(watch)
+    # private snapshot: the image stays pristine and every song starts from the same machine
+    mem = bytearray(image.mem)
+    # The driver banks the init's ROM space before calling it (KERNAL/BASIC in).
+    mem[1] = psid_init_bank(init_address)
+    mpu, obsmem = wire_mpu(mem, sid_model=sid_model_for_flags(image.header.flags))
+
+    writes: Dict[int, CellWrite] = {}
+    reads: Dict[int, List[CellRead]] = {}
+    vectors: Dict[int, int] = {}
+
+    def _on_write(address: int, value: int) -> None:
+        if _cell_watched(address, watch):
+            writes[address] = CellWrite(value & 0xFF, mpu.pc)
+        if address in _JUMP_CELLS:
+            vectors[address] = value & 0xFF
+
+    def _on_read(address: int) -> None:
+        if _cell_watched(address, watch):
+            reads.setdefault(address, []).append(CellRead(mem[address], mpu.pc))
+
+    observe_data_access(mpu, on_read=_on_read, on_write=_on_write)
+    run_to_rts(mpu, obsmem, init_address, song, max_cycles)
+
+    return InitEffects(
+        song=song & 0xFF,
+        writes={addr: writes[addr] for addr in sorted(writes)},
+        reads={addr: reads[addr] for addr in sorted(reads)},
+        jumps=Jumps(
+            irq_vector=_vector(vectors, reg.RAM_IRQ_VECTOR_LO, reg.RAM_IRQ_VECTOR_HI),
+            hw_irq_vector=_vector(vectors, reg.CPU_IRQ_VECTOR, reg.CPU_IRQ_VECTOR + 1),
+            cia1_timer_latch=_vector(vectors, reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI),
+            cia2_timer_latch=_vector(vectors, reg.CIA2_TIMER_A_LO, reg.CIA2_TIMER_A_HI),
+        ),
+    )
+
+
+def subtune_selection(
+    image: SidImage, songs: Iterable[int], cell: int
+) -> Dict[int, int]:
+    """The value each header song leaves in a player cell after its own init.
+
+    Returns ``{song: value}`` from one :func:`init_effects` run per song, each
+    from a fresh machine; a cell init never writes to keeps its pre-init value.
+    """
+    if image.header is None:
+        raise SidParseError("cannot map subtunes: image has no SID header")
+    cell &= 0xFFFF
+    song = list(songs)
+    count = image.header.songs
+    for s in song:
+        if not 1 <= s <= count:
+            raise SidParseError(f"song {s} out of range (header: {count} songs)")
+
+    selection: Dict[int, int] = {}
+    for s in song:
+        effects = init_effects(image, s, watch=[cell])
+        selection[s] = (
+            effects.writes[cell].value if cell in effects.writes else image.mem[cell]
+        )
+
+    by_value: Dict[int, int] = {}
+    for s, value in selection.items():
+        alias = by_value.get(value)
+        if alias is not None and alias != s:
+            raise SidParseError(
+                f"songs {alias} and {s} alias cell {cell:#06x} (both select {value:#03x})"
+            )
+        by_value[value] = s
+    return selection
+
+
+def init_diff(image: SidImage, songs: Iterable[int]) -> Set[int]:
+    """The cells whose final value differs between the inits of ``songs``.
+
+    One whole-address-space :func:`init_effects` run per song (fresh machine
+    each); a cell no song wrote is compared at its pre-init value. This finds
+    the selection cell a library does not know and exposes wrappers that copy
+    a different module per song.
+    """
+    finals: List[Dict[int, CellWrite]] = []
+    cells: Set[int] = set()
+    for s in songs:
+        effects = init_effects(image, s)
+        finals.append(effects.writes)
+        cells.update(effects.writes)
+
+    def final(writes: Dict[int, CellWrite], addr: int) -> int:
+        write = writes.get(addr)
+        return write.value if write is not None else image.mem[addr]
+
+    return {
+        addr for addr in cells if len({final(writes, addr) for writes in finals}) > 1
+    }

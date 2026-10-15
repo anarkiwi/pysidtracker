@@ -10,7 +10,7 @@ to the ROM space (sidplayfp's ROM-less KERNAL/BASIC/CHAR; see
 from __future__ import annotations
 
 from array import array
-from typing import Optional
+from typing import Callable, Dict, Optional
 
 from jennings.memory import ObservableMemory  # core dependency
 
@@ -62,6 +62,73 @@ class SidReads:
         """The chip's value of ``register`` (offset) at CPU ``cycle``."""
         self.flush(cycle)
         return self._sid.read(register)
+
+
+_WIRED_VM: Dict[type, type] = {}
+
+
+def _observed_vm_class(engine: type) -> type:
+    """A subclass whose pcode ``rd``/``wr`` also notify per-instance callbacks."""
+
+    def read(self, address, size):
+        value = engine._rd(self, address, size)
+        if self._on_read is not None:
+            for offset in range(size):
+                self._on_read((address + offset) & 0xFFFF)
+        return value
+
+    def write(self, address, value, size):
+        engine._wr(self, address, value, size)
+        if self._on_write is not None:
+            for offset in range(size):
+                self._on_write(
+                    (address + offset) & 0xFFFF, (value >> (8 * offset)) & 0xFF
+                )
+
+    return type(
+        "ObservedPcodeVM",
+        (engine,),
+        {"_rd": read, "_wr": write, "__slots__": ("_on_read", "_on_write")},
+    )
+
+
+def observe_data_access(
+    mpu,
+    on_read: Optional[Callable[[int], None]] = None,
+    on_write: Optional[Callable[[int, int], None]] = None,
+) -> None:
+    """Route the engine's data ``LOAD``/``STORE`` ops (pcode ``rd``/``wr``) to callbacks.
+
+    Instruction fetches and stack pushes never reach the callbacks.
+    ``on_read(address)`` fires per byte read (value readable from the subject);
+    ``on_write(address, value)`` per byte written, masked. No restoration needed.
+    """
+    if on_read is None and on_write is None:
+        return
+    engine = mpu._vm
+    base = type(engine)
+    for known_base, wired_cls in _WIRED_VM.items():
+        if base is wired_cls or base in wired_cls.__mro__:
+            base = known_base
+    cls = _WIRED_VM.setdefault(base, _observed_vm_class(base))
+    if isinstance(engine, cls):
+        wired = engine
+    else:
+        wired = cls(b"")
+        for attr in (
+            "mem",
+            "reg",
+            "uniq",
+            "cycles",
+            "volatile",
+            "vicirq",
+            "ciaicr",
+            "wlog",
+        ):
+            setattr(wired, attr, getattr(engine, attr))
+        mpu._vm = wired
+    wired._on_read = on_read
+    wired._on_write = on_write
 
 
 def access_cycle(mpu) -> int:
@@ -203,4 +270,4 @@ def run_to_rts(mpu, mem, pc: int, acc: int, max_cycles: int) -> None:
             break
 
 
-__all__ = ["SidReads", "access_cycle", "wire_mpu", "run_to_rts"]
+__all__ = ["SidReads", "access_cycle", "observe_data_access", "wire_mpu", "run_to_rts"]

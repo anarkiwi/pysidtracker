@@ -2,7 +2,7 @@
 
 import pytest
 
-from pysidtracker import run_to_rts, wire_mpu
+from pysidtracker import observe_data_access, run_to_rts, wire_mpu
 from pysidtracker.emu import SidReads
 from pysidtracker.errors import EmulatorUnavailable
 
@@ -202,6 +202,35 @@ def test_run_to_rts_honours_cycle_cap():
     mpu, mem = wire_mpu(subject)
     run_to_rts(mpu, mem, CODE, 0, max_cycles=1000)
     assert mpu.processorCycles > 1000
+
+
+def test_observe_data_access_sees_data_ops_not_fetch_or_stack():
+    # LDA #0x5C / STA $0043 / RTS: only the data ops reach the callbacks.
+    subject = bytearray(0x10000)
+    subject[CODE : CODE + 7] = bytes([0xA9, 0x5C, 0x8D, 0x43, 0x00, 0x60])
+    mpu, mem = wire_mpu(subject)
+    writes = []
+    observe_data_access(
+        mpu, on_read=lambda addr: None, on_write=lambda a, v: writes.append((a, v))
+    )
+    run_to_rts(mpu, mem, CODE, 0, max_cycles=1000)
+    assert writes == [(0x43, 0x5C)]
+
+
+def test_observe_data_access_sees_data_reads():
+    subject = bytearray(0x10000)
+    subject[CODE : CODE + 4] = bytes([0xAD, 0x42, 0x00])  # LDA $0042
+    subject[0x42] = 0x77
+    mpu, _mem = wire_mpu(subject)
+    observe_data_access(mpu)  # no callbacks: nothing is wired
+    superseded, current = [], []
+    observe_data_access(mpu, on_read=superseded.append)
+    observe_data_access(mpu, on_read=current.append)  # the last wiring stands
+    mpu.pc = CODE
+    mpu.step()
+    assert superseded == []
+    assert current == [0x42]
+    assert mpu.a == 0x77
 
 
 def test_rom_space_reads_follow_the_01_bank():

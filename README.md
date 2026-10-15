@@ -28,6 +28,10 @@ API.
   vectors) with predicates and `find_register_stores`.
 - `trace_init` / `InitTrace` — run a tune's init under a write observer to
   report CIA timer cadence and the IRQ/NMI vectors an IRQ-driven header hides.
+- `init_effects` / `subtune_selection` / `init_diff` — run one song's init on a
+  private snapshot and record what it left in RAM (cell stores/reads with their
+  PCs, the installed vectors), mapping header songs to a selection cell or
+  listing the cells that differ between songs.
 - `emu` — the shared jennings host every init/replay path runs on: `wire_mpu`
   (native NMOS illegal opcodes + cycle-derived VIC/SID reads) and `run_to_rts`.
 - `playroutine_cadence` / `Cadence` / `TriggerSource` — derive the play-routine

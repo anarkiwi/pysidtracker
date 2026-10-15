@@ -26,16 +26,23 @@ from .codescan import CodePattern, Match, find_code_all, find_code_first
 from .disasm import disassemble, entry_labels, image_after_init
 from .editorio import editor_io
 from .detect import (
+    CellRead,
+    CellWrite,
     Detection,
+    InitEffects,
+    Jumps,
     PlayroutineKind,
     Recognizer,
     detect_playroutine,
+    init_diff,
+    init_effects,
     is_jmp_vector,
     resolve_entry_points,
     run_init,
+    subtune_selection,
 )
 from .decrunch import native_decrunch
-from .emu import run_to_rts, wire_mpu
+from .emu import observe_data_access, run_to_rts, wire_mpu
 from .errors import (
     AudioUnavailable,
     EmulatorUnavailable,
@@ -195,8 +202,12 @@ __all__ = [
     "BaseSidParser",
     "ByteCursor",
     "Cadence",
+    "CellRead",
+    "CellWrite",
     "CodePattern",
     "CsdbFetchError",
+    "InitEffects",
+    "Jumps",
     "NativeFixture",
     "SumEntry",
     "add_fixtures_commands",
@@ -294,6 +305,9 @@ __all__ = [
     "default_tune_cache",
     "detect_playroutine",
     "disassemble",
+    "init_diff",
+    "init_effects",
+    "subtune_selection",
     "discover_formats",
     "editor_io",
     "encode_cstr",
@@ -318,6 +332,7 @@ __all__ = [
     "mos6502",
     "native_decrunch",
     "notefreq",
+    "observe_data_access",
     "oracle_grid",
     "parse_prg",
     "parse_sid_header",
