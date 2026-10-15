@@ -45,6 +45,32 @@ bundled `sidid.cfg`. `tunes.csv` columns: `path` (relative to the HVSC root),
 `md5`, `player`, `songs`, `clock` (`PAL`/`NTSC` from header flag bits 2-3),
 `lengths` (seconds per song, space-separated).
 
+## `match`
+
+Find the HVSC tune for a native file (e.g. a CSDB editor dump) by byte-matching
+their resident images — the matcher the `py*` format packages previously each
+wrote as `match_hvsc.py`, and the input for the single-file oracle compare
+(#47).
+
+```bash
+python -m pysidtracker.survey match $HVSC tunes.csv native1.sid native2.sid
+```
+
+`match` runs the tunes of a `find` CSV and each native file through the `body`
+hook and compares them with `survey.match_images`. The default hook is the
+PSID/RSID loaded image rebased to that image's load address; `--body
+module:function` (e.g. a hook in a format library's `oracle_hvsc.py`) returns
+the comparable bytes where editor and packed layouts differ by more than base.
+Candidates and queries are compared at every rebase offset `d` with `|d|` up
+to `--max-offset` (default 0x200, in ascending `|d|` order); the candidate
+with the most equal bytes over the overlap wins (smallest `|d|` on ties, then
+fewest differing bytes), and a candidate whose image length differs from the
+query's by more than 0x200 bytes gets a penalty that cannot be overcome, so it
+loses to any candidate of comparable length. The output is TSV: `native`,
+`hvsc`, `length` (the query image length), `ndiff` (differing bytes over the
+overlap at the winning offset), `offset`; `--out` writes it to a file instead
+of stdout.
+
 ## `run`
 
 Renders each subtune under sidtrace (`-o<song> -f8000`: register writes do not
