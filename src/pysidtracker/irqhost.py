@@ -85,7 +85,6 @@ _PREFIX = {
     "ind": (R, R, R, R),
     "indx": (R, R, R, R),
 }
-_MEM_MODES = frozenset(("zp", "zpx", "zpy", "abs", "absx", "absy", "indx", "indy"))
 
 
 def opcode_layout(op: int) -> Tuple[Tuple[int, ...], int, str]:
@@ -95,7 +94,7 @@ def opcode_layout(op: int) -> Tuple[Tuple[int, ...], int, str]:
     kind is ``"rmw"``, ``"absx"``/``"absy"``/``"indy"`` (page-cross skip), ``"branch"``
     or ``""``.
     """
-    from jennings.opcodes import OPCODES
+    from jennings.opcodes import MEM_MODES, OPCODES
 
     mn, mode = OPCODES[op]
     if mn == "JAM":
@@ -104,7 +103,7 @@ def opcode_layout(op: int) -> Tuple[Tuple[int, ...], int, str]:
         return BRK_ENTRIES, -1, ""
     if mn == "ANE":
         return (ANE, F), -1, ""
-    reads = mn in _READ_OPS and mode in _MEM_MODES
+    reads = mn in _READ_OPS and mode in MEM_MODES
     rmw = mn in _RMW_OPS and mode != "acc"
     if mode in ("absx", "absy", "indy"):
         skip = X2 if reads else R

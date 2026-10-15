@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Iterator, List, Optional, Tuple
 
+from jennings.opcodes import MODE_LEN, OPCODES
+
 from .registers import SID_BASE, SID_REG_COUNT
 
 MEM_SIZE = 0x10000
@@ -16,21 +18,10 @@ MEM_SIZE = 0x10000
 # 6502 instruction lengths (1/2/3 bytes) indexed by opcode. Undefined/illegal
 # opcodes take the legal length of their addressing-mode column, which keeps a
 # linear walk aligned.
-OP_LEN: Tuple[int, ...] = tuple(
-    bytes.fromhex(
-        "0102010202020202010201020303030302020102020202020103010303030303"
-        "0302010202020202010201020303030302020102020202020103010303030303"
-        "0102010202020202010201020303030302020102020202020103010303030303"
-        "0102010202020202010201020303030302020102020202020103010303030303"
-        "0202020202020202010201020303030302020102020202020103010303030303"
-        "0202020202020202010201020303030302020102020202020103010303030303"
-        "0202020202020202010201020303030302020102020202020103010303030303"
-        "0202020202020202010201020303030302020102020202020103010303030303"
-    )
-)
+OP_LEN: Tuple[int, ...] = tuple(MODE_LEN[OPCODES[op][1]] for op in range(256))
 
 # Conditional-branch opcodes (2-byte, PC-relative).
-BRANCH_OPS = frozenset((0x10, 0x30, 0x50, 0x70, 0x90, 0xB0, 0xD0, 0xF0))
+BRANCH_OPS = frozenset(op for op in range(256) if OPCODES[op][1] == "rel")
 
 # Side-effect-free opcodes (immediate loads, register transfers, in-register
 # arithmetic/shift, compares, flag ops) -- none touch memory or divert control.
@@ -83,28 +74,14 @@ ABS_STORE_OPS = frozenset(
     (0x8D, 0x8E, 0x8C, 0xCE, 0xDE, 0xEE, 0xFE, 0x0E, 0x4E, 0x2E, 0x6E)
 )
 
+# Mnemonics that write memory (stores and read-modify-writes).
+WRITE_MNEMONICS = frozenset("STA STX STY INC DEC ASL LSR ROL ROR".split())
+
 # Zero-page (2-byte) stores and read-modify-write opcodes.
 ZP_STORE_OPS = frozenset(
-    (
-        0x85,
-        0x95,
-        0x86,
-        0x96,
-        0x84,
-        0x94,
-        0xC6,
-        0xD6,
-        0xE6,
-        0xF6,
-        0x06,
-        0x16,
-        0x46,
-        0x56,
-        0x26,
-        0x36,
-        0x66,
-        0x76,
-    )
+    op
+    for op in range(256)
+    if OPCODES[op][0] in WRITE_MNEMONICS and OPCODES[op][1] in ("zp", "zpx", "zpy")
 )
 
 
