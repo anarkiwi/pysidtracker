@@ -85,24 +85,45 @@ class _BankedMemory(ObservableMemory):
     always reach the ``$01`` byte and the RAM shadow beneath the ROMs.
     """
 
-    def __init__(self, subject):
+    def __init__(self, subject, roms: Optional[dict] = None):
         super().__init__(subject=subject)
         from .irqhost import kernal_stub  # lazy: irqhost imports this module
 
         self._kernal = kernal_stub()
+        self._roms = roms
+
+    def _rom_bytes(self, base: int) -> Optional[bytes]:
+        """The real ROM at ``base`` (from the ``roms`` map), or ``None`` for stubs."""
+        return self._roms.get(base) if self._roms else None
 
     def _rom_value(self, address: int) -> Optional[int]:
-        """The ROM byte at ``address`` under the live ``$01``; ``None`` for RAM."""
+        """The ROM byte at ``address`` under the live ``$01``; ``None`` for RAM.
+
+        A ROM space serves the real :attr:`_roms` bytes when mapped (``roms``) and
+        the space is banked in, else the sidplayfp ROM-less stand-in (the KERNAL
+        stub, or ``0`` for BASIC/CHAR). With no ``roms`` it is exactly those.
+        """
         b = self._subject[1] & 7
         if address < 0xC000:  # $A000-$BFFF: BASIC, in when L- and H-IRAM both on
-            return 0 if (b & 1) and (b & 2) else None
+            if (b & 1) and (b & 2):
+                rom = self._rom_bytes(0xA000)
+                return rom[address - 0xA000] if rom is not None else 0
+            return None
         if address < 0xD000:  # $C000-$CFFF: always RAM
             return None
         if address < 0xE000:  # $D000-$DFFF: CHAR ROM, else the I/O page / RAM
             if (b & 1) or (b & 2):
-                return None if b & 4 else 0
+                if b & 4:
+                    return None
+                rom = self._rom_bytes(0xD000)
+                return rom[address - 0xD000] if rom is not None else 0
             return None
-        return self._kernal[address - 0xE000] if b & 2 else None  # $E000-$FFFF
+        if b & 2:  # $E000-$FFFF: KERNAL
+            rom = self._rom_bytes(0xE000)
+            if rom is not None:
+                return rom[address - 0xE000]
+            return self._kernal[address - 0xE000]
+        return None
 
     def __getitem__(self, address):
         if isinstance(address, int) and address >= 0xA000:
@@ -115,7 +136,7 @@ class _BankedMemory(ObservableMemory):
 def wire_mpu(
     subject, illegal_opcodes: bool = True, sid_model: str = "6581", ntsc: bool = False
 ):  # pylint: disable=unused-argument
-    """Build a jennings MPU over the 64 KiB buffer ``subject``; return ``(mpu, mem)``.
+    """Build a jennings MPU over the C64 address-space buffer ``subject``; return ``(mpu, mem)``.
 
     VIC raster ($D011/$D012) reads are synthesised from the cycle counter on a
     PAL (or ``ntsc``) beam, so sync spin loops exit; SID osc3/env3 ($D41B/$D41C) reads come from a

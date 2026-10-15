@@ -29,6 +29,14 @@ class EmulatorUnavailable(SidError):
     """
 
 
+class KernalHostError(SidError):
+    """A whole-program KERNAL run (:mod:`pysidtracker.kernalhost`) could not finish.
+
+    The step cap was reached before the requested exit condition (an ``until``
+    predicate, or the depacker entering a freshly-written region) was met.
+    """
+
+
 class AudioUnavailable(SidError):
     """The SID audio backend (``pyresidfp``) is needed but not importable.
 

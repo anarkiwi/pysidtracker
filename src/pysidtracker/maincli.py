@@ -20,6 +20,7 @@ from .audio import CHIP_MODELS, render_player_wav, seconds_to_frames
 from .cadence import playroutine_cadence
 from .cli import print_info, run_cli
 from .disasm import disassemble, entry_labels, image_after_init
+from .editorio import editor_io
 from .errors import SidError, SidParseError
 from .formats import SidFormat, discover_formats, recognize_format
 from .image import SidImage
@@ -94,6 +95,14 @@ def _disasm(args) -> None:
         print(f"{addr:04X}  {raw.hex(' '):<9} {text}")
 
 
+def _editor_io(args) -> None:
+    image = SidImage.from_bytes(read_bytes(args.song))
+    for name, address, rows in editor_io(image):
+        print(f"{name}  ${address:04X}")
+        for addr, raw, text in rows:
+            print(f"{addr:04X}  {raw.hex(' '):<9} {text}")
+
+
 def _hex_addr(value: str) -> int:
     """A hex C64 address: ``1000``, ``0x1000``, or ``$1000``."""
     text = value[1:] if value[:1] == "$" else value
@@ -159,6 +168,12 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
         help="the subtune number passed to init (with --after-init)",
     )
     disasm.set_defaults(func=lambda args: _disasm(args))
+
+    eio = subparsers.add_parser(
+        "editor-io", help="list KERNAL LOAD/SAVE/OPEN call sites and their setup"
+    )
+    eio.add_argument("song", help="input tune")
+    eio.set_defaults(func=_editor_io)
 
     for fmt in formats:
         for command in fmt.commands:
