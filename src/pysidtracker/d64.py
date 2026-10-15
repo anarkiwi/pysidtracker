@@ -1,38 +1,33 @@
-"""Read PRG files out of a Commodore 1541 ``.d64`` disk image.
+"""PRG files from C64 release media, read natively by :mod:`vagrant_moses.media`.
 
-C64 tracker test fixtures often ship not as bare ``.prg`` files but inside a
-``.d64`` disk image (frequently zipped in a csdb.dk release). Every ``py*``
-parser that wants those PRGs re-implemented the same 1541 filesystem walk. This
-module is that walk, once: :func:`read_d64` yields one :class:`D64File` per PRG
-(name + payload bytes), following the directory track/sector chain and each
-file's sector chain. Pure stdlib, so it ships in the wheel and pairs with the
-:func:`pysidtracker.testing.fetch_disk` downloader.
+:func:`read_d64` lists one disk image's PRGs; :func:`iter_prgs` walks any nesting of
+zip/gzip, d64 (35/40/42 tracks, error block)/d71/d81, t64 and p00. The ``media
+extract`` command writes every PRG of a download tree out with its index line.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterator, List
+from pathlib import Path
+from typing import List
 
-# 1541 geometry: 35 tracks, 1-based; index 0 unused. Sectors per track vary.
-SECTORS_PER_TRACK = [0] + [21] * 17 + [19] * 7 + [18] * 6 + [17] * 5
-SECTOR_SIZE = 256
-D64_SIZE = sum(SECTORS_PER_TRACK[1:]) * SECTOR_SIZE  # 174848
-DIR_TRACK = 18
-DIR_SECTOR = 1
-FILETYPE_PRG = 0x82
-# Closed-PRG type check: PRG type bits (2) + closed bit ($80), ignoring the locked bit.
-FILETYPE_PRG_CLOSED_MASK = 0x8F
-FILETYPE_LOCKED = 0x40
+from vagrant_moses.media import (
+    GEOMETRIES,
+    GEOMETRY_BY_SIZE,
+    TYPE_PRG,
+    MediaError,
+    iter_prgs,
+    read_disk,
+)
+
+from .errors import SidError
 
 
 @dataclass(frozen=True)
 class D64File:
-    """One PRG file recovered from a disk image: PETSCII ``name`` + ``prg`` bytes.
+    """One PRG from a disk image: PETSCII ``name``, ``prg`` bytes (load address first).
 
-    ``prg`` is the raw file payload, load-address header included (the first two
-    bytes are the little-endian C64 load address), exactly as a ``.prg`` on disk.
-    ``locked`` is the directory entry's 1541 lock bit.
+    ``locked`` is the directory entry's lock bit.
     """
 
     name: str
@@ -40,54 +35,46 @@ class D64File:
     locked: bool = False
 
 
-def _ts_offset(track: int, sector: int) -> int:
-    if not 1 <= track <= 35:
-        raise ValueError(f"track out of range: {track}")
-    if not 0 <= sector < SECTORS_PER_TRACK[track]:
-        raise ValueError(f"sector out of range for track {track}: {sector}")
-    return (sum(SECTORS_PER_TRACK[1:track]) + sector) * SECTOR_SIZE
-
-
-def _chain(data: bytes, track: int, sector: int) -> Iterator[bytes]:
-    """Yield each sector's usable bytes along a track/sector chain."""
-    visited = set()
-    while True:
-        if (track, sector) in visited:
-            raise ValueError(f"sector chain loops at T{track}S{sector}")
-        visited.add((track, sector))
-        block = data[_ts_offset(track, sector) :][:SECTOR_SIZE]
-        next_track, next_sector = block[0], block[1]
-        if next_track == 0:
-            # A terminal block: next_sector is the index of its last used byte.
-            yield block[2 : next_sector + 1]
-            return
-        yield block[2:SECTOR_SIZE]
-        track, sector = next_track, next_sector
-
-
 def read_d64(data: bytes) -> List[D64File]:
-    """Every PRG file in the ``.d64`` image ``data``, in directory order.
+    """Every closed PRG on the disk image ``data``, in directory order.
 
-    Walks the directory chain from track 18 and follows each PRG entry's sector
-    chain. Raises :class:`ValueError` if ``data`` is too short to be a ``.d64``
-    or a sector chain loops.
+    The geometry follows the image size (a 35-track d64 for an unknown size); a
+    broken or looping sector chain ends that file where a 1541 would.
+
+    Raises:
+      MediaError: ``data`` is shorter than the geometry, or has no directory.
     """
-    if len(data) < D64_SIZE:
-        raise ValueError(f"not a d64: {len(data)} bytes (expected >= {D64_SIZE})")
-    files: List[D64File] = []
-    track, sector = DIR_TRACK, DIR_SECTOR
-    seen = set()
-    while (track, sector) not in seen:
-        seen.add((track, sector))
-        block = data[_ts_offset(track, sector) :][:SECTOR_SIZE]
-        for slot in range(8):
-            entry = block[2 + slot * 32 : 2 + slot * 32 + 30]
-            if len(entry) < 19 or entry[0] & FILETYPE_PRG_CLOSED_MASK != FILETYPE_PRG:
-                continue
-            name = entry[3:19].rstrip(b"\xa0").decode("latin-1", errors="replace")
-            prg = b"".join(_chain(data, entry[1], entry[2]))
-            files.append(D64File(name, prg, entry[0] & FILETYPE_LOCKED != 0))
-        if block[0] == 0:
-            break
-        track, sector = block[0], block[1]
-    return files
+    geom = GEOMETRY_BY_SIZE.get(len(data), GEOMETRIES[0])
+    return [
+        D64File(f.name, f.data, f.locked)
+        for f in read_disk(data, geom)
+        if f.ftype == TYPE_PRG
+    ]
+
+
+def _extract(args) -> None:
+    from vagrant_moses.cli import extract  # pylint: disable=import-outside-toplevel
+
+    errors = extract(args.src, Path(args.out))
+    if errors:
+        raise SidError(f"{errors} unreadable media members (listed above)")
+
+
+def add_media_commands(parser) -> None:
+    """Add ``extract SRC... -o DIR`` (needs tqdm: ``pysidtracker[survey]``)."""
+    sub = parser.add_subparsers(dest="media_command", required=True)
+    ext = sub.add_parser(
+        "extract", help="write every PRG in nested release media, with its index line"
+    )
+    ext.add_argument("src", nargs="+", help="media files or directories")
+    ext.add_argument("-o", "--out", required=True, help="output directory")
+    ext.set_defaults(func=_extract)
+
+
+__all__ = [
+    "D64File",
+    "MediaError",
+    "add_media_commands",
+    "iter_prgs",
+    "read_d64",
+]

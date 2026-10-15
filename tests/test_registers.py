@@ -1,4 +1,6 @@
-"""Tests for the hardware register map predicates and store scanner."""
+"""SID register semantics, PSID flag helpers and the absolute-store scanner."""
+
+from vagrant_moses import memmap as mm
 
 from pysidtracker import RegisterStore, SidImage, find_register_stores
 from pysidtracker import registers as reg
@@ -22,19 +24,10 @@ def test_sid_predicates_and_mirror():
     assert not reg.is_sid_control(0xD415)
 
 
-def test_cia_vic_and_vector_predicates():
-    assert reg.is_cia1_reg(0xDC0E)
-    assert reg.is_cia2_reg(0xDD0F)
-    assert reg.is_cia_timer(0xDC04)
-    assert reg.is_cia_timer(0xDD05)
-    assert not reg.is_cia_timer(0xDC0D)
-    assert reg.is_vic_reg(0xD012)
-    assert not reg.is_vic_reg(0xD030)
-    assert reg.is_irq_vector(0x0314)
-    assert reg.is_nmi_vector(0x0319)
-    assert reg.is_cpu_vector(0xFFFE)
-    assert not reg.is_cpu_vector(0xFFF9)
+def test_sid_write_band_and_dependent_reexports():
     assert list(reg.sid_write_band(lo=0xD400, hi=0xD402)) == [0xD400, 0xD401, 0xD402]
+    assert (reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI) == (0xDC04, 0xDC05)
+    assert reg.PAL_CYCLES_PER_FRAME == mm.PAL.cycles_per_frame
 
 
 def test_find_register_stores():
@@ -54,7 +47,7 @@ def test_find_register_stores():
         0xD4,  # STA $D400,X
     ]
     img = _image(payload)
-    watched = [reg.CIA1_TIMER_A_LO, reg.SID_CTRL_V3, reg.RAM_IRQ_VECTOR_LO, 0xD400]
+    watched = [mm.CIA1_TIMER_A_LO, reg.SID_CTRL_V3, mm.RAM_IRQ_VECTOR_LO, 0xD400]
     stores = find_register_stores(img, watched)
     assert stores == [
         RegisterStore(0x1000, 0x8D, 0xDC04, "STA"),
@@ -74,7 +67,7 @@ def test_hardware_timing_and_layout_constants():
     assert reg.PW_HI_REGS == (0x03, 0x0A, 0x11)
     assert reg.SID_VOICE_OFFSET == (0, 7, 14)
     assert reg.SID_REG_COUNT == 25
-    assert reg.SID_BASE == 0xD400
+    assert mm.SID_BASE == 0xD400
     # PW-hi registers are the pulse-width-high byte of each voice.
     assert all(
         off + 0x03 == pw for off, pw in zip(reg.SID_VOICE_OFFSET, reg.PW_HI_REGS)

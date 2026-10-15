@@ -23,6 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 
+from vagrant_moses import memmap as mm
+
 from . import registers as reg
 from .emu import run_to_rts, wire_mpu
 from .errors import SidParseError
@@ -32,21 +34,12 @@ from .image import SidImage
 
 # Addresses the write observer watches: the full SID mirror band, the VIC and
 # CIA register files, the RAM interrupt vectors and the CPU vector table.
-_WATCH_ADDRS = tuple(
-    list(range(reg.SID_BASE, reg.SID_LAST + 1))
-    + list(range(reg.VIC_BASE, reg.VIC_LAST + 1))
-    + list(range(reg.CIA1_BASE, reg.CIA1_LAST + 1))
-    + list(range(reg.CIA2_BASE, reg.CIA2_LAST + 1))
-    + [
-        reg.RAM_IRQ_VECTOR_LO,
-        reg.RAM_IRQ_VECTOR_HI,
-        reg.RAM_NMI_VECTOR_LO,
-        reg.RAM_NMI_VECTOR_HI,
-        reg.CPU_NMI_VECTOR,
-        reg.CPU_NMI_VECTOR + 1,
-        reg.CPU_IRQ_VECTOR,
-        reg.CPU_IRQ_VECTOR + 1,
-    ]
+_WATCH_ADDRS = (
+    *range(mm.SID_BASE, mm.SID_LAST + 1),
+    *range(mm.VIC_BASE, mm.VIC_LAST + 1),
+    *range(mm.CIA1_BASE, mm.CIA1_LAST + 1),
+    *range(mm.CIA2_BASE, mm.CIA2_LAST + 1),
+    *mm.VECTORS,
 )
 
 
@@ -105,12 +98,9 @@ def _word(writes: Dict[int, int], lo_addr: int, hi_addr: int) -> Optional[int]:
 
 
 def _raster(writes: Dict[int, int]) -> Optional[int]:
-    if reg.VIC_RASTER not in writes:
+    if mm.VIC_RASTER not in writes:
         return None
-    line = writes[reg.VIC_RASTER]
-    if reg.VIC_CONTROL_1 in writes:
-        line |= (writes[reg.VIC_CONTROL_1] & 0x80) << 1
-    return line
+    return mm.raster_compare(writes.get(mm.VIC_CONTROL_1, 0), writes[mm.VIC_RASTER])
 
 
 def _build_trace(
@@ -120,20 +110,20 @@ def _build_trace(
 ) -> InitTrace:
     sid_writes = {a: v for a, v in writes.items() if reg.is_sid_reg(a)}
     return InitTrace(
-        cia1_timer_latch=_word(writes, reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI),
-        cia2_timer_latch=_word(writes, reg.CIA2_TIMER_A_LO, reg.CIA2_TIMER_A_HI),
-        irq_vector=_word(writes, reg.RAM_IRQ_VECTOR_LO, reg.RAM_IRQ_VECTOR_HI),
-        hw_irq_vector=_word(writes, reg.CPU_IRQ_VECTOR, reg.CPU_IRQ_VECTOR + 1),
-        nmi_vector=_word(writes, reg.RAM_NMI_VECTOR_LO, reg.RAM_NMI_VECTOR_HI),
+        cia1_timer_latch=_word(writes, mm.CIA1_TIMER_A_LO, mm.CIA1_TIMER_A_HI),
+        cia2_timer_latch=_word(writes, mm.CIA2_TIMER_A_LO, mm.CIA2_TIMER_A_HI),
+        irq_vector=_word(writes, mm.RAM_IRQ_VECTOR_LO, mm.RAM_IRQ_VECTOR_HI),
+        hw_irq_vector=_word(writes, mm.CPU_IRQ_VECTOR, mm.CPU_IRQ_VECTOR + 1),
+        nmi_vector=_word(writes, mm.RAM_NMI_VECTOR_LO, mm.RAM_NMI_VECTOR_HI),
         vic_raster=_raster(writes),
         registers_touched=set(writes),
         sid_writes=sid_writes,
         cia1_latch_rewritten=cia1_rewritten,
         cia2_latch_rewritten=cia2_rewritten,
-        cia1_control=writes.get(reg.CIA1_CRA),
-        cia1_icr=writes.get(reg.CIA1_ICR),
-        cia2_control=writes.get(reg.CIA2_CRA),
-        cia2_icr=writes.get(reg.CIA2_ICR),
+        cia1_control=writes.get(mm.CIA1_CRA),
+        cia1_icr=writes.get(mm.CIA1_ICR),
+        cia2_control=writes.get(mm.CIA2_CRA),
+        cia2_icr=writes.get(mm.CIA2_ICR),
     )
 
 
@@ -173,8 +163,8 @@ def trace_init(
     run_to_rts(mpu, mem, init_address, subtune, max_cycles)
 
     # Post-init CIA Timer-A latch values, to detect a mid-play reschedule.
-    init_cia1 = _word(writes, reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI)
-    init_cia2 = _word(writes, reg.CIA2_TIMER_A_LO, reg.CIA2_TIMER_A_HI)
+    init_cia1 = _word(writes, mm.CIA1_TIMER_A_LO, mm.CIA1_TIMER_A_HI)
+    init_cia2 = _word(writes, mm.CIA2_TIMER_A_LO, mm.CIA2_TIMER_A_HI)
     cia1_rewritten: Optional[int] = None
     cia2_rewritten: Optional[int] = None
 
@@ -182,8 +172,8 @@ def trace_init(
     if play_address:
         for _ in range(play_calls):
             run_to_rts(mpu, mem, play_address, 0, max_cycles)
-            play_cia1 = _word(writes, reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI)
-            play_cia2 = _word(writes, reg.CIA2_TIMER_A_LO, reg.CIA2_TIMER_A_HI)
+            play_cia1 = _word(writes, mm.CIA1_TIMER_A_LO, mm.CIA1_TIMER_A_HI)
+            play_cia2 = _word(writes, mm.CIA2_TIMER_A_LO, mm.CIA2_TIMER_A_HI)
             if play_cia1 is not None and play_cia1 != init_cia1:
                 cia1_rewritten = play_cia1
             if play_cia2 is not None and play_cia2 != init_cia2:

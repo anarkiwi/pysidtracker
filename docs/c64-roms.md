@@ -1,7 +1,8 @@
 # C64 ROM fixtures: provenance and use
 
-`pysidtracker.roms` fetches the Commodore 64 KERNAL, BASIC and CHARGEN ROMs into
-the gitignored fixture cache and maps them into a 64 KiB image. Some tunes cannot
+`pysidtracker.roms` wraps `vagrant_moses.roms`, which fetches the Commodore 64
+KERNAL, BASIC and CHARGEN ROMs and maps them into a 64 KiB image; the wrappers
+default the cache to the gitignored fixture cache. Some tunes cannot
 be executed without them: a PSID/RSID **BASIC tune** is a BASIC program the
 interpreter has to run, and unclean rips call KERNAL routines from their init.
 

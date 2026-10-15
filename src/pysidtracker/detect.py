@@ -28,7 +28,8 @@ import enum
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-from . import registers as reg
+from vagrant_moses import memmap as mm
+
 from .emu import observe_data_access, run_to_rts, wire_mpu
 from .errors import SidParseError
 from .poweron import psid_init_bank
@@ -257,14 +258,14 @@ _IO_PAGE_HI = 0xDFFF
 # The play/IRQ vectors and timer latches a tune installs (as trace_init reports).
 _JUMP_CELLS = frozenset(
     (
-        reg.RAM_IRQ_VECTOR_LO,
-        reg.RAM_IRQ_VECTOR_HI,
-        reg.CPU_IRQ_VECTOR,
-        reg.CPU_IRQ_VECTOR + 1,
-        reg.CIA1_TIMER_A_LO,
-        reg.CIA1_TIMER_A_HI,
-        reg.CIA2_TIMER_A_LO,
-        reg.CIA2_TIMER_A_HI,
+        mm.RAM_IRQ_VECTOR_LO,
+        mm.RAM_IRQ_VECTOR_HI,
+        mm.CPU_IRQ_VECTOR,
+        mm.CPU_IRQ_VECTOR + 1,
+        mm.CIA1_TIMER_A_LO,
+        mm.CIA1_TIMER_A_HI,
+        mm.CIA2_TIMER_A_LO,
+        mm.CIA2_TIMER_A_HI,
     )
 )
 
@@ -387,10 +388,10 @@ def init_effects(
         writes={addr: writes[addr] for addr in sorted(writes)},
         reads={addr: reads[addr] for addr in sorted(reads)},
         jumps=Jumps(
-            irq_vector=_vector(vectors, reg.RAM_IRQ_VECTOR_LO, reg.RAM_IRQ_VECTOR_HI),
-            hw_irq_vector=_vector(vectors, reg.CPU_IRQ_VECTOR, reg.CPU_IRQ_VECTOR + 1),
-            cia1_timer_latch=_vector(vectors, reg.CIA1_TIMER_A_LO, reg.CIA1_TIMER_A_HI),
-            cia2_timer_latch=_vector(vectors, reg.CIA2_TIMER_A_LO, reg.CIA2_TIMER_A_HI),
+            irq_vector=_vector(vectors, mm.RAM_IRQ_VECTOR_LO, mm.RAM_IRQ_VECTOR_HI),
+            hw_irq_vector=_vector(vectors, mm.CPU_IRQ_VECTOR, mm.CPU_IRQ_VECTOR + 1),
+            cia1_timer_latch=_vector(vectors, mm.CIA1_TIMER_A_LO, mm.CIA1_TIMER_A_HI),
+            cia2_timer_latch=_vector(vectors, mm.CIA2_TIMER_A_LO, mm.CIA2_TIMER_A_HI),
         ),
     )
 

@@ -18,9 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
+from vagrant_moses.memmap import NTSC, PAL
+
 from .codescan import find_code_all
 from .image import SidImage
-from .registers import NTSC_CLOCK_HZ, PAL_CLOCK_HZ
 
 # Equal-tempered reference: middle C (261.6255653 Hz) sits at note index 49.
 _REF_HZ = 261.6255653
@@ -42,8 +43,8 @@ def _sid_freq_table(clock: int) -> Tuple[int, ...]:
     return table
 
 
-PAL_FREQ = _sid_freq_table(PAL_CLOCK_HZ)
-NTSC_FREQ = _sid_freq_table(NTSC_CLOCK_HZ)
+PAL_FREQ = _sid_freq_table(PAL.clock_hz)
+NTSC_FREQ = _sid_freq_table(NTSC.clock_hz)
 PAL_FREQ_LO = bytes(value & 0xFF for value in PAL_FREQ)
 PAL_FREQ_HI = bytes(value >> 8 for value in PAL_FREQ)
 NTSC_FREQ_LO = bytes(value & 0xFF for value in NTSC_FREQ)

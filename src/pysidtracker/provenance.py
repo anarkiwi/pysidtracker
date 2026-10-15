@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
 
+from vagrant_moses import memmap as mm
+
 from . import registers as reg
 from .emu import run_to_rts, wire_mpu
 from .errors import EmulatorUnavailable, SidParseError
@@ -302,11 +304,11 @@ class _PlaycallTracer:
         self._mpu = mpu
         self._captures: List[Tuple[int, int, int, int]] = []
         mem.subscribe_to_write(
-            range(reg.SID_BASE, reg.SID_BASE + reg.SID_REG_COUNT), self._on_write
+            range(mm.SID_BASE, mm.SID_BASE + reg.SID_REG_COUNT), self._on_write
         )
 
     def _on_write(self, addr: int, value: int) -> None:
-        offset = reg.SID_BASE + ((addr - reg.SID_BASE) % reg.SID_STRIDE) - reg.SID_BASE
+        offset = (addr - mm.SID_BASE) % mm.SID_STRIDE
         if 0 <= offset < reg.SID_REG_COUNT:
             self._captures.append(
                 (self._mpu.pc, offset, value & 0xFF, self._mpu.processorCycles)
@@ -366,7 +368,7 @@ def trace_frames(
 
     subject = power_on_ram()
     subject[image.load : image.load + len(image.image)] = image.image
-    subject[reg.SID_BASE + 0x18] = 0x0F
+    subject[mm.SID_BASE + 0x18] = 0x0F
     init = image.header.init_address or image.header.real_load_address
     play = image.header.play_address or init
     subject[1] = psid_init_bank(init)

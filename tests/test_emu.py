@@ -150,6 +150,7 @@ def test_illegals_off_still_decoded_natively_by_jennings():
 def test_hardware_reads_are_synthesised_not_ram():
     subject = bytearray(0x10000)
     subject[CODE : CODE + 3] = bytes([0xAD, 0x12, 0xD0])  # LDA $D012
+    subject[1] = 0x37
     mpu, mem = wire_mpu(subject)
     seen = set()
     for _ in range(8):
@@ -241,7 +242,7 @@ def test_rom_space_reads_follow_the_01_bank():
     the character ROM read ``0``, and the ``$01``/shadow-RAM underneath is what a
     re-banked tune reads back.
     """
-    from pysidtracker.irqhost import kernal_stub
+    from vagrant_moses.roms import kernal_stub
 
     subject = bytearray(0x10000)
     subject[0xA000] = 0xAB  # shadow RAM behind BASIC
@@ -251,7 +252,7 @@ def test_rom_space_reads_follow_the_01_bank():
     kernal = kernal_stub()
 
     for bank in range(0x00, 0x20):
-        subject[1] = bank
+        mem[1] = bank
         loram, hiram, charen = bank & 1, bank & 2, bank & 4
         kernal_in = bool(hiram)
         basic_in = bool(loram and hiram)
@@ -272,12 +273,12 @@ def test_rom_space_reads_follow_the_01_bank():
 def test_a_rebanked_tune_reads_the_ram_behind_a_rom():
     subject = bytearray(0x10000)
     _, mem = wire_mpu(subject)
-    subject[1] = 0x37  # ROMs in (H-IRAM set): KERNAL stub shadows the RAM
+    mem[1] = 0x37  # ROMs in (H-IRAM set): KERNAL stub shadows the RAM
     mem[0xE000] = 0x5A
     assert mem[0xE000] == 0xEA  # a read still returns the KERNAL stub (a NOP)
-    subject[1] = 0x05  # re-bank: H-IRAM off, so the RAM behind KERNAL is reachable
+    mem[1] = 0x05  # re-bank: H-IRAM off, so the RAM behind KERNAL is reachable
     assert mem[0xE000] == 0x5A  # the tune's write lands in the shadow RAM
-    assert mem[1] == 0x05  # and the bank register itself reads back
+    assert (mem[0], mem[1]) == (0x2F, 0x15)  # the port reads input bit 4 high
 
 
 def test_wire_mpu_reports_missing_jennings(monkeypatch):
@@ -293,3 +294,12 @@ def test_wire_mpu_reports_missing_jennings(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", _no_jennings)
     with pytest.raises(EmulatorUnavailable):
         wire_mpu(bytearray(0x10000))
+
+
+def test_sid_reads_flush_queued_writes():
+    chip = SidReads("8580")
+    chip.write(10, 0x12, 0x81)
+    assert chip.pending() == 1
+    chip.flush(20)
+    assert chip.pending() == 0
+    assert chip.read(30, 0x19) == chip.read(30, 0x19)

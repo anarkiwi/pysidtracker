@@ -16,7 +16,8 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
-from . import registers as reg
+from vagrant_moses import memmap as mm
+
 from .header import parse_sid_header
 from .oracle import SidtraceUnavailable, cached_sidtrace, play_source, raise_cycles
 from .survey import ORACLE_ARGS, _err, deadline, load_render, load_tunes
@@ -83,7 +84,7 @@ def check(job):
     sid_path, tune, work, cadence, seconds, timeout = job
     data = Path(sid_path).read_bytes()
     ntsc = (parse_sid_header(data).flags >> 2) & 3 == 2
-    frame = reg.NTSC_CYCLES_PER_FRAME if ntsc else reg.PAL_CYCLES_PER_FRAME
+    frame = mm.NTSC.cycles_per_frame if ntsc else mm.PAL.cycles_per_frame
     row = {"key": f"{tune['md5']}_1", "path": tune["path"], "player": tune["player"]}
     row["clock"] = "NTSC" if ntsc else "PAL"
     ocsv = Path(work) / "oracle" / f"{row['key']}.csv.zst"

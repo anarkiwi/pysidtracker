@@ -24,8 +24,9 @@ API.
 - `BaseSidParser` — the base class each format subclasses.
 - `CodePattern` / `find_code_all` / `find_code_first` — masked 6502
   code-fragment search with operand capture.
-- `registers` — C64 hardware register map (SID/CIA/VIC, IRQ/NMI and CPU
-  vectors) with predicates and `find_register_stores`.
+- `registers` — SID register semantics, PSID flag helpers and
+  `find_register_stores`; the C64 memory map is vagrant-moses' `memmap` (the
+  frame timing and CIA latch names dependents import are re-exported).
 - `trace_init` / `InitTrace` — run a tune's init under a write observer to
   report CIA timer cadence and the IRQ/NMI vectors an IRQ-driven header hides.
 - `init_effects` / `subtune_selection` / `init_diff` — run one song's init on a
@@ -33,15 +34,16 @@ API.
   PCs, the installed vectors), mapping header songs to a selection cell or
   listing the cells that differ between songs.
 - `emu` — the shared jennings host every init/replay path runs on: `wire_mpu`
-  (native NMOS illegal opcodes + cycle-derived VIC/SID reads) and `run_to_rts`.
+  (vagrant-moses' banked `cpu.flat_mpu` plus reSIDfp osc3/env3 reads) and
+  `run_to_rts`.
 - `playroutine_cadence` / `Cadence` / `TriggerSource` — derive the play-routine
   cadence (raster calls per frame, CIA/NMI timer period) from how the tune
   programs its interrupts in sidplayfp's PSID driver environment
   ([docs/cadence.md](docs/cadence.md)); `cadence_check` validates it against
   sidtrace interrupt rows.
 - `irqhost` — `InterruptHost` / `InterruptPlayer` boot and run a PSID or RSID as
-  the sidtrace oracle's sidplayfp does, every VIC-II and CIA interrupt and the
-  VIC's stolen cycles modelled, its trace identical to the oracle's;
+  the sidtrace oracle's sidplayfp does, on vagrant-moses' cycle-exact `Machine`
+  with reSIDfp SID devices, its trace identical to the oracle's;
   `host_cadence` measures its play cadence and `host_check` compares traces
   ([docs/irqhost.md](docs/irqhost.md)).
 - `native_decrunch` — native exomizer unpack (pydexomizer), an init-free
@@ -72,13 +74,16 @@ API.
   `psid_image` (load bounds), `psid_songs`, `is_ntsc`, `is_rsid`, `psid_speed`
   and `speed_cia` — every one over the shared `parse_sid_header` / `SidImage`
   container parsing.
-- `cia` / `vicii` / `eventsched` — the vic/cia/scheduler surface of the machine,
-  re-exported from vagrant-moses for `pysidtracker.*` import compatibility.
-- `roms` — C64 KERNAL/BASIC/CHARGEN ROM fetch + SHA-256 verified cache
-  (`fetch_rom`, `resolve_rom`, `roms_available`) and 64 KiB mapping (`rom_image`,
-  `apply_roms`) for tunes that cannot run without the ROMs. The ROMs are
-  copyright works: fetched into a gitignored cache, never committed
-  ([docs/c64-roms.md](docs/c64-roms.md)).
+- `roms` — vagrant-moses' C64 ROM fetch, SHA-256 check and mapping (`fetch_rom`,
+  `resolve_rom`, `rom_image`, `apply_roms`), cached beside the tunes. The ROMs
+  are copyright works, never committed ([docs/c64-roms.md](docs/c64-roms.md)).
+- `kernalhost` — `KernalHost` runs a whole C64 program with the real KERNAL
+  file/keyboard calls serviced on a host directory, and `sys_addr` reads a BASIC
+  `SYS` stub (vagrant-moses' `kernal`, raising `KernalHostError`).
+- `d64` — release media through vagrant-moses' readers: `read_d64`, and
+  `iter_prgs` over nested zip/gzip, d64 (35/40/42 tracks, error block), d71, d81,
+  t64 and p00; `pysidtracker media extract SRC... -o DIR` writes every PRG with a
+  `sha256 size $load path` index line.
 - `fixtures` — CSDB (csdb.dk) native-format editor files (GoatTracker/DMCSID/JCH)
   are copyright works and never committed: `fetch_csdb` scrapes release pages and
   downloads every file into a gitignored, resume-safe cache indexed by SHA-256 in
@@ -128,9 +133,9 @@ pip install pysidtracker   # core: jennings (init emulation), numpy, pyresidfp (
 
 All dependencies are core: jennings (detection runs a tune's 6502 init), pydexomizer
 (`native_decrunch` unpacks exomizer-packed images natively), pyresidfp (the
-emulated SID the WAV render drives), vagrant-moses (the VIC-II/CIA machine model
-the interrupt host is composed of), and numpy (sample buffers and the image
-anchor scan).
+emulated SID the WAV render drives), vagrant-moses (the C64 machine model: memory
+map, banked bus, ROMs, the cycle-exact machine, the KERNAL host and media
+readers), and numpy (sample buffers and the image anchor scan).
 
 ## Usage
 

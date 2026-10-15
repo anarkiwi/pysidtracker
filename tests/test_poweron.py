@@ -2,9 +2,10 @@
 
 import numpy as np
 
+from vagrant_moses import c64
+from vagrant_moses import memmap as mm
+
 from pysidtracker import MemPlayer, poweron
-from pysidtracker import registers as reg
-from pysidtracker import irqhost
 
 
 def test_ram_pattern_is_four_byte_runs_flipped_per_16k_bank():
@@ -24,15 +25,10 @@ def test_power_on_image_is_the_driver_cleared_pattern_with_the_sid_at_rest():
     assert pattern[0x03FE] == 0
     assert pattern[0x03FF] == base[0x03FF]  # the clear stops before $03FF
     # the uninitialised SID register file reads as 0 (reSID reset)
-    assert pattern[
-        poweron.SID_PORT : poweron.SID_PORT + poweron.SID_PORT_SIZE
-    ] == bytes(poweron.SID_PORT_SIZE)
+    assert not any(pattern[mm.SID_BASE : mm.SID_LAST + 1])
     # ... everything else is the power-on pattern, untouched
-    assert pattern[0x3FF : poweron.SID_PORT] == base[0x3FF : poweron.SID_PORT]
-    assert (
-        pattern[poweron.SID_PORT + poweron.SID_PORT_SIZE :]
-        == base[poweron.SID_PORT + poweron.SID_PORT_SIZE :]
-    )
+    assert pattern[0x3FF : mm.SID_BASE] == base[0x3FF : mm.SID_BASE]
+    assert pattern[mm.SID_LAST + 1 :] == base[mm.SID_LAST + 1 :]
 
 
 def test_power_on_image_matches_the_reference_formula():
@@ -44,14 +40,8 @@ def test_power_on_image_matches_the_reference_formula():
     assert bytes(poweron.power_on_ram()) == want.tobytes()
 
 
-def test_irqhost_shares_the_single_source_of_truth():
-    assert poweron.ram_pattern() == irqhost.ram_pattern()
-    base = poweron.ram_pattern()
-    base[: poweron.PSID_DRIVER_CLEARED] = bytes(poweron.PSID_DRIVER_CLEARED)
-    base[poweron.SID_PORT : poweron.SID_PORT + poweron.SID_PORT_SIZE] = bytes(
-        poweron.SID_PORT_SIZE
-    )
-    assert base == poweron.power_on_ram()
+def test_ram_pattern_is_vagrant_moses_power_on_ram():
+    assert poweron.ram_pattern() == c64.poweron_ram()
 
 
 class _ReadPlayer(MemPlayer):
@@ -67,7 +57,7 @@ class _ReadPlayer(MemPlayer):
 def test_memplayer_boots_from_the_poweron_image():
     player = _ReadPlayer(b"", 0x8000)
     want = poweron.power_on_ram()
-    want[reg.SID_BASE + 0x18] = 0x0F  # the PSID driver seeds maximum volume
+    want[mm.SID_BASE + 0x18] = 0x0F  # the PSID driver seeds maximum volume
     assert bytes(player._mem) == want
 
 
@@ -80,4 +70,4 @@ def test_memplayer_reads_poweron_ram_not_zeros():
     # ... the PSID driver cleared $0000-$03FE:
     assert player._rd(0x0200) == 0x00
     # ... and the SID maximum-volume seed survived:
-    assert player._rd(reg.SID_BASE + 0x18) == 0x0F
+    assert player._rd(mm.SID_BASE + 0x18) == 0x0F

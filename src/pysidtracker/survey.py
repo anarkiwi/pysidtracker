@@ -30,6 +30,8 @@ import numpy as np
 import zstandard
 from tqdm import tqdm
 
+from vagrant_moses import memmap as mm
+
 from . import registers
 from .cadence import playroutine_cadence
 from .disasm import entry_labels
@@ -201,8 +203,8 @@ def oracle_frames(ocsv, seconds=0.0, clock="PAL", nframes=None):
     ``nframes`` overrides the frame count derived from ``seconds``.
     """
     rows = read_sidtrace(ocsv) if isinstance(ocsv, (str, Path)) else ocsv
-    cpf = sidtrace_cadence(rows) or registers.PAL_CYCLES_PER_FRAME
-    hz = registers.NTSC_CLOCK_HZ if clock == "NTSC" else registers.PAL_CLOCK_HZ
+    cpf = sidtrace_cadence(rows) or mm.PAL.cycles_per_frame
+    hz = mm.video(clock == "NTSC").clock_hz
     nframes = int(seconds * hz / cpf) if nframes is None else nframes
     grid = np.asarray(sidtrace_grid(rows, cycles_per_frame=cpf), np.int16)
     grid = grid.reshape(-1, NREGS) if grid.size else np.zeros((1, NREGS), np.int16)

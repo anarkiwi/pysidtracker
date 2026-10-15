@@ -12,8 +12,11 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
+from vagrant_moses import memmap as mm
+from vagrant_moses.c64 import dispatch_vector
+
 from . import registers as reg
-from .emu import wire_mpu
+from .emu import access_cycle, wire_mpu
 from .errors import EmulatorUnavailable, SidParseError
 from .image import SidImage
 from .poweron import psid_init_bank
@@ -24,7 +27,7 @@ _MIN_CIA_LATCH = 0x100
 _IRQJOB, _IRQRET = 0xA8, 0xBB
 _RET, _EXCEPTION = 0xA0, 0xC4
 # sidplayfp's ROM-less KERNAL slides NOPs up to `NOP $DC0D` at $EA7E (an ack).
-_KERNAL_ROM, _KERNAL_ACK, _KERNAL_NMI = 0xE000, 0xEA7E, 0xFE47
+_KERNAL_ACK, _KERNAL_NMI = 0xEA7E, 0xFE47
 _BRK, _RTI, _I_FLAG = 0x00, 0x40, 0x04
 _VIC = (-1, 0)
 _RMW = frozenset(
@@ -73,8 +76,7 @@ class Cadence:
     @property
     def frame_cycles(self) -> int:
         """CPU cycles per video frame at ``clock_hz``."""
-        ntsc = self.clock_hz == reg.NTSC_CLOCK_HZ
-        return reg.NTSC_CYCLES_PER_FRAME if ntsc else reg.PAL_CYCLES_PER_FRAME
+        return mm.video(self.clock_hz == mm.NTSC.clock_hz).cycles_per_frame
 
     @property
     def calls_per_second(self) -> float:
@@ -201,8 +203,9 @@ class _Machine:
         self.mpu, self.mem = wire_mpu(
             self.ram, sid_model=reg.sid_model_for_flags(header.flags), ntsc=ntsc
         )
-        self.frame = reg.NTSC_CYCLES_PER_FRAME if ntsc else reg.PAL_CYCLES_PER_FRAME
-        self.line = reg.NTSC_CYCLES_PER_LINE if ntsc else reg.PAL_CYCLES_PER_LINE
+        self.bus = self.mem._subject  # pylint: disable=protected-access
+        video = mm.video(ntsc)
+        self.frame, self.line = video.cycles_per_frame, video.cycles_per_line
         self.max_cycles = max_cycles
         self.cias = (_Cia(), _Cia())
         self.vic_enable = self.raster = self.vic_seen = 0
@@ -215,58 +218,49 @@ class _Machine:
         self.dirty = True
         extra = [0xD000 | b << 4 for b in (header.second_sid, header.third_sid) if b]
         self.mem.subscribe_to_write(
-            [*range(reg.SID_BASE, reg.SID_LAST + 1)]
+            [*range(mm.SID_BASE, mm.SID_LAST + 1)]
             + [a + o for a in extra for o in range(reg.SID_REG_COUNT)],
             self._sid,
         )
         self.mem.subscribe_to_write(
-            [reg.VIC_CONTROL_1, reg.VIC_RASTER, reg.VIC_IRQ_STATUS, reg.VIC_IRQ_ENABLE]
-            + [base + o for base in (reg.CIA1_BASE, reg.CIA2_BASE) for o in range(16)],
+            [mm.VIC_CONTROL_1, mm.VIC_RASTER, mm.VIC_IRQ_STATUS, mm.VIC_IRQ_ENABLE]
+            + [base + o for base in (mm.CIA1_BASE, mm.CIA2_BASE) for o in range(16)],
             self._write,
         )
         self.mem.subscribe_to_read(
-            [reg.VIC_CONTROL_1, reg.VIC_RASTER, reg.VIC_IRQ_STATUS]
-            + [reg.CIA1_ICR, reg.CIA2_ICR, reg.SID_BASE + 0x1B, reg.SID_BASE + 0x1C]
+            [mm.VIC_CONTROL_1, mm.VIC_RASTER, mm.VIC_IRQ_STATUS]
+            + [mm.CIA1_ICR, mm.CIA2_ICR, mm.SID_BASE + 0x1B, mm.SID_BASE + 0x1C]
             + [
                 base + o
-                for base in (reg.CIA1_BASE, reg.CIA2_BASE)
+                for base in (mm.CIA1_BASE, mm.CIA2_BASE)
                 for o in (4, 5, 6, 7, 14, 15)
             ],
             self._read,
         )
-        self.passthrough = (reg.VIC_CONTROL_1, reg.VIC_RASTER)
-        self.passthrough += (reg.SID_BASE + 0x1B, reg.SID_BASE + 0x1C)
+        self.passthrough = (mm.VIC_CONTROL_1, mm.VIC_RASTER)
+        self.passthrough += (mm.SID_BASE + 0x1B, mm.SID_BASE + 0x1C)
         self.span = slice(image.load, image.end)
         self.base = _driver_base(image)
 
-    def _io(self) -> bool:
-        """The CPU port maps I/O, not RAM or character ROM, at ``$D000``."""
-        return bool(self.ram[1] & 3 and self.ram[1] & 4)
-
     def _sid(self, addr, _value):
-        if self.handlers[-1] and self._io():
+        if self.handlers[-1] and self.bus.io:
             self.handlers[-1][2] |= 1 << (addr & 0x1F)
 
     def _write(self, addr, value):
         self.dirty = True
-        if not self._io():
+        if not self.bus.io:
             return
-        if addr == reg.VIC_IRQ_ENABLE:
+        if addr == mm.VIC_IRQ_ENABLE:
             self.vic_enable = value & 0x0F
-        elif addr == reg.VIC_IRQ_STATUS and (value | self._rmw()) & 1:
-            self.vic_flag, self.vic_seen = False, self._now()
-        elif addr == reg.VIC_RASTER:
+        elif addr == mm.VIC_IRQ_STATUS and (value | self._rmw()) & 1:
+            self.vic_flag, self.vic_seen = False, access_cycle(self.mpu)
+        elif addr == mm.VIC_RASTER:
             self.raster = self.raster & 0x100 | value
-        elif addr == reg.VIC_CONTROL_1:
+        elif addr == mm.VIC_CONTROL_1:
             self.raster = self.raster & 0xFF | (value & 0x80) << 1
-        elif reg.CIA1_BASE <= addr <= reg.CIA2_LAST:
-            cia = self.cias[addr >= reg.CIA2_BASE]
-            cia.write(addr & 0xF, value, self._now())
-
-    def _now(self) -> int:
-        """The cycle of the executing instruction's last (data) access."""
-        mpu = self.mpu
-        return mpu.processorCycles + mpu.cycletime[self.ram[mpu.pc]] - 1
+        elif mm.CIA1_BASE <= addr <= mm.CIA2_LAST:
+            cia = self.cias[addr >= mm.CIA2_BASE]
+            cia.write(addr & 0xF, value, access_cycle(self.mpu))
 
     def _rmw(self) -> int:
         """1 if the executing instruction is a read-modify-write, whose dummy write
@@ -274,16 +268,16 @@ class _Machine:
         return int(self.ram[self.mpu.pc] in _RMW)
 
     def _read(self, addr):
-        if not self._io():
+        if not self.bus.io:
             return self.ram[addr]
-        now = self._now()
+        now = access_cycle(self.mpu)
         if addr in self.passthrough:
             return None
-        if addr == reg.VIC_IRQ_STATUS:
+        if addr == mm.VIC_IRQ_STATUS:
             match = self._next_match(now - self.frame)
             flag = self.vic_flag or self.vic_seen < match <= now
             return flag | (0x80 if flag and self.vic_enable & 1 else 0)
-        cia = self.cias[addr >= reg.CIA2_BASE]
+        cia = self.cias[addr >= mm.CIA2_BASE]
         offset = addr & 0xF
         if offset >= 0xE:
             return cia.cr[offset - 0xE]
@@ -306,31 +300,31 @@ class _Machine:
         tune = ram[self.span]
         ram[0:0x400] = bytes(0x400)
         ram[0x02A6] = 0 if ntsc else 1
-        ram[reg.RAM_IRQ_VECTOR_LO : reg.RAM_NMI_VECTOR_HI + 1] = (
+        ram[mm.RAM_IRQ_VECTOR_LO : mm.RAM_NMI_VECTOR_HI + 1] = (
             _word(base + _IRQRET) + _word(base + _EXCEPTION) * 2
             if header.is_psid
             else _word(base + _IRQRET) + _word(0xFE66) + _word(_KERNAL_NMI)
         )
         ram[self.span] = tune
-        ram[0:2] = bytes((0x2F, initiomap or 0x37))
+        self.mem[mm.CPU_DDR], self.mem[mm.CPU_PORT] = mm.DDR_DEFAULT, initiomap or 0x37
         if initiomap and playiomap:
-            ram[reg.RAM_IRQ_VECTOR_LO] = base + _IRQJOB & 0xFF
-        kernal = reg.KERNAL_CIA1_LATCH_NTSC if ntsc else reg.KERNAL_CIA1_LATCH_PAL
+            ram[mm.RAM_IRQ_VECTOR_LO] = base + _IRQJOB & 0xFF
+        kernal = mm.video(ntsc).kernal_latch
         compat = tune_ntsc != ntsc or initiomap
         cia_speed = not header.is_psid or header.cia_speed(subtune)
         for addr, value in (
-            (reg.VIC_IRQ_ENABLE, 0x00),
-            (reg.CIA1_ICR, 0x7F),
-            (reg.CIA2_ICR, 0x7F),
-            (reg.SID_BASE + 0x18, 0x0F),
-            (reg.CIA1_TIMER_A_LO, kernal & 0xFF),
-            (reg.CIA1_TIMER_A_HI, kernal >> 8),
-            (reg.VIC_CONTROL_1, 0x1B if compat else 0x9B),
-            (reg.VIC_RASTER, 0x00 if compat else 0x37),
+            (mm.VIC_IRQ_ENABLE, 0x00),
+            (mm.CIA1_ICR, 0x7F),
+            (mm.CIA2_ICR, 0x7F),
+            (mm.SID_BASE + 0x18, 0x0F),
+            (mm.CIA1_TIMER_A_LO, kernal & 0xFF),
+            (mm.CIA1_TIMER_A_HI, kernal >> 8),
+            (mm.VIC_CONTROL_1, 0x1B if compat else 0x9B),
+            (mm.VIC_RASTER, 0x00 if compat else 0x37),
             *(
-                ((reg.CIA1_ICR, 0x81), (reg.CIA1_CRA, 0x01))
+                ((mm.CIA1_ICR, 0x81), (mm.CIA1_CRA, 0x01))
                 if cia_speed
-                else ((reg.VIC_IRQ_ENABLE, 0x81),)
+                else ((mm.VIC_IRQ_ENABLE, 0x81),)
             ),
         ):
             self.mem[addr] = value
@@ -412,21 +406,18 @@ class _Machine:
         self.handlers.append(self.entered(nmi))
         mpu.nmi()
         self.frames.append(mpu.sp)
-        if ram[1] & 2:
-            if not nmi:
-                for value in (mpu.a, mpu.x, mpu.y):
-                    ram[0x0100 + mpu.sp] = value
-                    mpu.sp = mpu.sp - 1 & 0xFF
-            vector = reg.RAM_NMI_VECTOR_LO if nmi else reg.RAM_IRQ_VECTOR_LO
-        else:
-            vector = reg.CPU_NMI_VECTOR if nmi else reg.CPU_IRQ_VECTOR
+        vector, saves = dispatch_vector(self.bus.bits, nmi)
+        if saves:
+            for value in (mpu.a, mpu.x, mpu.y):
+                ram[0x0100 + mpu.sp] = value
+                mpu.sp = mpu.sp - 1 & 0xFF
         mpu.pc = ram[vector] | ram[vector + 1] << 8
-        if self.handlers[-1] and self._io() and reg.VIC_BASE <= mpu.pc < _KERNAL_ROM:
+        if self.handlers[-1] and self.bus.io and mm.VIC_BASE <= mpu.pc < mm.KERNAL_BASE:
             self.opaque.add(self.handlers[-1][1])
 
     def execute(self, frames: int) -> int:
         """Run until ``frames`` frames after init first idles; return the last cycle."""
-        mpu, ram = self.mpu, self.ram
+        mpu, ram, bus = self.mpu, self.ram, self.bus
         end, nmi, due = self.max_cycles, False, None
         handlers = self.handlers
         while mpu.processorCycles < end:
@@ -442,7 +433,7 @@ class _Machine:
                 nmi = False
                 continue
             pc, sp = mpu.pc, mpu.sp
-            if len(handlers) > 1 and ram[1] & 2 and pc >= _KERNAL_ROM:
+            if len(handlers) > 1 and bus.bits & mm.HIRAM and pc >= mm.KERNAL_BASE:
                 mpu.pc = self.base + _IRQRET + _kernal_exit(pc)
                 continue
             brk = ram[pc] == _BRK
@@ -469,8 +460,8 @@ def _cadence(machine: _Machine, start: int, frames: int) -> Cadence:
     recurring ``opaque`` source (see :meth:`_Machine.take`) makes it unknown.
     """
     frame = machine.frame
-    ntsc = frame == reg.NTSC_CYCLES_PER_FRAME
-    clock_hz = reg.NTSC_CLOCK_HZ if ntsc else reg.PAL_CLOCK_HZ
+    ntsc = frame == mm.NTSC.cycles_per_frame
+    clock_hz = mm.video(ntsc).clock_hz
     regs, calls, recurs = Counter(), Counter(), Counter()
     for t, src, wrote, _ in machine.events:
         regs[src] |= wrote
@@ -550,10 +541,10 @@ def cadence_from_latch(latch: Optional[int], clock: Optional[str] = None) -> Cad
     if key not in ("PAL", "NTSC"):
         raise ValueError(f"clock must be 'PAL' or 'NTSC', got {clock!r}")
     ntsc = key == "NTSC"
-    clock_hz = reg.NTSC_CLOCK_HZ if ntsc else reg.PAL_CLOCK_HZ
+    clock_hz = mm.video(ntsc).clock_hz
     if latch is not None and latch >= _MIN_CIA_LATCH:
         return Cadence(latch + 1, TriggerSource.CIA_TIMER, clock_hz, latch)
-    frame = reg.NTSC_CYCLES_PER_FRAME if ntsc else reg.PAL_CYCLES_PER_FRAME
+    frame = mm.video(ntsc).cycles_per_frame
     source = TriggerSource.NTSC_VIDEO if ntsc else TriggerSource.PAL_VIDEO
     return Cadence(frame, source, clock_hz)
 
