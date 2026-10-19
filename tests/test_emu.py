@@ -2,7 +2,7 @@
 
 import pytest
 
-from pysidtracker import observe_data_access, run_to_rts, wire_mpu
+from pysidtracker import observe_data_access, run_to_rts, set_iomap, wire_mpu
 from pysidtracker.emu import SidReads
 from pysidtracker.errors import EmulatorUnavailable
 
@@ -279,6 +279,18 @@ def test_a_rebanked_tune_reads_the_ram_behind_a_rom():
     mem[1] = 0x05  # re-bank: H-IRAM off, so the RAM behind KERNAL is reachable
     assert mem[0xE000] == 0x5A  # the tune's write lands in the shadow RAM
     assert (mem[0], mem[1]) == (0x2F, 0x15)  # the port reads input bit 4 high
+
+
+def test_set_iomap_switches_the_play_map():
+    """The driver's post-init re-bank exposes the RAM a play's data lives in."""
+    subject = bytearray(0x10000)
+    subject[0xA000] = 0xAB  # shadow RAM a tune loads its data tables into
+    mpu, _mem = wire_mpu(subject)
+    mpu.memory[1] = 0x37  # the init's map: the BASIC ROM shadows the data
+    assert mpu.memory[0xA000] == 0
+    set_iomap(mpu, 0x36)  # the play's map: RAM behind the window
+    assert mpu.memory[0xA000] == 0xAB
+    assert mpu.memory[0xE000] == 0xEA  # KERNAL stub stays banked in
 
 
 def test_wire_mpu_reports_missing_jennings(monkeypatch):

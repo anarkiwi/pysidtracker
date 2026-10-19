@@ -164,4 +164,9 @@ def wire_mpu(
     return mpu, mem
 
 
-__all__ = ["SidReads", "observe_data_access", "wire_mpu", "run_to_rts"]
+def set_iomap(mpu, value: int) -> None:
+    """Write the C64 ``$01`` bank port on ``mpu``'s bus, remapping the ROM/RAM windows."""
+    mpu.memory[1] = value
+
+
+__all__ = ["SidReads", "observe_data_access", "wire_mpu", "run_to_rts", "set_iomap"]

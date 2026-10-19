@@ -1,14 +1,8 @@
-"""Byte-exact comparison of the jennings render against the sidtrace oracle.
+"""Byte-exact jennings-vs-sidtrace oracle renders (the ``oracle`` marker).
 
-Marked ``oracle``: these tests need Docker (the ``anarkiwi/sidtrace`` image) and
-network access to HVSC, so the default suite excludes them (see ``pyproject``);
-a dedicated CI job runs ``pytest -m oracle``. They are never skipped -- an
-unavailable tune or a failed oracle render fails the test rather than hiding a
-regression. HVSC ``.sid`` files are copyright works: they are downloaded to a
-cache (or a local ``$HVSC`` tree), never committed.
-
-A format package reuses this verbatim by calling ``make_oracle_fixtures`` with
-its own tune list and its player's renderer.
+Runs need Docker and HVSC (a local ``$HVSC`` tree or cache), so the default
+suite excludes them (a CI job runs ``pytest -m oracle``) and an unavailable
+tune or render fails rather than skips. ``make_oracle_fixtures`` reuses the harness.
 """
 
 import os
@@ -32,6 +26,7 @@ TUNES = {
     "sanxion": "MUSICIANS/H/Hubbard_Rob/Sanxion.sid",
     "cybernoid": "MUSICIANS/T/Tel_Jeroen/Cybernoid.sid",
     "thing_on_a_spring": "MUSICIANS/H/Hubbard_Rob/Thing_on_a_Spring.sid",
+    "into_orbit": "MUSICIANS/D/Danko_Tomas/Into_Orbit.sid",
 }
 
 

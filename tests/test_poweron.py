@@ -44,6 +44,24 @@ def test_ram_pattern_is_vagrant_moses_power_on_ram():
     assert poweron.ram_pattern() == c64.poweron_ram()
 
 
+def test_banks_follow_the_driver_iomap():
+    """The init and play bank maps are libsidplayfp's ``psiddrv::iomap``."""
+    # address windows: below BASIC, BASIC ($A000-$CFFF), I/O page, above $DFFF
+    addresses = (0x9FF0, 0xC000, 0xD000, 0xE000)
+    expected = (0x37, 0x36, 0x34, 0x35)
+    assert tuple(poweron.psid_init_bank(a) for a in addresses) == expected
+    assert tuple(poweron.psid_play_bank(a) for a in addresses) == expected
+
+
+def test_play_bank_switches_the_windows_a_play_reads():
+    """A play in BASIC reads the RAM behind the window, not the ROM (into_orbit)."""
+    address = 0xC000  # Into Orbit's play address, init at $9FF0
+    init_bank = poweron.psid_init_bank(0x9FF0)
+    play_bank = poweron.psid_play_bank(address)
+    assert init_bank == 0x37  # ROMs in for init
+    assert play_bank == 0x36  # RAM behind BASIC, KERNAL and I/O for play
+
+
 class _ReadPlayer(MemPlayer):
     """A do-nothing player used only to inspect the boot memory image."""
 
