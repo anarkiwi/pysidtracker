@@ -42,7 +42,7 @@ from .detect import (
     subtune_selection,
 )
 from .decrunch import native_decrunch
-from .emu import observe_data_access, run_to_rts, wire_mpu
+from .emu import observe_data_access, run_to_rts, set_iomap, wire_mpu
 from .errors import (
     AudioUnavailable,
     EmulatorUnavailable,
@@ -130,7 +130,13 @@ from .oracle import (
     sidtrace_grid,
 )
 from .player import MemPlayer
-from .poweron import PSID_DRIVER_CLEARED, power_on_ram, psid_init_bank, ram_pattern
+from .poweron import (
+    PSID_DRIVER_CLEARED,
+    power_on_ram,
+    psid_init_bank,
+    psid_play_bank,
+    ram_pattern,
+)
 from .provenance import (
     Insn,
     Provenance,
@@ -213,7 +219,7 @@ from .testing import (
 )
 from .trace import InitTrace, trace_init
 
-__version__ = "0.17.0"
+__version__ = "0.17.1"
 
 __all__ = [
     "AudioUnavailable",
@@ -364,6 +370,7 @@ __all__ = [
     "power_on_ram",
     "psid_image",
     "psid_init_bank",
+    "psid_play_bank",
     "psid_speed",
     "psid_songs",
     "print_info",
@@ -398,6 +405,7 @@ __all__ = [
     "s8",
     "sbc",
     "seconds_to_frames",
+    "set_iomap",
     "speed_cia",
     "sidtrace_cadence",
     "sidtrace_grid",

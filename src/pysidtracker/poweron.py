@@ -23,10 +23,7 @@ def power_on_ram() -> bytearray:
     """The PSID start-up image a player or the flat emulator boots from.
 
     The power-on RAM (:func:`ram_pattern`) with the PSID driver's ``$0000-$03FE``
-    clear (``psiddrv::install``) and the uninitialised SID register file at 0
-    (the reSID's reset state; only ``$D418`` is then seeded by the driver). A tune
-    reading uninitialised RAM reads the power-on byte, but a register it never
-    writes reads the oracle's 0 baseline, as libsidplayfp plays it.
+    clear and the uninitialised SID register file at 0, as libsidplayfp plays it.
     """
     ram = ram_pattern()
     ram[:PSID_DRIVER_CLEARED] = bytes(PSID_DRIVER_CLEARED)
@@ -34,23 +31,38 @@ def power_on_ram() -> bytearray:
     return ram
 
 
-def psid_init_bank(init_address: int) -> int:
-    """The driver's ``$01`` bank register before running ``init`` at ``init_address``.
+def _iomap(address: int) -> int:
+    """libsidplayfp ``psiddrv::iomap``: the ``$01`` map for code at ``address``.
 
-    ``psiddrv`` banks the init's own ROM space in (so a tune that reads
-    KERNAL/BASIC sees the oracle's ROMs) and the rest of the map out: ``$37`` for
-    init below BASIC, else the map for the ROM the init lives in.
+    ``$37`` (BASIC + KERNAL ROM, I/O) below BASIC, ``$36`` (KERNAL ROM, I/O) in
+    ``$A000-$CFFF``, ``$35`` (I/O only) above ``$DFFF``, ``$34`` (RAM only) in
+    ``$D000-$DFFF``.
     """
-    if init_address < 0xA000:
+    if address < 0xA000:
         return 0x37
-    if init_address < 0xD000:
+    if address < 0xD000:
         return 0x36
-    return 0x35 if init_address >= 0xE000 else 0x34
+    return 0x35 if address >= 0xE000 else 0x34
+
+
+def psid_init_bank(init_address: int) -> int:
+    """The driver's ``$01`` bank register before running ``init`` (init's ROM in)."""
+    return _iomap(init_address)
+
+
+def psid_play_bank(play_address: int) -> int:
+    """The driver's ``$01`` bank register around the play calls (play's ROM in).
+
+    ``psiddrv`` sets this around every play call, so a play in ``$A000-$CFFF``
+    reads the RAM behind the BASIC window (the tune's loaded data), not ROM.
+    """
+    return _iomap(play_address)
 
 
 __all__ = [
     "PSID_DRIVER_CLEARED",
     "power_on_ram",
     "psid_init_bank",
+    "psid_play_bank",
     "ram_pattern",
 ]

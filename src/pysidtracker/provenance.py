@@ -13,10 +13,10 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
 from vagrant_moses import memmap as mm
 
 from . import registers as reg
-from .emu import run_to_rts, wire_mpu
+from .emu import run_to_rts, set_iomap, wire_mpu
 from .errors import EmulatorUnavailable, SidParseError
 from .image import SidImage
-from .poweron import power_on_ram, psid_init_bank
+from .poweron import power_on_ram, psid_init_bank, psid_play_bank
 
 _W_A: FrozenSet[str] = frozenset(
     (
@@ -376,6 +376,7 @@ def trace_frames(
         subject, False, reg.sid_model_for_flags(image.header.flags), ntsc
     )
     run_to_rts(mpu, mem, init, 0, max_cycles)
+    set_iomap(mpu, psid_play_bank(play))
 
     tracer = _PlaycallTracer(subject, mem, mpu)
     frames, writes = [], []

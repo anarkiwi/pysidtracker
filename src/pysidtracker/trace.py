@@ -26,9 +26,9 @@ from typing import Dict, Optional, Set
 from vagrant_moses import memmap as mm
 
 from . import registers as reg
-from .emu import run_to_rts, wire_mpu
+from .emu import run_to_rts, set_iomap, wire_mpu
 from .errors import SidParseError
-from .poweron import psid_init_bank
+from .poweron import psid_init_bank, psid_play_bank
 from .registers import sid_model_for_flags
 from .image import SidImage
 
@@ -60,10 +60,8 @@ class InitTrace:
         ``$D011`` bit-7 high bit when that was written too).
       registers_touched: every watched address that received a write.
       sid_writes: last value written to each SID register address touched.
-      cia1_latch_rewritten: the CIA #1 Timer-A latch was rewritten to a value
-        *different* from what init left, during the observed play calls (the
-        tune reschedules its own cadence -- a dynamic/variable-tempo player).
-        ``None`` when unknown (no play calls) or unchanged.
+      cia1_latch_rewritten: a play call's new value for the CIA #1 Timer-A
+        latch, or ``None`` when no play call wrote one.
       cia2_latch_rewritten: same for CIA #2 Timer-A.
       cia1_control: last value written to CIA #1 control register A ($DC0E),
         or ``None`` if unwritten (KERNAL default: Timer-A continuous + running).
@@ -170,6 +168,7 @@ def trace_init(
 
     play_address = image.header.play_address
     if play_address:
+        set_iomap(mpu, psid_play_bank(play_address))
         for _ in range(play_calls):
             run_to_rts(mpu, mem, play_address, 0, max_cycles)
             play_cia1 = _word(writes, mm.CIA1_TIMER_A_LO, mm.CIA1_TIMER_A_HI)

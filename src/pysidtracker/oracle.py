@@ -36,11 +36,11 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple, 
 from vagrant_moses import memmap as mm
 
 from . import registers as reg
-from .emu import run_to_rts, wire_mpu
+from .emu import run_to_rts, set_iomap, wire_mpu
 from .errors import SidError, SidParseError
 from .image import SidImage
 from .player import MemPlayer
-from .poweron import power_on_ram, psid_init_bank
+from .poweron import power_on_ram, psid_init_bank, psid_play_bank
 
 # preframr-sidtrace ``.sidwr.bin`` record: (clock, addr, reg, val).
 _SIDWR_REC = struct.Struct("<qHBB")
@@ -124,6 +124,7 @@ def register_grid(
     run_to_rts(mpu, mem, init_address, subtune, max_cycles)
 
     play_address = image.header.play_address or init_address
+    set_iomap(mpu, psid_play_bank(play_address))  # the driver's map around play calls
     rows: List[List[int]] = []
     for _ in range(nframes):
         run_to_rts(mpu, mem, play_address, 0, max_cycles)
@@ -193,6 +194,7 @@ class EmuPlayer(MemPlayer):
         self._mem[1] = psid_init_bank(self._init_addr)
         self._mpu, self._obs = wire_mpu(self._mem, self._illegal, self._sid_model)
         run_to_rts(self._mpu, self._obs, self._init_addr, subtune, self._max_cycles)
+        set_iomap(self._mpu, psid_play_bank(self._play_addr))
         self._due = self._mpu.processorCycles
 
     def _frame(self) -> None:
