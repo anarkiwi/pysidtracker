@@ -61,7 +61,8 @@ API.
   `assert_oracle_match` fail with the `whydiff` explanation.
 - `whydiff` — why a `MemPlayer` render diverges: the player's traced Python lines
   (values read, branches, assignments) beside the jennings 6502 history, with each
-  side's backward dataflow of the diverging value (`python -m pysidtracker.whydiff`,
+  side's backward dataflow of the diverging value, and the state behind it chased to
+  the frame it first parted (`python -m pysidtracker.whydiff`,
   [docs/whydiff.md](docs/whydiff.md)).
 - `survey` — whole-song HVSC survey and failure triage of any format's renderer
   against the `sidtrace` oracle, and the same compare for single native files
