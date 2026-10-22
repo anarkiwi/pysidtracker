@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.20.0"
+version = "0.20.1"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -31,18 +31,19 @@ classifiers = [
 # audio is core functionality. vagrant-moses: the C64 machine model -- memory map,
 # banked bus, ROMs, the cycle-exact machine the interrupt host runs on, the KERNAL
 # host and release-media readers; its cpu extra is the jennings-backed flat host.
-# numpy: sample buffers and the image anchor scan.
+# numpy: sample buffers and the image anchor scan. tqdm: the whydiff CLI's progress.
 dependencies = [
   "jennings>=0.2.0",
   "pydexomizer>=0.1",
   "pyresidfp>=0.17",
   "vagrant-moses[cpu]>=0.4.0",
   "numpy>=1.23",
+  "tqdm>=4",
 ]
 
 [project.optional-dependencies]
 # The SIDId scanner CLI and the whole-song HVSC oracle survey.
-survey = ["tqdm>=4", "zstandard>=0.21"]
+survey = ["zstandard>=0.21"]
 dev = [
     "black>=24",
     "pylint>=3",
