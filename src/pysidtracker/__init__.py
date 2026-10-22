@@ -220,9 +220,18 @@ from .testing import (
     resolve_tune,
 )
 from .trace import InitTrace, trace_init
-from .whydiff import Divergence, PyTrace, cpu_history, explain_divergence
+from .whydiff import (
+    Divergence,
+    PyTrace,
+    Side,
+    cpu_history,
+    cpu_side,
+    explain_cell,
+    explain_divergence,
+    python_side,
+)
 
-__version__ = "0.18.0"
+__version__ = "0.19.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -435,4 +444,8 @@ __all__ = [
     "assert_oracle_match",
     "cpu_history",
     "explain_divergence",
+    "Side",
+    "cpu_side",
+    "explain_cell",
+    "python_side",
 ]

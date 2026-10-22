@@ -1,5 +1,6 @@
 """Tests for whydiff: the Python line trace, the 6502 history, and their dataflow."""
 
+import inspect
 import json
 import sys
 
@@ -53,21 +54,32 @@ def _toy(_data):
 
 def test_explains_the_dropped_carry():
     why = whydiff.explain_divergence(SID, _toy, name="toy")
-    assert (why.frame, why.register, why.lead, why.cpu_lead) == (2, 0, 0, 0)
-    assert (why.render_value, why.reference_value, why.cpu_value) == (0x10, 0x11, 0x11)
-    assert why.cpu_agrees
-    keep, live = why.py_slice()
-    lines = [why.py[i] for i in keep]
+    py, cpu = why.left, why.right
+    assert (why.frame, why.register, py.frame, cpu.frame) == (2, 0, 2, 2)
+    assert why.values == {"python": 0x10, "6502": 0x11, "reference": 0x11}
+    assert "jennings agrees with the reference to here" in why.notes
+    lines = [py.events[i] for i in py.keep]
     cond = next(e for e in lines if e.text.startswith("carry ="))
     assert cond.sets == [("carry", "False")]
     assert ("self.cnt", "2") in cond.reads
-    assert live == {"self.cnt": "2", "self.threshold": "3"}
-    texts = [why.cpu[i].text for i in why.cpu_dataflow()[0]]
-    assert any(t.startswith("CMP") for t in texts)
-    assert any(t.startswith("ADC") for t in texts)
-    assert texts[-1].startswith("STA")
-    cnt = LABELS["cnt"]
-    assert why.cpu_dataflow()[1][cnt] == 2
+    assert py.live == {"self.cnt": "2", "self.threshold": "3"}
+    assert py.events[py.root].text.startswith("self._mem[addr & 0xFFFF] = val")
+    assert not any(py.events[i].kind == "return" for i in py.keep)  # _wr's own return
+    texts = [cpu.events[i].text for i in cpu.keep]
+    assert [t.split()[0] for t in texts] == [
+        "LDA",
+        "PHA",
+        "LDA",
+        "CMP",
+        "PLA",
+        "ADC",
+        "STA",
+    ]
+    assert cpu.live == {
+        "SP": "entry",
+        f"${LABELS['cnt']:04X}": "$02",
+        f"${LABELS['tbl']:04X}": "$10",
+    }
     report = why.text(80)
     assert "WHY" in report and "CMP #$02" in report and "FULL HISTORIES" in report
     assert ">>" in report and "** SID $00 v1_freq_lo = $10" in report
@@ -76,8 +88,8 @@ def test_explains_the_dropped_carry():
 def test_agreement_is_none_and_slices_skip_unwritten_registers():
     assert whydiff.explain_divergence(SID, lambda d: Faithful(b"", 0)) is None
     why = whydiff.explain_divergence(SID, _toy, frame=1, register=4)
-    assert why.py_slice() == ([], {}) and why.cpu_dataflow() == ([], {})
-    assert "(register not written)" in why.text()
+    assert why.left.keep == why.right.keep == [] and why.left.root is None
+    assert "(register not stored this frame)" in why.text()
     picked = whydiff.explain_divergence(SID, _toy, frame=2)
     assert picked.register == 0
 
@@ -85,8 +97,9 @@ def test_agreement_is_none_and_slices_skip_unwritten_registers():
 def test_summary_is_json():
     why = whydiff.explain_divergence(SID, _toy)
     out = json.loads(json.dumps(why.summary()))
-    assert out["register_name"] == "v1_freq_lo" and out["py_slice"]
-    assert out["cpu"][out["cpu_slice"][-1]]["sid_writes"] == [[0, 0x11]]
+    assert out["register_name"] == "v1_freq_lo" and out["left"]["slice"]
+    right = out["right"]
+    assert right["events"][right["slice"][-1]]["sid_writes"] == [[0, 0x11]]
 
 
 def test_assert_matches_reports(tmp_path):
@@ -158,7 +171,7 @@ def test_oracle_fixture_with_player_explains(pytester):
         """)
     result = pytester.runpytest_inprocess("-p", "no:cacheprovider")
     result.assert_outcomes(failed=1)
-    result.stdout.fnmatch_lines(["*WHY: the lines and instructions*"])
+    result.stdout.fnmatch_lines(["*WHY: the steps the diverging value came from*"])
     assert (pytester.path / "why" / "A_toy.txt").exists()
 
 
@@ -209,12 +222,80 @@ def test_pytrace_records_lines_branches_values_and_calls():
     assert any(ev[i].text == "total -= 1" for i in keep)
 
 
-def test_trace_frame_skips_untraced_frames():
-    events = whydiff.trace_frame(lambda: Toy(b"", 0), 2)
+def test_python_side_skips_untraced_frames():
+    side = whydiff.python_side(lambda: Toy(b"", 0), 2, 0, progress=True)
+    events = side.events
     writes = [e for e in events if e.kind == "write"]
     assert [(e.register, e.value) for e in writes] == [(0, 0x10)]
-    assert writes[0].deps and events[writes[0].deps[0]].text.startswith("self._wr")
-    assert all(e.path == __file__ for e in events if e.kind == "line")
+    assert events[writes[0].site].text.startswith("self._wr")
+    assert {e.func for e in events if e.kind == "call"} >= {
+        "MemPlayer.play_frame",
+        "Toy._frame",
+    }
+
+
+# A generic player in the style of a code-generating VM: no MemPlayer, its register file
+# a list filled by slice assignment in exec'd code.
+GENERIC = (
+    "def tick(p):\n"
+    "    lift = 1 if p.n >= p.at else 0\n"
+    "    out = list(p.regs)\n"
+    "    out[0:2] = [0x10 + lift, 0]\n"
+    "    p.regs = out\n"
+    "    p.n += 1\n"
+)
+GENERIC_NAME = "<generic tick>"
+
+
+class Generic:
+    """Plays :data:`GENERIC`; ``at`` is the tick its carry first lifts the register."""
+
+    def __init__(self, at):
+        self.n, self.at, self.regs = 0, at, [0] * 25
+        space = {}
+        exec(compile(GENERIC, GENERIC_NAME, "exec"), space)  # pylint: disable=exec-used
+        self._tick = space["tick"]
+
+    def play_frame(self):
+        self._tick(self)
+
+    def render_grid(self, n):
+        rows = []
+        for _ in range(n):
+            self.play_frame()
+            rows.append(list(self.regs))
+        return rows
+
+
+def test_two_python_players_side_by_side():
+    def side(at, label):
+        return whydiff.python_side(
+            lambda: Generic(at),
+            2,
+            0,
+            label=label,
+            cell=lambda p, r: (p.regs, r),
+            roots=[GENERIC_NAME],
+            sources={GENERIC_NAME: GENERIC},
+        )
+
+    generic, native = side(3, "generic"), side(2, "native")
+    grids = (Generic(3).render_grid(6), Generic(2).render_grid(6))
+    why = whydiff.explain_cell(generic, native, grids, frame=2, register=0, name="toy")
+    assert why.values == {"generic": 0x10, "native": 0x11}
+    for s, lift in ((generic, "0"), (native, "1")):
+        texts = [s.events[i].text for i in s.keep]
+        assert texts == [
+            "lift = 1 if p.n >= p.at else 0",
+            "out[0:2] = [0x10 + lift, 0]",
+        ]
+        assert s.events[s.keep[0]].sets == [("lift", lift)]
+        assert s.live == {
+            "p.n": "2",
+            "p.at": generic.live["p.at"] if s is generic else "2",
+        }
+    text = why.text(70)
+    assert text.count("GENERIC") == 2 and "out[0:2] = [0x10 + lift, 0]" in text
 
 
 def test_repr_and_line_formatting():
@@ -384,4 +465,7 @@ def test_statement_index(tmp_path):
     bad = tmp_path / "bad.py"
     bad.write_text("def (:\n")
     assert whydiff._index(str(bad)) == {}  # pylint: disable=protected-access
-    assert whydiff.player_roots(Toy(b"", 0)) == [str(__import__("tests").__path__[0])]
+    roots = whydiff.player_roots(Toy(b"", 0))
+    assert roots == sorted(
+        [str(__import__("tests").__path__[0]), inspect.getsourcefile(MemPlayer)]
+    )
