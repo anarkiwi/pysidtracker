@@ -39,8 +39,8 @@ API.
 - `playroutine_cadence` / `Cadence` / `TriggerSource` — derive the play-routine
   cadence (raster calls per frame, CIA/NMI timer period) from how the tune
   programs its interrupts in sidplayfp's PSID driver environment
-  ([docs/cadence.md](docs/cadence.md)); `cadence_check` validates it against
-  sidtrace interrupt rows.
+  ([docs/cadence.md](docs/cadence.md)); `cadence_info` is its survey `info`
+  fields and `cadence_check` validates it against sidtrace interrupt rows.
 - `irqhost` — `InterruptHost` / `InterruptPlayer` boot and run a PSID or RSID as
   the sidtrace oracle's sidplayfp does, on vagrant-moses' cycle-exact `Machine`
   with reSIDfp SID devices, its trace identical to the oracle's;
@@ -55,8 +55,9 @@ API.
   `aligned_match`, and the `sidtrace` (sidplayfp) oracle bridge — `run_sidtrace`,
   `read_sidtrace`, `sidtrace_cadence`, `sidtrace_grid`.
 - `testing` — HVSC tune fetch/resolve for test suites (`fetch_tune`,
-  `resolve_tune`, `make_tune_fixtures`), and `make_oracle_fixtures` /
-  `oracle_grid` — a reusable byte-exact player-vs-`sidtrace`-oracle test
+  `resolve_tune`, `make_tune_fixtures`), SHA-256-pinned release downloads
+  (`fetch_verified`, `fetch_archive_member` for one zip/tar member), and
+  `make_oracle_fixtures` / `oracle_grid` — a reusable byte-exact player-vs-`sidtrace`-oracle test
   ([docs/oracle-testing.md](docs/oracle-testing.md)); `assert_matches` /
   `assert_oracle_match` fail with the `whydiff` explanation.
 - `whydiff` — why a `MemPlayer` render diverges: the player's traced Python lines
@@ -65,8 +66,9 @@ API.
   the frame it first parted (`python -m pysidtracker.whydiff`,
   [docs/whydiff.md](docs/whydiff.md)).
 - `survey` — whole-song HVSC survey and failure triage of any format's renderer
-  against the `sidtrace` oracle, and the same compare for single native files
-  (`survey file`, bare PRGs wrapped); `sidid` — pure-Python SIDId with the bundled
+  against the `sidtrace` oracle, an oracle-free decompile scope check (`scope`),
+  and the same compare for single native files (`survey file`, bare PRGs
+  wrapped); `sidid` — pure-Python SIDId with the bundled
   `sidid.cfg` (`pysidid` CLI). `pip install "pysidtracker[survey]"`,
   [docs/survey.md](docs/survey.md).
 - `poweron` — the libsidplayfp power-on C64 RAM a PSID boots onto: `ram_pattern`

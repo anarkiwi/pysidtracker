@@ -20,7 +20,13 @@ from .audio import (
     seconds_to_frames,
 )
 from .base import BaseSidParser
-from .cadence import Cadence, TriggerSource, cadence_from_latch, playroutine_cadence
+from .cadence import (
+    Cadence,
+    TriggerSource,
+    cadence_from_latch,
+    cadence_info,
+    playroutine_cadence,
+)
 from .cli import add_reglog_command, add_wav_command, print_info, run_cli
 from .codescan import CodePattern, Match, find_code_all, find_code_first
 from .disasm import disassemble, entry_labels, image_after_init
@@ -212,9 +218,11 @@ from .testing import (
     assert_matches,
     assert_oracle_match,
     default_tune_cache,
+    fetch_archive_member,
     fetch_disk,
     fetch_prgs,
     fetch_tune,
+    fetch_verified,
     gather_tune_relpaths,
     make_oracle_fixtures,
     make_tune_fixtures,
@@ -234,7 +242,7 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.23.0"
+__version__ = "0.24.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -337,6 +345,7 @@ __all__ = [
     "attack_decay",
     "byte_range",
     "cadence_from_latch",
+    "cadence_info",
     "host_cadence",
     "InterruptHost",
     "InterruptPlayer",
@@ -356,10 +365,12 @@ __all__ = [
     "editor_io",
     "encode_cstr",
     "entry_labels",
+    "fetch_archive_member",
     "fetch_disk",
     "fetch_prgs",
     "fetch_rom",
     "fetch_tune",
+    "fetch_verified",
     "find_code_all",
     "find_code_first",
     "find_register_stores",

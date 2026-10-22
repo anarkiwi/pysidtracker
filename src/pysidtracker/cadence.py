@@ -18,6 +18,7 @@ from vagrant_moses.c64 import dispatch_vector
 from . import registers as reg
 from .emu import access_cycle, wire_mpu
 from .errors import EmulatorUnavailable, SidParseError
+from .header import RSID_MAGIC
 from .image import SidImage
 from .poweron import psid_init_bank
 
@@ -549,10 +550,27 @@ def cadence_from_latch(latch: Optional[int], clock: Optional[str] = None) -> Cad
     return Cadence(frame, source, clock_hz)
 
 
+def cadence_info(data: bytes, song: int = 1) -> dict:
+    """The play-routine build a survey renderer reports for 1-based ``song`` of ``data``.
+
+    ``rsid`` (an RSID container), ``trigger`` (the :class:`TriggerSource` value, or
+    ``None``), ``speed`` (play calls per PAL frame, rounded) and ``dynamic`` from
+    :func:`playroutine_cadence`, so ``survey triage`` breaks exact rates down by them.
+    """
+    cadence = playroutine_cadence(data, subtune=song - 1)
+    return {
+        "rsid": bytes(data[:4]) == RSID_MAGIC,
+        "trigger": cadence.source and cadence.source.value,
+        "speed": round(mm.PAL.cycles_per_frame / cadence.cycles_per_call),
+        "dynamic": cadence.dynamic,
+    }
+
+
 __all__ = [
     "TriggerSource",
     "Cadence",
     "playroutine_cadence",
     "cadence_from_latch",
+    "cadence_info",
     "EmulatorUnavailable",
 ]

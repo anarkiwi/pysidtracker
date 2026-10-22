@@ -10,6 +10,9 @@ mirror" logic. This module is that shared core:
   atomically.
 * :func:`resolve_tune` -- local HVSC tree (``$HVSC``) first, then the cache,
   then fetch; ``None`` only when genuinely unreachable.
+* :func:`fetch_verified` / :func:`fetch_archive_member` -- a SHA-256-pinned
+  download, or one SHA-256-pinned member of a pinned zip/tar release archive,
+  cached while it verifies (copyright fixtures from an upstream release).
 * :func:`make_tune_fixtures` -- a pytest fixture factory for parametrized
   ``tune_id`` / ``tune_path`` fixtures (pytest is imported lazily, so importing
   this module without pytest still works).
@@ -21,16 +24,20 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fcntl
+import hashlib
+import http.client
 import io
 import os
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, List, Optional
 
 from .d64 import D64File, read_d64
@@ -45,6 +52,8 @@ from .oracle import (
 
 # Public HVSC mirror. Override with ``$HVSC_MIRROR``.
 DEFAULT_MIRROR = "https://hvsc.brona.dk/HVSC/C64Music"
+# Retried download failures (an HTTPError other than 404 is a URLError).
+_TRANSIENT = (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException)
 
 
 def default_tune_cache(root=None) -> Path:
@@ -141,7 +150,7 @@ def fetch_tune(
             if exc.code == 404:
                 raise TuneFetchError(f"{relpath}: not found on mirror") from exc
             last_err = exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except _TRANSIENT as exc:
             last_err = exc
         if attempt + 1 < retries:
             time.sleep(min(2**attempt, 5))
@@ -151,22 +160,92 @@ def fetch_tune(
 
 
 def _download(url: str, *, retries: int = 4) -> bytes:
-    """Download ``url``, retrying transient failures with exponential backoff."""
+    """Download ``url``, retrying transient failures with exponential backoff.
+
+    An empty body is transient: a throttling server (CSDB) answers 200 with none.
+    """
     req = urllib.request.Request(url, headers={"User-Agent": "pysidtracker/fetch"})
     last_err = None
     for attempt in range(retries):
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310
-                return resp.read()
+                data = resp.read()
+            if data:
+                return data
+            last_err = "an empty body"
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 raise TuneFetchError(f"{url}: not found") from exc
             last_err = exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except _TRANSIENT as exc:
             last_err = exc
         if attempt + 1 < retries:
             time.sleep(min(2**attempt, 5))
     raise TuneFetchError(f"{url}: unreachable after {retries} attempts ({last_err})")
+
+
+def _sha256_file(path: Path) -> Optional[str]:
+    """The SHA-256 hex digest of ``path``, or ``None`` when it is not a file."""
+    if not path.is_file():
+        return None
+    with open(path, "rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
+
+
+def _verified(data: bytes, sha256: str, what: str) -> bytes:
+    """``data``, raising :class:`TuneFetchError` unless its SHA-256 is ``sha256``."""
+    got = hashlib.sha256(data).hexdigest()
+    if got != sha256:
+        raise TuneFetchError(f"{what}: SHA-256 {got}, expected {sha256}")
+    return data
+
+
+def fetch_verified(url: str, sha256: str, *, cache_dir, name=None) -> Path:
+    """``url`` cached as ``cache_dir/name`` (default the URL's file name).
+
+    A cached copy is reused while its SHA-256 is ``sha256``; otherwise ``url`` is
+    downloaded (retrying transient failures), verified and written atomically.
+    Concurrent callers (xdist workers) serialise on a lock beside the file, so
+    one downloads and the rest reuse its copy.
+    """
+    dest = Path(cache_dir) / (
+        name or PurePosixPath(urllib.parse.urlparse(url).path).name
+    )
+    if _sha256_file(dest) == sha256:
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest.with_name(f".{dest.name}.lock"), "w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if _sha256_file(dest) != sha256:
+            _atomic_write(dest, _verified(_download(url), sha256, url))
+    return dest
+
+
+def fetch_archive_member(
+    url: str, sha256: str, member: str, member_sha256: str, *, cache_dir, name=None
+) -> Path:
+    """``member`` of the zip or tar archive at ``url``, cached as ``cache_dir/name``.
+
+    ``name`` defaults to the member's file name. The archive is
+    :func:`fetch_verified` against ``sha256`` and the member against
+    ``member_sha256``; a cached member that verifies is returned without the
+    archive.
+    """
+    dest = Path(cache_dir) / (name or PurePosixPath(member).name)
+    if _sha256_file(dest) == member_sha256:
+        return dest
+    archive = fetch_verified(url, sha256, cache_dir=cache_dir)
+    if zipfile.is_zipfile(archive):
+        with zipfile.ZipFile(archive) as zf:
+            data = zf.read(member)
+    else:
+        with tarfile.open(archive) as tf:
+            src = tf.extractfile(member)
+            if src is None:
+                raise TuneFetchError(f"{member}: not a regular file in {archive.name}")
+            data = src.read()
+    _atomic_write(dest, _verified(data, member_sha256, member))
+    return dest
 
 
 def _d64_from_zip(blob: bytes, member: Optional[str]) -> bytes:
@@ -303,17 +382,18 @@ def oracle_grid(
     reg_count: int = 25,
     cycles_per_frame: Optional[int] = None,
     force: bool = False,
-    song: int = 1,
+    song: Optional[int] = None,
 ):
-    """Per-frame reference grid for ``tune_path`` (1-based ``song``) from the sidtrace oracle.
+    """Per-frame reference grid for ``tune_path`` from the sidtrace oracle.
 
-    The CSV is cached at ``oracle_cache/<stem>.csv.zst`` (``<stem>_<song>`` past
-    song 1) while present (``force`` re-renders). ``cycles_per_frame`` fixes the
-    cadence. Returns the first ``frames`` rows (all when ``None``).
+    ``song`` is 1-based; ``None`` plays the header's start song. The CSV is
+    cached at ``oracle_cache/<stem>.csv.zst`` (``<stem>_<song>`` for a given
+    ``song``) while present (``force`` re-renders). ``cycles_per_frame`` fixes
+    the cadence. Returns the first ``frames`` rows (all when ``None``).
     """
     tune_path = Path(tune_path)
-    stem = tune_path.stem if song == 1 else f"{tune_path.stem}_{song}"
-    extra = {} if song == 1 else {"song": song}
+    stem = tune_path.stem if song is None else f"{tune_path.stem}_{song}"
+    extra = {} if song is None else {"song": song}
     csv_path = Path(oracle_cache) / f"{stem}.csv.zst"
     rows = cached_sidtrace(
         tune_path, csv_path, force=force, seconds=seconds, image=image, **extra
