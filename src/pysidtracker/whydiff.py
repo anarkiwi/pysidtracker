@@ -1289,16 +1289,17 @@ def explain_state(why: "Divergence", depth: int = 4) -> Optional[StateOnset]:
             partner = (_loc(addr), addr, ram[:, addr].astype(np.int64))
         else:
             same, agree = lh[0, i] == rh[0], (lh[:, [i]] == rh).sum(0)
-            j = max(
-                range(len(pool)),
-                key=lambda j: (
+            ranks = [
+                (
                     same[j],
                     first_break(lh[:, i], rh[:, j]),
                     pool[j][0] == name,
                     agree[j],
                     pool[j][2],
-                ),
-            )
+                )
+                for j in range(len(pool))
+            ]
+            j = max(range(len(pool)), key=ranks.__getitem__)
             partner = (pool[j][0], pool[j][1], rfull[:, j])
         partners.append(partner)
         cut = first_break(lh[:, i], partner[2][b.frame - n :])
