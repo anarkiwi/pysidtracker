@@ -127,6 +127,11 @@ player's own package (`player_roots`). For each executed statement it records:
 Only side-effect-free expressions are evaluated: chains with calls, lambdas or
 comprehensions are not.
 
+An attribute named at run time is the same storage as the static one:
+`setattr(o, name, v)`, `delattr(o, name)`, `vars(o)[name] = v`, `o.__dict__[name] = v`
+and `del o.attr` store `o.<name>`, with `name` evaluated in the frame after the
+statement, and `getattr(o, name)` reads it.
+
 Each read is linked to the event that last stored to the same storage: a local of
 that call, a global, an attribute of that exact object, or that item (or each item of
 a slice) of that container, falling back to the container's own store when that store
