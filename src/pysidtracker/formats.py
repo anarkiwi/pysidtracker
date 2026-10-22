@@ -138,9 +138,8 @@ def find_format(
     else:
         fmt = next((f for f in found if f.name == name), None)
     if fmt is None:
-        raise SidParseError(
-            f"no installed pysidtracker format {name!r} plays this tune"
-        )
+        what = "recognises" if name == "auto" else f"named {name!r} plays"
+        raise SidParseError(f"no installed pysidtracker format {what} this tune")
     return fmt
 
 
