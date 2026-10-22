@@ -13,6 +13,7 @@ import enum
 import importlib
 import inspect
 import json
+import keyword
 import linecache
 import numbers
 import os
@@ -63,6 +64,54 @@ def _compile(node) -> types.CodeType:
     return compile(ast.unparse(node), "<whydiff>", "eval")
 
 
+def _dynamic(node, funcs=("getattr",)) -> Optional[Tuple[ast.expr, ast.expr]]:
+    """``(object, name)`` of an attribute named at run time: a call of one of ``funcs``
+    (``getattr``, ``setattr``, ``delattr``) on pure arguments, ``vars(o)[n]`` or
+    ``o.__dict__[n]``; else None."""
+    obj = None
+    if isinstance(node, ast.Call):
+        func, args = node.func, node.args
+        if isinstance(func, ast.Name) and func.id in funcs and not node.keywords:
+            if len(args) >= 2 and not any(isinstance(a, ast.Starred) for a in args):
+                obj, name = args[:2]
+    elif isinstance(node, ast.Subscript) and not isinstance(node.slice, ast.Slice):
+        base, name = node.value, node.slice
+        if isinstance(base, ast.Attribute) and base.attr == "__dict__":
+            obj = base.value
+        elif (
+            isinstance(base, ast.Call)
+            and isinstance(base.func, ast.Name)
+            and base.func.id == "vars"
+            and len(base.args) == 1
+            and not base.keywords
+        ):
+            obj = base.args[0]
+    if obj is None or isinstance(obj, ast.Starred) or not (_pure(obj) and _pure(name)):
+        return None
+    return obj, name
+
+
+def _attr(obj, name) -> Tuple[str, types.CodeType, tuple]:
+    """:func:`_expr` of ``getattr(obj, name)``, keyed as the attribute ``obj.<name>``."""
+    text = name.value if isinstance(name, ast.Constant) else None
+    if isinstance(text, str) and text.isidentifier() and not keyword.iskeyword(text):
+        return _expr(ast.Attribute(obj, text, ast.Load()))
+    node = ast.Call(ast.Name("getattr", ast.Load()), [obj, name], [])
+    return ast.unparse(node), _compile(node), ("A", _compile(obj), _compile(name))
+
+
+def _setters(node):
+    """The ``setattr``/``delattr`` calls a statement makes in its own scope."""
+    if isinstance(node, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp)):
+        return
+    if isinstance(node, ast.GeneratorExp):
+        return
+    if isinstance(node, ast.Call) and _dynamic(node, ("setattr", "delattr")):
+        yield node
+    for child in ast.iter_child_nodes(node):
+        yield from _setters(child)
+
+
 def _expr(node) -> Tuple[str, types.CodeType, tuple]:
     """``(text, code, key spec)`` of a pure name/attribute/subscript chain."""
     if isinstance(node, ast.Name):
@@ -92,6 +141,12 @@ def _reads(nodes) -> List[Tuple[str, types.CodeType, tuple]]:
     out: Dict[str, tuple] = {}
 
     def visit(node, store=False):
+        dyn = None if store else _dynamic(node)
+        if dyn:
+            got = _attr(*dyn)
+            out.setdefault(got[0], got)
+            visit(dyn[1])
+            return
         chain = isinstance(node, (ast.Name, ast.Attribute, ast.Subscript))
         if chain and not store and _pure(node):
             got = _expr(node)
@@ -124,8 +179,11 @@ def _targets(nodes) -> List[Tuple[str, types.CodeType, tuple]]:
     """The assignment targets of ``nodes``, tuples flattened, as load expressions."""
     out = []
     for node in nodes:
+        dyn = _dynamic(node, ("setattr", "delattr"))
         if isinstance(node, (ast.Tuple, ast.List)):
             out += _targets(node.elts)
+        elif dyn:
+            out.append(_attr(*dyn))
         elif isinstance(node, (ast.Name, ast.Attribute, ast.Subscript)) and _pure(node):
             out.append(_expr(node))
     return out
@@ -175,6 +233,10 @@ def _header(node):
             reads, sets = [(node.value, False), (node.target, True)], [node.target]
         elif isinstance(node, ast.Assert):
             cond = node.test
+        elif isinstance(node, ast.Delete):
+            reads = [(t, True) for t in node.targets]
+            sets = [t for t in node.targets if not isinstance(t, ast.Name)]
+        sets = [*sets, *_setters(node)]
     return end, reads, cond, sets
 
 
@@ -364,7 +426,12 @@ class PyTrace:
             base = eval(spec[1], frame.f_globals, local)  # pylint: disable=eval-used
             self.objects[id(base)] = base
             if spec[0] == "A":
-                return [(id(base), spec[2])]
+                attr = spec[2]
+                if isinstance(attr, types.CodeType):
+                    attr = eval(
+                        attr, frame.f_globals, local
+                    )  # pylint: disable=eval-used
+                return [(id(base), attr)] if isinstance(attr, str) else []
             item = eval(spec[2], frame.f_globals, local)  # pylint: disable=eval-used
             if spec[0] == "Z":
                 return [(id(base), i) for i in range(*item.indices(len(base)))]
@@ -373,14 +440,19 @@ class PyTrace:
         except Exception:  # pylint: disable=broad-except
             return []
 
-    def _eval(self, frame, exprs):
-        """``(text, value text, keys, container keys, scalar)`` of each chain that evaluates."""
+    def _eval(self, frame, exprs, unset: bool = False):
+        """``(text, value text, keys, container keys, scalar)`` of each chain that evaluates;
+        with ``unset``, one that does not (a deleted store) as ``<unset>``."""
         out = []
         local = frame.f_locals
         for text, code, spec in exprs:
             try:
                 value = eval(code, frame.f_globals, local)  # pylint: disable=eval-used
             except Exception:  # pylint: disable=broad-except
+                if unset:
+                    out.append(
+                        (text, "<unset>", self._keys(frame, spec, local), [], True, "")
+                    )
                 continue
             if not isinstance(value, _HIDDEN):
                 held = (
@@ -418,7 +490,7 @@ class PyTrace:
             return None
         idx, stmt = held
         if stmt.sets:
-            got = self._eval(frame, stmt.sets)
+            got = self._eval(frame, stmt.sets, unset=True)
             self.events[idx].sets = [(t, v) for t, v, *_ in got]
             for _, _, own, *_ in got:
                 for key in own:

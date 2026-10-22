@@ -711,3 +711,117 @@ def test_a_list_member_pairs_with_its_strided_cell():
     ram[:, 0x100], ram[:, 0x107] = [1, 0, 1, 0], [0, 1, 0, 1]
     sib = np.array([[1, 0, 0], [0, 1, 0], [1, 0, 0], [0, 1, 0]])
     assert whydiff.fit_family(sib, 2, ram, [0x10E, 0x200]) == 0x10E
+
+
+class Named:
+    """A generic player whose commands set a voice's registers by name, as a document
+    player's ``!ad``/``!sr`` do, and whose register file reads them back."""
+
+    def __init__(self):
+        self.voice = SimpleNamespace(ad=0, sr=0, wave=0)
+        self.regs = [0] * 7
+        self.level, self.tick = 0x40, 0
+        self.script = {1: [("ad", 0x0A)], 2: [("sr", 3), ("wave", 1)]}
+
+    def _command(self, key, value):
+        level = self.level + value
+        setattr(self.voice, key, level & 0xFF)
+
+    def play_frame(self):
+        for key, value in self.script.get(self.tick, ()):
+            if key == "wave":
+                vars(self.voice)[key] = value
+                self.voice.__dict__["wave"] += getattr(self.voice, key)
+            else:
+                self._command(key, value)
+        self.regs[5] = self.voice.ad
+        self.regs[6] = getattr(self.voice, "sr")
+        self.regs[4] = self.voice.wave
+        self.tick += 1
+
+
+def _named(frame, register, cell):
+    side = whydiff.python_side(Named, frame, register, cell=cell, roots=[__file__])
+    return side, [side.events[i] for i in side.keep]
+
+
+def test_a_store_through_setattr_roots_a_slice_to_its_source():
+    for frame, register, attr, value in (
+        (1, 5, "ad", "74/$4A"),
+        (2, 6, "sr", "67/$43"),
+    ):
+        side, keep = _named(frame, register, lambda p, _, a=attr: (p.voice, a))
+        assert keep[-1].text == "setattr(self.voice, key, level & 0xFF)"
+        assert keep[-1].sets == [("getattr(self.voice, key)", value)]
+        assert any(e.text == "level = self.level + value" for e in keep)
+        assert side.live["self.level"] == "64/$40"
+        _, keep = _named(frame, register, lambda p, r: (p.regs, r))
+        assert keep[-1].text.startswith(f"self.regs[{register}] =")
+        assert "setattr(self.voice, key, level & 0xFF)" in [e.text for e in keep]
+
+
+def test_vars_and_dict_items_store_the_attribute():
+    _, keep = _named(2, 4, lambda p, _: (p.voice, "wave"))
+    assert [e.text for e in keep][-2:] == [
+        "vars(self.voice)[key] = value",
+        'self.voice.__dict__["wave"] += getattr(self.voice, key)',
+    ]
+    assert keep[-1].sets == [("self.voice.wave", "2")]
+
+
+def test_dynamic_attributes_in_the_statement_index(tmp_path):
+    src = tmp_path / "d.py"
+    src.write_text(
+        "def f(o, k, v):\n"
+        "    setattr(o, k, v)\n"
+        "    setattr(o, 'ad', v)\n"
+        "    delattr(o, k)\n"
+        "    del o.x, v\n"
+        "    vars(o)[k] = getattr(o, k, 0) + o.__dict__[k]\n"
+        "    setattr(o, 'class', v)\n"
+        "    setattr(*v)\n"
+        "    [setattr(o, k, i) for i in v]\n"
+        "    setattr(o.f(), k, v)\n"
+    )
+    index = whydiff._index(str(src))  # pylint: disable=protected-access
+    sets = {n: [t for t, _, _ in index[n].sets] for n in index}
+    assert sets[2] == ["getattr(o, k)"] and sets[3] == ["o.ad"]
+    assert sets[4] == ["getattr(o, k)"] and sets[5] == ["o.x"]
+    assert sets[6] == ["getattr(o, k)"]
+    assert [t for t, _, _ in index[6].reads] == ["getattr(o, k)", "k", "o"]
+    assert sets[7] == ["getattr(o, 'class')"]
+    assert sets[8] == sets[9] == sets[10] == []
+    assert index[2].sets[0][2][0] == "A"
+
+
+def test_dynamic_stores_by_hand():
+    """A dynamic name is evaluated in the frame; a deleted attribute is still a store."""
+    obj = SimpleNamespace(ad=1)
+    gen = _dyn(obj, "ad")
+    frame = next(gen)
+    trace = whydiff.PyTrace([__file__])
+    trace._global(frame, "call", None)  # pylint: disable=protected-access
+    for _ in range(4):
+        next(gen)
+        trace._local(frame, "line", None)  # pylint: disable=protected-access
+    assert [e.text for e in trace.events[1:]] == [
+        "yield setattr(o, k, 7)",
+        "yield o",
+        "yield delattr(o, k)",
+        "yield o",
+    ]
+    assert trace.events[1].sets == [("getattr(o, k)", "7")]
+    assert trace.events[3].sets == [("getattr(o, k)", "<unset>")]
+    assert trace.store(obj, "ad") == 3
+    spec = ("A", compile("o", "", "eval"), compile("1", "", "eval"))
+    assert (
+        trace._keys(frame, spec, frame.f_locals) == []
+    )  # pylint: disable=protected-access
+
+
+def _dyn(o, k):
+    yield sys._getframe()  # pylint: disable=protected-access
+    yield setattr(o, k, 7)
+    yield o
+    yield delattr(o, k)
+    yield o
