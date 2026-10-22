@@ -104,7 +104,8 @@ API.
   `pysid-fixtures` script) recreate the cache from it
   ([docs/native-fixtures.md](docs/native-fixtures.md)).
 - `audio` — `render_player_wav` / `render_player_samples` drive a `MemPlayer`
-  straight to WAV through an emulated SID (pyresidfp, a core dependency); the
+  (or any `play_frame()` player) straight to WAV through an emulated SID at the
+  render's clock, with optional tqdm progress (pyresidfp, a core dependency); the
   lower-level `render_wav` / `render_samples` take a bare write stream, plus
   `resolve_device` / `seconds_to_frames`.
 - Writers — `SidHeader.to_bytes` / `write_psid` / `SidImage.to_prg` (the inverse

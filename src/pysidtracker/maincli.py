@@ -77,13 +77,14 @@ def _reglog(args, formats: Sequence[SidFormat]) -> None:
 
 def _wav(args, formats: Sequence[SidFormat]) -> None:
     fmt, data, model = _load(args.song, formats)
-    cycles_per_frame, _clock_hz = _cadence(data)
+    cycles_per_frame, clock_hz = _cadence(data)
     render_player_wav(
         fmt.player(model),
         args.output,
         seconds=args.seconds,
         model=args.model,
         cycles_per_frame=cycles_per_frame,
+        clock_frequency=clock_hz,
     )
     print(f"wrote {args.output}")
 

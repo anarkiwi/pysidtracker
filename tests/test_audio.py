@@ -176,3 +176,25 @@ def test_render_player_wav_writes_file(tmp_path):
     with wave.open(str(dst), "rb") as wav:
         assert wav.getnchannels() == 1
         assert wav.getnframes() > 0
+
+
+def test_render_player_samples_builds_the_device_at_the_given_clock(monkeypatch):
+    built = {}
+
+    def device(model, sampling_frequency=None, clock_frequency=None):
+        built.update(model=model, clock_frequency=clock_frequency)
+        return FakeSID()
+
+    monkeypatch.setattr(audio_mod, "default_device", device)
+    audio_mod.render_player_samples(
+        _FakePlayer(), seconds=0.02, model="6581", clock_frequency=1022727.0
+    )
+    assert built == {"model": "6581", "clock_frequency": 1022727.0}
+
+
+def test_render_player_samples_shows_progress_over_the_frames(capsys):
+    player = _FakePlayer()
+    audio_mod.render_player_samples(
+        player, seconds=0.1, device=FakeSID(), progress=True
+    )
+    assert f"{player.calls}/{player.calls}" in capsys.readouterr().err
