@@ -265,13 +265,13 @@ def cell_diff(ours, theirs, *, starts=None, tol=None):
     return out
 
 
-def first_mismatch(ours, theirs, starts=None):
-    """The first differing cell of a carry-tolerant :func:`cell_diff`.
+def first_mismatch(ours, theirs, starts=None, *, tol="carry"):
+    """The first differing cell of :func:`cell_diff` under tolerance ``tol``.
 
     ``(step, register)``, or None where the grids agree on the onset criterion
     (every register from step 0 when ``starts`` is None).
     """
-    cells = cell_diff(ours, theirs, starts=starts, tol="carry")
+    cells = cell_diff(ours, theirs, starts=starts, tol=tol)
     return (int(cells[0][0]), int(cells[0][1])) if cells.size else None
 
 
@@ -393,17 +393,18 @@ class Verdict:
         )
 
 
-def verdict_onset(ours, starts, theirs, *, unit="tick"):
+def verdict_onset(ours, starts, theirs, *, unit="tick", tol="carry"):
     """The onset-criterion :class:`Verdict` of render ``ours`` over reference ``theirs``.
 
-    Voices' first notes in ``starts``; each voice counts from there, the 1-LSB
-    carry is exempted, ``whole`` is the first mismatch from step 0, and a
-    render ending early (``played < n``) is a mismatch in itself.
+    Voices' first notes in ``starts``; each voice counts from there, the cells
+    ``tol`` exempts (:func:`cell_diff`) are not differences, ``whole`` is the
+    first mismatch from step 0, and a render ending early (``played < n``) is a
+    mismatch in itself.
     """
     ours = np.asarray(ours, dtype=np.uint8)
     theirs = np.asarray(theirs, dtype=np.uint8)
-    cells = cell_diff(ours, theirs, starts=starts, tol="carry")
-    whole = cell_diff(ours, theirs, tol="carry")
+    cells = cell_diff(ours, theirs, starts=starts, tol=tol)
+    whole = cell_diff(ours, theirs, tol=tol)
     onset = (int(cells[0][0]), int(cells[0][1])) if cells.size else None
     wh = (int(whole[0][0]), int(whole[0][1])) if whole.size else None
     return Verdict(

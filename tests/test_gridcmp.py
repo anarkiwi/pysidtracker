@@ -69,6 +69,15 @@ def test_first_mismatch_applies_the_onset_criterion_with_carry():
     assert gridcmp.first_mismatch(ours, theirs, [0, None, None]) == (1, 3)
     assert gridcmp.first_mismatch(ours, theirs, [2, None, None]) is None
     assert gridcmp.first_mismatch(ours, theirs) == (1, 3)
+    assert gridcmp.first_mismatch(ours, theirs, [2, None, None], tol=None) == (2, 0)
+
+
+def test_verdict_onset_exempts_the_carry_only_under_its_tolerance():
+    ours, theirs = np.zeros((4, 25), np.uint8), np.zeros((4, 25), np.uint8)
+    ours[2, 0], theirs[2, 0] = 5, 6
+    assert gridcmp.verdict_onset(ours, [0, 0, 0], theirs).ok
+    exact = gridcmp.verdict_onset(ours, [0, 0, 0], theirs, tol=None)
+    assert (exact.onset, exact.whole, exact.ok) == ((2, 0), (2, 0), False)
 
 
 def test_runs_groups_registers_runs_and_value_segments():
