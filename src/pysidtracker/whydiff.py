@@ -11,6 +11,7 @@ import argparse
 import ast
 import enum
 import importlib
+import inspect
 import json
 import linecache
 import numbers
@@ -67,12 +68,17 @@ def _expr(node) -> Tuple[str, types.CodeType, tuple]:
         spec: tuple = ("N", node.id)
     elif isinstance(node, ast.Attribute):
         spec = ("A", _compile(node.value), node.attr)
-    elif isinstance(node.slice, ast.Slice):
-        spec = ("",)
     else:
         chain = isinstance(node.value, (ast.Name, ast.Attribute, ast.Subscript))
         base = _expr(node.value)[2] if chain else ("",)
-        spec = ("S", _compile(node.value), _compile(node.slice), base)
+        part = node.slice
+        if isinstance(part, ast.Slice):
+            bounds = (part.lower, part.upper, part.step)
+            text = ", ".join("None" if b is None else ast.unparse(b) for b in bounds)
+            item = compile(f"slice({text})", "<whydiff>", "eval")
+            spec = ("Z", _compile(node.value), item, base)
+        else:
+            spec = ("S", _compile(node.value), _compile(part), base)
     return ast.unparse(node), _compile(node), spec
 
 
@@ -267,6 +273,8 @@ class PyEvent:
     register: Optional[int] = None
     value: Optional[int] = None
     deps: List[int] = field(default_factory=list)
+    site: Optional[int] = None
+    rets: List[int] = field(default_factory=list)
     live: List[Tuple[str, str]] = field(default_factory=list)
 
 
@@ -277,13 +285,19 @@ def _scalar(value) -> bool:
 class PyTrace:
     """A context manager tracing the Python code under ``roots`` line by line.
 
-    Other code runs untraced. A call of a ``writes`` code object (``(self, addr,
-    value)``, as :meth:`~pysidtracker.player.MemPlayer._wr`) to a SID address
-    records a ``write``. :func:`sys.settrace` is installed only while entered.
+    A root is a path, or the pseudo-filename of exec'd code, its text in ``sources``. A
+    call of a ``writes`` code object (``(self, addr, value)``, as ``MemPlayer._wr``) to a
+    SID address records a ``write``. :func:`sys.settrace` is installed only while entered.
     """
 
-    def __init__(self, roots: Sequence, writes: Sequence[types.CodeType] = ()):
-        self.roots = tuple(os.path.realpath(r) for r in roots)
+    def __init__(
+        self,
+        roots: Sequence,
+        writes: Sequence[types.CodeType] = (),
+        sources: Optional[Dict[str, str]] = None,
+    ):
+        self.sources = dict(sources or {})
+        self.roots = tuple(os.path.realpath(r) for r in roots if r not in self.sources)
         self.events: List[PyEvent] = []
         self._writes = frozenset(writes)
         self._files: Dict[str, Dict[int, _Stmt]] = {}
@@ -297,6 +311,8 @@ class PyTrace:
         self._saved = None
 
     def __enter__(self) -> "PyTrace":
+        for name, text in self.sources.items():
+            linecache.cache[name] = (len(text), None, text.splitlines(True), name)
         self._saved = sys.gettrace()
         sys.settrace(self._global)
         return self
@@ -308,7 +324,9 @@ class PyTrace:
 
     def _traced(self, path: str) -> bool:
         hit = self._paths.get(path)
-        if hit is None:
+        if hit is None and path in self.sources:
+            hit = self._paths[path] = True
+        elif hit is None:
             real = os.path.realpath(path)
             hit = self._paths[path] = any(
                 real == r or real.startswith(r + os.sep) for r in self.roots
@@ -321,29 +339,28 @@ class PyTrace:
             index = self._files[path] = _index(path)
         return index.get(line)
 
-    def _key(self, frame, spec, local) -> Optional[tuple]:
-        """The identity of the storage a chain names: a local, global, attribute or item."""
+    def _keys(self, frame, spec, local) -> List[tuple]:
+        """The storage a chain names: a local, global, attribute, item or slice's items."""
         if not spec[0]:
-            return None
+            return []
         try:
             if spec[0] == "N":
                 if spec[1] in local:
-                    return ("L", self._serial[frame], spec[1])
-                return ("G", spec[1])
+                    return [("L", self._serial[frame], spec[1])]
+                return [("G", spec[1])]
             base = eval(spec[1], frame.f_globals, local)  # pylint: disable=eval-used
             if spec[0] == "A":
-                return (id(base), spec[2])
+                return [(id(base), spec[2])]
             item = eval(spec[2], frame.f_globals, local)  # pylint: disable=eval-used
+            if spec[0] == "Z":
+                return [(id(base), i) for i in range(*item.indices(len(base)))]
             hash(item)
-            return (id(base), item)
+            return [(id(base), item)]
         except Exception:  # pylint: disable=broad-except
-            return None
+            return []
 
     def _eval(self, frame, exprs):
-        """``(text, value text, keys, scalar)`` of each chain that evaluates.
-
-        ``keys`` is the chain's storage, then for a subscript its container's.
-        """
+        """``(text, value text, keys, container keys, scalar)`` of each chain that evaluates."""
         out = []
         local = frame.f_locals
         for text, code, spec in exprs:
@@ -352,11 +369,14 @@ class PyTrace:
             except Exception:  # pylint: disable=broad-except
                 continue
             if not isinstance(value, _HIDDEN):
-                keys = [self._key(frame, spec, local)]
-                if spec[0] == "S":
-                    keys.append(self._key(frame, spec[3], local))
-                out.append((text, self._repr.repr(value), keys, _scalar(value)))
+                held = self._keys(frame, spec[3], local) if spec[0] in "SZ" else []
+                own = self._keys(frame, spec, local)
+                out.append((text, self._repr.repr(value), own, held, _scalar(value)))
         return out
+
+    def store(self, container, index) -> Optional[int]:
+        """The event that last stored ``container[index]`` in the trace, if one did."""
+        return self._last.get((id(container), index))
 
     def _emit(self, frame, kind: str, text: str, **kw) -> int:
         code = frame.f_code
@@ -381,10 +401,10 @@ class PyTrace:
         idx, stmt = held
         if stmt.sets:
             got = self._eval(frame, stmt.sets)
-            self.events[idx].sets = [(t, v) for t, v, _, _ in got]
-            for _, _, keys, _ in got:
-                if keys[0] is not None:
-                    self._last[keys[0]] = idx
+            self.events[idx].sets = [(t, v) for t, v, _, _, _ in got]
+            for _, _, own, _, _ in got:
+                for key in own:
+                    self._last[key] = idx
         return idx
 
     def _caller(self, frame):
@@ -393,10 +413,10 @@ class PyTrace:
             parent = parent.f_back
         return parent
 
-    def _site(self, frame) -> List[int]:
-        """The pending line of ``frame``'s traced caller, as a dependency."""
+    def _site(self, frame) -> Optional[int]:
+        """The pending line of ``frame``'s traced caller: the call site."""
         held = self._pending.get(self._caller(frame))
-        return [held[0]] if held else []
+        return held[0] if held else None
 
     def _global(self, frame, event, arg):  # pylint: disable=unused-argument
         code = frame.f_code
@@ -416,7 +436,7 @@ class PyTrace:
             "call",
             code.co_name,
             reads=[(n, self._repr.repr(local[n])) for n in names],
-            deps=self._site(frame),
+            site=self._site(frame),
         )
         for n in names:
             self._last[("L", self._serial[frame], n)] = idx
@@ -443,7 +463,7 @@ class PyTrace:
                 f"SID ${offset:02X} {gridcmp.REG_NAMES[offset]} = ${value & 0xFF:02X}",
                 register=offset,
                 value=value & 0xFF,
-                deps=self._site(frame),
+                site=self._site(frame),
             )
         )
 
@@ -471,19 +491,22 @@ class PyTrace:
         branches = self._branch.setdefault(frame, {})
         deps = [branches[stmt.control]] if stmt.control in branches else []
         live = []
-        for text, value, keys, scalar in got:
+        last = self._last
+        for text, value, own, held, scalar in got:
             if not scalar:
                 continue
-            hit = next((self._last[k] for k in keys if k in self._last), None)
-            if hit is None:
-                live.append((text, value))
+            hits = [last[k] for k in own if k in last] or [
+                last[k] for k in held if k in last
+            ]
+            if hits:
+                deps += hits
             else:
-                deps.append(hit)
+                live.append((text, value))
         idx = self._emit(
             frame,
             "line",
             stmt.text,
-            reads=[(t, v) for t, v, _, _ in got],
+            reads=[(t, v) for t, v, _, _, _ in got],
             cond=cond,
             deps=sorted(set(deps)),
             live=live,
@@ -504,8 +527,8 @@ class PyTrace:
                 deps=[] if last is None else [last],
             )
             site = self._site(frame)
-            if site:
-                self.events[site[0]].deps.append(idx)
+            if site is not None:
+                self.events[site].rets.append(idx)
             for held in (self._depth, self._serial, self._branch):
                 held.pop(frame, None)
         elif event == "exception":
@@ -514,15 +537,26 @@ class PyTrace:
         return self._local
 
     def slice(self, root: int, limit: int = 200) -> List[int]:
-        """The events ``root``'s value came from, nearest first up to ``limit``, in order."""
-        seen = {root}
-        frontier = [root]
+        """The events ``root``'s value came from, nearest first up to ``limit``, in order.
+
+        A line reached through a call site counts only the returns of calls made before it.
+        """
+        end = len(self.events)
+        seen = {root: end}
+        frontier = [(root, end)]
         while frontier and len(seen) < limit:
-            frontier = [
-                d for i in frontier for d in self.events[i].deps if d not in seen
-            ]
-            frontier = list(dict.fromkeys(frontier))[: limit - len(seen)]
-            seen.update(frontier)
+            step = []
+            for i, bound in frontier:
+                event = self.events[i]
+                step += [(d, end) for d in event.deps]
+                step += [(r, end) for r in event.rets if r < bound]
+                if event.site is not None:
+                    step.append((event.site, i))
+            frontier = []
+            for i, bound in step:
+                if seen.get(i, -1) < bound and len(seen) < limit:
+                    seen[i] = bound
+                    frontier.append((i, bound))
         return sorted(seen)
 
 
@@ -709,194 +743,260 @@ def _columns(left, right, width, lmarks=(), rmarks=(), top=False) -> List[str]:
 
 
 @dataclass
-class Divergence:
-    """A diverging cell and both sides' execution of the frame it is in.
+class Side:
+    """One side of a divergence: its frame's history and the diverging value's slice.
 
-    ``frame`` indexes the reference; the render plays it as ``frame + lead``, jennings
-    as call ``frame + cpu_lead``. ``cpu_agrees``: the jennings grid matches the
-    reference through ``frame``, so its history is the reference's own execution.
+    ``root`` is the event or step that set the value, ``keep`` its backward slice, oldest
+    first, and ``live`` the slice's inputs set before the frame.
     """
 
-    name: str
+    label: str
     frame: int
-    register: int
-    lead: int
-    cpu_lead: int
-    render_value: int
-    reference_value: int
-    cpu_value: int
-    cpu_agrees: bool
-    verdict: str
-    window: str
-    py: List[PyEvent]
-    cpu: List[CpuStep]
-
-    def py_root(self) -> Optional[int]:
-        """The Python frame's last write of the diverging register, if it wrote one."""
-        hits = [
-            i
-            for i, e in enumerate(self.py)
-            if e.kind == "write" and e.register == self.register
-        ]
-        return hits[-1] if hits else None
-
-    def cpu_root(self) -> Optional[int]:
-        """The 6502 call's last store to the diverging register, if it made one."""
-        hits = [
-            i
-            for i, s in enumerate(self.cpu)
-            if any(r == self.register for r, _ in s.sid_writes())
-        ]
-        return hits[-1] if hits else None
-
-    def py_slice(self) -> Tuple[List[int], Dict[str, str]]:
-        """The Python events the diverging write's value came from, and the state they read."""
-        root = self.py_root()
-        if root is None:
-            return [], {}
-        trace = PyTrace(())
-        trace.events = self.py
-        keep = trace.slice(root)
-        return keep, {t: v for i in keep for t, v in self.py[i].live}
-
-    def cpu_dataflow(self) -> Tuple[List[int], dict]:
-        """:func:`cpu_slice` of the diverging store."""
-        root = self.cpu_root()
-        return ([], {}) if root is None else cpu_slice(self.cpu, root)
-
-    def header(self) -> List[str]:
-        """The cell, both sides' values, the frame alignment and the grid window."""
-        agree = "agrees" if self.cpu_agrees else "DOES NOT agree"
-        return [
-            f"divergence: {self.name}, reference frame {self.frame}, "
-            f"register ${self.register:02X} {gridcmp.REG_NAMES[self.register]}",
-            f"  python ${self.render_value:02X}, reference ${self.reference_value:02X}, "
-            f"jennings ${self.cpu_value:02X}",
-            f"  python frame {self.frame + self.lead} (lead {self.lead}); "
-            f"6502 play call {self.frame + self.cpu_lead} (lead {self.cpu_lead}), "
-            f"which {agree} with the reference to here",
-            f"  {self.verdict}",
-            "",
-            self.window,
-        ]
-
-    def text(self, width: int = 110) -> str:
-        """The header, both sides' dataflow of the value, then both full histories."""
-        py_keep, py_live = self.py_slice()
-        cpu_keep, cpu_live = self.cpu_dataflow()
-        rule = f"{'-' * width}-+-{'-' * width}"
-        rows = self.header() + [
-            "",
-            "WHY: the lines and instructions the diverging value came from",
-            f"{'PYTHON':<{width}} | 6502",
-            rule,
-        ]
-        rows += _columns(
-            [py_line(self.py[i]) for i in py_keep] or ["(register not written)"],
-            [cpu_line(self.cpu[i]) for i in cpu_keep] or ["(register not stored)"],
-            width,
-            [len(py_keep) - 1],
-            [len(cpu_keep) - 1],
-        )
-        rows += ["", "state read from earlier frames", rule]
-        rows += _columns(
-            [f"{t} = {v}" for t, v in py_live.items()],
-            [
-                f"{_loc(k)} = " + ("entry" if v is None else f"${v:02X}")
-                for k, v in cpu_live.items()
-            ],
-            width,
-        )
-        nw = sum(e.kind == "write" for e in self.py)
-        cw = sum(len(s.sid_writes()) for s in self.cpu)
-        rows += [
-            "",
-            f"FULL HISTORIES, meeting at the diverging write: python {len(self.py)} "
-            f"events, {nw} SID writes; 6502 {len(self.cpu)} instructions, {cw} SID "
-            "writes ('**', 'w$D4xx'); '>>' the dataflow above",
-            f"{'PYTHON':<{width}} | 6502",
-            rule,
-        ]
-        pr = self.py_root()
-        cr = self.cpu_root()
-        pr = len(self.py) - 1 if pr is None else pr
-        cr = len(self.cpu) - 1 if cr is None else cr
-        for lo, hi, clo, chi, top in (
-            (0, pr + 1, 0, cr + 1, True),
-            (pr + 1, len(self.py), cr + 1, len(self.cpu), False),
-        ):
-            rows += _columns(
-                [py_line(e) for e in self.py[lo:hi]],
-                [cpu_line(s) for s in self.cpu[clo:chi]],
-                width,
-                [i - lo for i in py_keep if lo <= i < hi],
-                [i - clo for i in cpu_keep if clo <= i < chi],
-                top,
-            )
-        return "\n".join(rows)
+    events: list
+    lines: List[str]
+    root: Optional[int]
+    keep: List[int]
+    live: Dict[str, str]
 
     def summary(self) -> dict:
         """The machine-readable form for ``json.dumps``."""
-        out = {k: v for k, v in asdict(self).items() if k not in ("py", "cpu")}
-        py_keep, py_live = self.py_slice()
-        cpu_keep, cpu_live = self.cpu_dataflow()
-        out.update(
-            register_name=gridcmp.REG_NAMES[self.register],
-            py_slice=py_keep,
-            py_live=py_live,
-            cpu_slice=cpu_keep,
-            cpu_live={_loc(k): v for k, v in cpu_live.items()},
-            py=[asdict(e) for e in self.py],
-            cpu=[
+        events = [
+            (
                 dict(
-                    asdict(s),
-                    raw=s.raw.hex(),
-                    sid_writes=s.sid_writes(),
-                    flow={_loc(k): sorted(map(_loc, v)) for k, v in s.flow.items()},
+                    asdict(e),
+                    raw=e.raw.hex(),
+                    sid_writes=e.sid_writes(),
+                    flow={_loc(k): sorted(map(_loc, v)) for k, v in e.flow.items()},
                 )
-                for s in self.cpu
-            ],
+                if isinstance(e, CpuStep)
+                else asdict(e)
+            )
+            for e in self.events
+        ]
+        return dict(
+            label=self.label,
+            frame=self.frame,
+            root=self.root,
+            slice=self.keep,
+            live=self.live,
+            events=events,
         )
-        return out
+
+
+def sid_cell(player, register: int):
+    """The ``(container, index)`` holding a :class:`MemPlayer`'s SID ``register``."""
+    return player._mem, player.SID_BASE + register  # pylint: disable=protected-access
 
 
 def player_roots(player) -> List[str]:
-    """The source roots of ``player``'s own packages: its MRO's, bar the base class."""
+    """The source roots of ``player``'s own packages: every class in its MRO but ``object``.
+
+    A :class:`~pysidtracker.player.MemPlayer` adds only the base's module, for its stores.
+    """
     from .player import MemPlayer
 
     roots = set()
     for cls in type(player).__mro__:
-        if cls is MemPlayer or not issubclass(cls, MemPlayer):
+        if cls.__module__.partition(".")[0] in sys.stdlib_module_names | {"builtins"}:
             continue
-        top = sys.modules[cls.__module__.partition(".")[0]]
-        path = top.__file__
+        if cls is MemPlayer:
+            roots.add(inspect.getsourcefile(MemPlayer))
+            continue
+        path = sys.modules[cls.__module__.partition(".")[0]].__file__
         roots.add(os.path.dirname(path) if path.endswith("__init__.py") else path)
     return sorted(roots)
 
 
-def trace_frame(
+def python_side(
     make_player: Callable[[], object],
     frame: int,
+    register: int,
     *,
+    label: str = "python",
+    cell: Callable = sid_cell,
     roots: Optional[Sequence] = None,
+    sources: Optional[Dict[str, str]] = None,
     progress: bool = False,
-) -> List[PyEvent]:
-    """The :class:`PyTrace` events of ``make_player()``'s frame ``frame`` (0-based).
+) -> Side:
+    """The :class:`PyTrace` of ``make_player()``'s ``play_frame`` call ``frame`` (0-based).
 
-    Earlier frames play untraced; ``roots`` defaults to :func:`player_roots`.
+    Earlier frames play untraced. ``cell(player, register)`` names the ``(container,
+    index)`` the register's value is stored in; its last store in the frame is the root.
     """
     player = make_player()
     steps = range(frame)
     if progress:
         from tqdm import tqdm
 
-        steps = tqdm(steps, desc="python frames", unit="frame")
+        steps = tqdm(steps, desc=f"{label} frames", unit="frame")
     for _ in steps:
         player.play_frame()
-    write = type(player)._wr.__code__  # pylint: disable=protected-access
-    with PyTrace(roots or player_roots(player), [write]) as trace:
+    write = getattr(type(player), "_wr", None)
+    with PyTrace(
+        roots or player_roots(player), [write.__code__] if write else [], sources
+    ) as trace:
         player.play_frame()
-    return trace.events
+    root = trace.store(*cell(player, register))
+    keep = trace.slice(root) if root is not None else []
+    events = trace.events
+    return Side(
+        label,
+        frame,
+        events,
+        [py_line(e) for e in events],
+        root,
+        keep,
+        {t: v for i in keep for t, v in events[i].live},
+    )
+
+
+def cpu_side(
+    data, frame: int, register: int, *, label: str = "6502", subtune: int = 0
+) -> Side:
+    """The jennings :func:`cpu_history` of play call ``frame``, sliced from its last store
+    to ``register``."""
+    steps = cpu_history(data, frame, subtune=subtune)
+    hits = [
+        i for i, s in enumerate(steps) if any(r == register for r, _ in s.sid_writes())
+    ]
+    root = hits[-1] if hits else None
+    keep, live = cpu_slice(steps, root) if root is not None else ([], {})
+    return Side(
+        label,
+        frame,
+        steps,
+        [cpu_line(s) for s in steps],
+        root,
+        keep,
+        {_loc(k): "entry" if v is None else f"${v:02X}" for k, v in live.items()},
+    )
+
+
+@dataclass
+class Divergence:
+    """A diverging cell and two sides' execution of the frame it is in.
+
+    ``frame`` indexes the reference grid; ``values`` each grid's value at the cell, and
+    ``notes`` how the sides' frames align to it.
+    """
+
+    name: str
+    frame: int
+    register: int
+    values: Dict[str, int]
+    notes: List[str]
+    window: str
+    left: Side
+    right: Side
+
+    def header(self) -> List[str]:
+        """The cell, every grid's value at it, the frame alignment and the grid window."""
+        values = ", ".join(f"{k} ${v:02X}" for k, v in self.values.items())
+        return [
+            f"divergence: {self.name}, reference frame {self.frame}, "
+            f"register ${self.register:02X} {gridcmp.REG_NAMES[self.register]}",
+            f"  {values}",
+            *(f"  {n}" for n in self.notes),
+            "",
+            self.window,
+        ]
+
+    def text(self, width: int = 110) -> str:
+        """The header, both sides' dataflow of the value, then both full histories."""
+        a, b = self.left, self.right
+        rule = f"{'-' * width}-+-{'-' * width}"
+        title = f"{a.label.upper():<{width}} | {b.label.upper()}"
+        rows = self.header() + [
+            "",
+            "WHY: the steps the diverging value came from",
+            title,
+            rule,
+        ]
+        rows += _columns(
+            [a.lines[i] for i in a.keep] or ["(register not stored this frame)"],
+            [b.lines[i] for i in b.keep] or ["(register not stored this frame)"],
+            width,
+            [len(a.keep) - 1] if a.keep else (),
+            [len(b.keep) - 1] if b.keep else (),
+        )
+        rows += ["", "state read from earlier frames", rule]
+        rows += _columns(
+            [f"{t} = {v}" for t, v in a.live.items()],
+            [f"{t} = {v}" for t, v in b.live.items()],
+            width,
+        )
+        rows += [
+            "",
+            f"FULL HISTORIES, meeting at the diverging store: {a.label} {len(a.lines)} "
+            f"steps, {b.label} {len(b.lines)} steps; '>>' the dataflow above",
+            title,
+            rule,
+        ]
+        ar = len(a.lines) - 1 if a.root is None else a.root
+        br = len(b.lines) - 1 if b.root is None else b.root
+        for lo, hi, clo, chi, top in (
+            (0, ar + 1, 0, br + 1, True),
+            (ar + 1, len(a.lines), br + 1, len(b.lines), False),
+        ):
+            rows += _columns(
+                a.lines[lo:hi],
+                b.lines[clo:chi],
+                width,
+                [i - lo for i in a.keep if lo <= i < hi],
+                [i - clo for i in b.keep if clo <= i < chi],
+                top,
+            )
+        return "\n".join(rows)
+
+    def summary(self) -> dict:
+        """The machine-readable form for ``json.dumps``."""
+        return dict(
+            name=self.name,
+            frame=self.frame,
+            register=self.register,
+            register_name=gridcmp.REG_NAMES[self.register],
+            values=self.values,
+            notes=self.notes,
+            window=self.window,
+            left=self.left.summary(),
+            right=self.right.summary(),
+        )
+
+
+def explain_cell(
+    left: Side,
+    right: Side,
+    grids: Tuple,
+    *,
+    frame: int,
+    register: int,
+    name: str = "",
+    notes: Sequence[str] = (),
+) -> Divergence:
+    """A :class:`Divergence` of two sides at reference cell ``(frame, register)``.
+
+    ``grids`` are the ``(left, right)`` renders, the right one the reference, aligned at
+    the sides' frames.
+    """
+    lg, rg = (np.asarray(g, np.int16) for g in grids)
+    shift = left.frame - frame
+    ref, lib = gridcmp.aligned(rg, lg, shift)
+    return Divergence(
+        name=name or "tune",
+        frame=frame,
+        register=register,
+        values={
+            left.label: int(lg[left.frame, register]),
+            right.label: int(rg[right.frame, register]),
+        },
+        notes=[
+            f"{left.label} frame {left.frame}, {right.label} frame {right.frame}",
+            *notes,
+        ],
+        window=gridcmp.window_report(ref, lib, frame),
+        left=left,
+        right=right,
+    )
 
 
 def explain_divergence(
@@ -913,11 +1013,11 @@ def explain_divergence(
     roots: Optional[Sequence] = None,
     progress: bool = False,
 ) -> Optional[Divergence]:
-    """The first divergence of ``make_player(data)``'s render, explained; None if none.
+    """The first divergence of ``make_player(data)``'s render from the 6502's, explained.
 
     ``reference`` is the expected grid (default ``frames`` of jennings'), compared under
     :func:`~pysidtracker.gridcmp.verdict_lead` up to ``max_lead``; ``frame`` and
-    ``register`` pick a reference cell instead of the first mismatch.
+    ``register`` pick a reference cell instead of the first mismatch. None on agreement.
     """
     data = bytes(data)
     nref = len(reference) if reference is not None else max(frames, (frame or 0) + 1)
@@ -933,22 +1033,29 @@ def explain_divergence(
     if register is None:
         bad = np.flatnonzero(ref[frame] != lib[frame + found.lead])
         register = int(bad[0]) if bad.size else 0
-    at, ct = frame + found.lead, frame + cpu.lead
-    return Divergence(
-        name=name or "tune",
+    agrees = cpu.ok or cpu.first > frame
+    why = explain_cell(
+        python_side(
+            lambda: make_player(data),
+            frame + found.lead,
+            register,
+            roots=roots,
+            progress=progress,
+        ),
+        cpu_side(data, frame + cpu.lead, register, subtune=song - 1),
+        (lib, jen),
         frame=frame,
         register=register,
-        lead=found.lead,
-        cpu_lead=cpu.lead,
-        render_value=int(lib[at, register]),
-        reference_value=int(ref[frame, register]),
-        cpu_value=int(jen[ct, register]),
-        cpu_agrees=cpu.ok or cpu.first > frame,
-        verdict=gridcmp.lead_report(found),
-        window=gridcmp.window_report(*gridcmp.aligned(ref, lib, found.lead), frame),
-        py=trace_frame(lambda: make_player(data), at, roots=roots, progress=progress),
-        cpu=cpu_history(data, ct, subtune=song - 1),
+        name=name,
+        notes=[
+            f"jennings {'agrees' if agrees else 'DOES NOT agree'} with the reference "
+            "to here",
+            gridcmp.lead_report(found),
+        ],
     )
+    why.values["reference"] = int(ref[frame, register])
+    why.window = gridcmp.window_report(*gridcmp.aligned(ref, lib, found.lead), frame)
+    return why
 
 
 def main(argv=None) -> int:

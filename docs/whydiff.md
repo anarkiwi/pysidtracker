@@ -19,6 +19,26 @@ why = explain_divergence(data, lambda d: MyPlayer(d), reference)  # None on agre
 print(why.text())
 ```
 
+## Two Python players
+
+The sides are pluggable: `python_side` traces any player with `play_frame` (a
+`MemPlayer`, or a generic player whose registers live in a list), `cpu_side` a jennings
+play call, and `explain_cell(left, right, grids, frame=, register=)` puts any two
+side by side. To explain a generic player against a native transcription:
+
+```python
+generic = python_side(lambda: SongPlayer(song), tick, reg, label="generic",
+                      cell=lambda p, r: (p.regs, r),          # where register r is stored
+                      sources={name: source})                  # exec'd code: its text
+native = python_side(lambda: SWMPlayer(swm), tick, reg, label="native")
+print(explain_cell(generic, native, (ours, theirs), frame=tick, register=reg).text())
+```
+
+`cell(player, register)` names the `(container, index)` the register's value is stored
+in (default the `MemPlayer` SID cell); the frame's last store to it is the slice's root.
+A root that is a pseudo-filename in `sources` (code compiled from a string) is traced
+with that text as its source.
+
 ## The report
 
 For a synthetic tune whose Python transcription drops a carry:
@@ -75,9 +95,11 @@ Only side-effect-free expressions are evaluated: chains with calls, lambdas or
 comprehensions are not.
 
 Each read is linked to the event that last stored to the same storage: a local of
-that call, a global, an attribute of that exact object, or that item of that
-container (falling back to the container's own store). Calls link to their call
-site, returns to the caller's line, and statements to the branch that guards them.
+that call, a global, an attribute of that exact object, or that item (or each item of
+a slice) of that container, falling back to the container's own store. Calls link to
+their call site, returns to the caller's line, and statements to the branch that
+guards them; a line reached through a call site counts only the returns of calls it
+made before that call.
 The slice follows only scalar values. A container mutated by a method call
 (`list.append`) is not seen as a store.
 
