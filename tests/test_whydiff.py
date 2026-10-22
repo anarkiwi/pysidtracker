@@ -469,3 +469,83 @@ def test_statement_index(tmp_path):
     assert roots == sorted(
         [str(__import__("tests").__path__[0]), inspect.getsourcefile(MemPlayer)]
     )
+
+
+class Sparse(Toy):
+    """Stores $D400 on even frames only, so odd frames carry the last value."""
+
+    def _frame(self):
+        if self.cnt % 2 == 0:
+            self._wr(0xD400, self.cnt)
+        self.cnt += 1
+
+
+SPARSE = (
+    "init:\n  LDA #0\n  STA cnt\n  RTS\n"
+    "play:\n  LDA cnt\n  AND #1\n  BNE skip\n  LDA cnt\n  STA $D400\n"
+    "skip:\n  INC cnt\n  RTS\n"
+    "cnt:\n  .byte $00\n"
+)
+
+
+def test_a_side_without_a_store_traces_its_last_store():
+    grid = Sparse(b"", 0).render_grid(6)
+    side = whydiff.python_side(lambda: Sparse(b"", 0), 3, 0, grid=grid)
+    assert (side.frame, side.traced) == (3, 2) and side.root is not None
+    assert whydiff.python_side(lambda: Sparse(b"", 0), 3, 0).root is None
+    code, labels = assemble(SPARSE, ORG)
+    sid = write_psid(load=ORG, init=labels["init"], play=labels["play"], image=code)
+    jen = whydiff.register_grid(sid, 6)
+    cpu = whydiff.cpu_side(sid, 3, 0, grid=jen)
+    assert (cpu.frame, cpu.traced) == (3, 2) and cpu.events[cpu.root].text.startswith(
+        "STA"
+    )
+    never = whydiff.cpu_side(sid, 3, 4, grid=jen)
+    assert never.root is None and never.traced == 0
+    assert whydiff.last_change(jen, 5, 0) == 4 and whydiff.last_change(jen, 1, 4) == 0
+    left = whydiff.python_side(lambda: Sparse(b"", 0), 3, 0, grid=grid)
+    why = whydiff.explain_cell(left, cpu, (grid, jen), frame=3, register=0)
+    assert "python frame 3 (traced 2: its last store)" in why.notes[0]
+
+
+def _rows(rows):
+    total = 0
+    for v in rows:
+        total += v[1]
+    grid = np.zeros((2, 3))
+    first = grid[:, 1]
+    return total, first
+
+
+def test_earlier_items_are_state_and_2d_slices_trace():
+    rows = [[0, 5], [0, 7]]
+    with whydiff.PyTrace([__file__]) as trace:
+        _rows(rows)
+    adds = [e for e in trace.events if e.text == "total += v[1]"]
+    assert [e.live for e in adds] == [[("v[1]", "5")], [("v[1]", "7")]]
+    first = next(e for e in trace.events if e.text == "first = grid[:, 1]")
+    assert first.sets and first.sets[0][0] == "first"
+
+
+class GenericToy(Generic):
+    """:data:`GENERIC` as a whole tune's player: the 6502 lifts the register a frame earlier."""
+
+    def __init__(self, _data=b""):
+        super().__init__(3)
+        self.regs[24] = 0x0F
+
+
+def test_explain_divergence_takes_an_execd_player():
+    why = whydiff.explain_divergence(
+        SID,
+        GenericToy,
+        frame=2,
+        register=0,
+        label="generic",
+        cell=lambda p, r: (p.regs, r),
+        roots=[GENERIC_NAME],
+        sources={GENERIC_NAME: GENERIC},
+    )
+    assert why.values == {"generic": 0x10, "6502": 0x11, "reference": 0x11}
+    texts = [why.left.events[i].text for i in why.left.keep]
+    assert texts[-1] == "out[0:2] = [0x10 + lift, 0]"

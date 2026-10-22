@@ -72,7 +72,11 @@ def _expr(node) -> Tuple[str, types.CodeType, tuple]:
         chain = isinstance(node.value, (ast.Name, ast.Attribute, ast.Subscript))
         base = _expr(node.value)[2] if chain else ("",)
         part = node.slice
-        if isinstance(part, ast.Slice):
+        if any(isinstance(n, ast.Slice) for n in ast.walk(part)) and not isinstance(
+            part, ast.Slice
+        ):
+            spec = ("",)
+        elif isinstance(part, ast.Slice):
             bounds = (part.lower, part.upper, part.step)
             text = ", ".join("None" if b is None else ast.unparse(b) for b in bounds)
             item = compile(f"slice({text})", "<whydiff>", "eval")
@@ -134,6 +138,7 @@ class _Stmt:
     sets: tuple
     start: int
     control: Optional[int]
+    fresh: bool
 
 
 _BRANCHING = (ast.If, ast.For, ast.AsyncFor, ast.While)
@@ -204,6 +209,10 @@ def _index(path: str) -> Dict[int, _Stmt]:
             tuple(_targets(sets)),
             node.lineno,
             control,
+            isinstance(node, (ast.Assign, ast.AnnAssign))
+            and not isinstance(
+                node.value, (ast.Name, ast.Attribute, ast.Subscript, type(None))
+            ),
         )
         for line in range(node.lineno, end + 1):
             held = index.get(line)
@@ -308,6 +317,7 @@ class PyTrace:
         self._pending: Dict[object, Tuple[int, _Stmt]] = {}
         self._branch: Dict[object, Dict[int, int]] = {}
         self._last: Dict[tuple, int] = {}
+        self._fresh: set = set()
         self._saved = None
 
     def __enter__(self) -> "PyTrace":
@@ -369,7 +379,9 @@ class PyTrace:
             except Exception:  # pylint: disable=broad-except
                 continue
             if not isinstance(value, _HIDDEN):
-                held = self._keys(frame, spec[3], local) if spec[0] in "SZ" else []
+                held = (
+                    self._keys(frame, spec[3], local) if spec[0] in ("S", "Z") else []
+                )
                 own = self._keys(frame, spec, local)
                 out.append((text, self._repr.repr(value), own, held, _scalar(value)))
         return out
@@ -496,7 +508,7 @@ class PyTrace:
             if not scalar:
                 continue
             hits = [last[k] for k in own if k in last] or [
-                last[k] for k in held if k in last
+                last[k] for k in held if last.get(k) in self._fresh
             ]
             if hits:
                 deps += hits
@@ -512,6 +524,8 @@ class PyTrace:
             live=live,
         )
         branches[stmt.start] = idx
+        if stmt.fresh:
+            self._fresh.add(idx)
         self._pending[frame] = (idx, stmt)
 
     def _local(self, frame, event, arg):
@@ -746,12 +760,13 @@ def _columns(left, right, width, lmarks=(), rmarks=(), top=False) -> List[str]:
 class Side:
     """One side of a divergence: its frame's history and the diverging value's slice.
 
-    ``root`` is the event or step that set the value, ``keep`` its backward slice, oldest
-    first, and ``live`` the slice's inputs set before the frame.
+    ``frame`` is the diverging frame, ``traced`` the one traced: the last to store the
+    value. ``root`` is the store, ``keep`` its backward slice, ``live`` its earlier inputs.
     """
 
     label: str
     frame: int
+    traced: int
     events: list
     lines: List[str]
     root: Optional[int]
@@ -776,6 +791,7 @@ class Side:
         return dict(
             label=self.label,
             frame=self.frame,
+            traced=self.traced,
             root=self.root,
             slice=self.keep,
             live=self.live,
@@ -807,6 +823,13 @@ def player_roots(player) -> List[str]:
     return sorted(roots)
 
 
+def last_change(grid, frame: int, register: int) -> int:
+    """The last frame ``<= frame`` whose ``register`` differs from the frame before (or 0)."""
+    col = np.asarray(grid)[: frame + 1, register]
+    moved = np.flatnonzero(col[1:] != col[:-1])
+    return int(moved[-1]) + 1 if moved.size else 0
+
+
 def python_side(
     make_player: Callable[[], object],
     frame: int,
@@ -816,15 +839,18 @@ def python_side(
     cell: Callable = sid_cell,
     roots: Optional[Sequence] = None,
     sources: Optional[Dict[str, str]] = None,
+    grid=None,
     progress: bool = False,
+    traced: Optional[int] = None,
 ) -> Side:
     """The :class:`PyTrace` of ``make_player()``'s ``play_frame`` call ``frame`` (0-based).
 
-    Earlier frames play untraced. ``cell(player, register)`` names the ``(container,
-    index)`` the register's value is stored in; its last store in the frame is the root.
+    ``cell(player, register)`` names the ``(container, index)`` holding the register; its
+    last store is the root. Without one, ``grid`` (this player's) retraces :func:`last_change`.
     """
+    traced = frame if traced is None else traced
     player = make_player()
-    steps = range(frame)
+    steps = range(traced)
     if progress:
         from tqdm import tqdm
 
@@ -837,11 +863,25 @@ def python_side(
     ) as trace:
         player.play_frame()
     root = trace.store(*cell(player, register))
+    back = None if grid is None else last_change(grid, traced, register)
+    if root is None and back not in (None, traced):
+        return python_side(
+            make_player,
+            frame,
+            register,
+            label=label,
+            cell=cell,
+            roots=roots,
+            sources=sources,
+            progress=progress,
+            traced=back,
+        )
     keep = trace.slice(root) if root is not None else []
     events = trace.events
     return Side(
         label,
         frame,
+        traced,
         events,
         [py_line(e) for e in events],
         root,
@@ -851,19 +891,34 @@ def python_side(
 
 
 def cpu_side(
-    data, frame: int, register: int, *, label: str = "6502", subtune: int = 0
+    data,
+    frame: int,
+    register: int,
+    *,
+    label: str = "6502",
+    subtune: int = 0,
+    grid=None,
+    traced: Optional[int] = None,
 ) -> Side:
     """The jennings :func:`cpu_history` of play call ``frame``, sliced from its last store
-    to ``register``."""
-    steps = cpu_history(data, frame, subtune=subtune)
+    to ``register``; without one, ``grid`` (the jennings grid) retraces :func:`last_change`.
+    """
+    traced = frame if traced is None else traced
+    steps = cpu_history(data, traced, subtune=subtune)
     hits = [
         i for i, s in enumerate(steps) if any(r == register for r, _ in s.sid_writes())
     ]
+    back = None if grid is None else last_change(grid, traced, register)
+    if not hits and back not in (None, traced):
+        return cpu_side(
+            data, frame, register, label=label, subtune=subtune, traced=back
+        )
     root = hits[-1] if hits else None
     keep, live = cpu_slice(steps, root) if root is not None else ([], {})
     return Side(
         label,
         frame,
+        traced,
         steps,
         [cpu_line(s) for s in steps],
         root,
@@ -990,7 +1045,15 @@ def explain_cell(
             right.label: int(rg[right.frame, register]),
         },
         notes=[
-            f"{left.label} frame {left.frame}, {right.label} frame {right.frame}",
+            ", ".join(
+                f"{s.label} frame {s.frame}"
+                + (
+                    ""
+                    if s.traced == s.frame
+                    else f" (traced {s.traced}: its last store)"
+                )
+                for s in (left, right)
+            ),
             *notes,
         ],
         window=gridcmp.window_report(ref, lib, frame),
@@ -1010,7 +1073,10 @@ def explain_divergence(
     frame: Optional[int] = None,
     register: Optional[int] = None,
     name: str = "",
+    label: str = "python",
+    cell: Callable = sid_cell,
     roots: Optional[Sequence] = None,
+    sources: Optional[Dict[str, str]] = None,
     progress: bool = False,
 ) -> Optional[Divergence]:
     """The first divergence of ``make_player(data)``'s render from the 6502's, explained.
@@ -1018,6 +1084,7 @@ def explain_divergence(
     ``reference`` is the expected grid (default ``frames`` of jennings'), compared under
     :func:`~pysidtracker.gridcmp.verdict_lead` up to ``max_lead``; ``frame`` and
     ``register`` pick a reference cell instead of the first mismatch. None on agreement.
+    ``label``/``cell``/``roots``/``sources`` are :func:`python_side`'s.
     """
     data = bytes(data)
     nref = len(reference) if reference is not None else max(frames, (frame or 0) + 1)
@@ -1039,10 +1106,14 @@ def explain_divergence(
             lambda: make_player(data),
             frame + found.lead,
             register,
+            label=label,
+            cell=cell,
             roots=roots,
+            sources=sources,
+            grid=lib,
             progress=progress,
         ),
-        cpu_side(data, frame + cpu.lead, register, subtune=song - 1),
+        cpu_side(data, frame + cpu.lead, register, subtune=song - 1, grid=jen),
         (lib, jen),
         frame=frame,
         register=register,

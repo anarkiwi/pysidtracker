@@ -37,7 +37,10 @@ print(explain_cell(generic, native, (ours, theirs), frame=tick, register=reg).te
 `cell(player, register)` names the `(container, index)` the register's value is stored
 in (default the `MemPlayer` SID cell); the frame's last store to it is the slice's root.
 A root that is a pseudo-filename in `sources` (code compiled from a string) is traced
-with that text as its source.
+with that text as its source. Given its own `grid`, a side that does not store the
+register on the diverging frame is traced on `last_change`, the last frame that
+changed it, and the header says so. `explain_divergence` takes the same
+`label`/`cell`/`roots`/`sources`, so an exec'd player can face the 6502 directly.
 
 ## The report
 
@@ -96,7 +99,8 @@ comprehensions are not.
 
 Each read is linked to the event that last stored to the same storage: a local of
 that call, a global, an attribute of that exact object, or that item (or each item of
-a slice) of that container, falling back to the container's own store. Calls link to
+a slice) of that container, falling back to the container's own store when that store
+built it (an item of a container merely bound in the frame is earlier state). Calls link to
 their call site, returns to the caller's line, and statements to the branch that
 guards them; a line reached through a call site counts only the returns of calls it
 made before that call.
