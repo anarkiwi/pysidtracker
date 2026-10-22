@@ -11,6 +11,7 @@ python -m pysidtracker.survey find $HVSC --player 'goattracker|^\(gt' --out tune
 python -m pysidtracker.survey run $HVSC tunes.csv --work .hvsc-survey --render mypkg.survey:render
 python -m pysidtracker.survey scope $HVSC tunes.csv --render scripts/oracle_hvsc.py --out scope.csv
 python -m pysidtracker.survey report .hvsc-survey/results.csv
+python -m pysidtracker.survey compare .hvsc-survey/results.csv keys.txt --base baseline/results.csv
 python -m pysidtracker.survey triage .hvsc-survey
 python -m pysidtracker.survey diff $HVSC tunes.csv <md5>_<song> --work .hvsc-survey --render mypkg.survey:render
 python -m pysidtracker.survey leads $HVSC tunes.csv <md5>_<song> --work .hvsc-survey
@@ -150,6 +151,18 @@ default 3) grouped by bad-frame count, first bad frame, lead and registers.
 Results written before these columns existed still report, without that list. `diff` prints the oracle (`O`) and render (`L`) register rows around
 a subtune's first difference. The work directory derives from copyright tunes:
 keep it untracked.
+
+## `compare`
+
+Compares a `results.csv` with a baseline one (`--base`, e.g. the survey before a
+change): a `before | after | subtunes` table of verdict moves over the new
+file's keys (`missing` before for a key the baseline lacks), then every subtune
+exact in the baseline and not now. Each further argument is a key list (a file
+of whitespace-separated `<md5>_<song>` keys, e.g. a regression or guard set)
+tallied by verdict (`missing` for a key not in the results), its `differs`
+counted by `min_bad` up to `--near` (default 3), more than that counted as
+`near + 1`. `survey.read_results`, `survey.transitions` and `survey.tally` are
+the Python entry points.
 
 ## `scope`
 

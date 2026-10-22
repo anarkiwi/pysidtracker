@@ -13,8 +13,9 @@ from pysidtracker import (
     read_sidwr,
     register_grid,
 )
+from pysidtracker.emu import observe_data_access
 from pysidtracker.image import SidImage
-from pysidtracker.oracle import _SIDWR_REC
+from pysidtracker.oracle import _SIDWR_REC, boot_flat
 
 from .helpers import build_prg, build_psid
 
@@ -78,6 +79,20 @@ def test_register_grid_from_image():
     image = SidImage.from_bytes(tune)
     grid = register_grid(image, 1)
     assert grid[0][0] == 0x0A
+
+
+def test_boot_flat_setup_sees_init():
+    image = SidImage.from_bytes(
+        build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
+    )
+    stores = []
+
+    def setup(mpu, subject):
+        assert subject[0x1000] == 0xA9 and subject[0xD418] == 0x0F
+        observe_data_access(mpu, on_write=lambda addr, val: stores.append((addr, val)))
+
+    subject, _, _, play = boot_flat(image, setup=setup)
+    assert stores == [(0xD400, 0x0A)] and subject[0xD400] == 0x0A and play == 0x1006
 
 
 def test_register_grid_illegal_opcodes():

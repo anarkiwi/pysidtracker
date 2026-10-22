@@ -2,8 +2,8 @@
 
 ``find`` lists tunes by SIDId signature, ``run`` compares every subtune's oracle
 and ``module:function`` renderer grids, ``scope`` renders them without the oracle,
-``report`` tallies, ``diff`` shows frames,
-``triage`` classifies first differences and renderer ``info`` exact rates,
+``report`` tallies, ``compare`` moves verdicts against a baseline, ``diff`` shows
+frames, ``triage`` classifies first differences and renderer ``info`` exact rates,
 ``leads`` tabulates every alignment lead's mismatches, ``file`` compares native
 files (bare PRGs wrapped as PSID) with their own player.
 """
@@ -729,6 +729,63 @@ def report(results_csv, near=NEAR):
     return verdicts
 
 
+def read_results(path):
+    """The rows of a ``results.csv`` by ``key``."""
+    with open(path, newline="", encoding="utf-8") as f:
+        return {r["key"]: r for r in csv.DictReader(f)}
+
+
+def tally(rows, keys, near=NEAR):
+    """``(verdicts, bad)`` over ``keys`` of ``rows`` (:func:`read_results`): the
+    verdict counts (``missing`` for a key not in ``rows``) and the ``differs``
+    counted by ``min_bad``, ``near + 1`` standing for more."""
+    verdicts = Counter(rows[k]["verdict"] if k in rows else "missing" for k in keys)
+    bad = Counter(
+        min(int(rows[k].get("min_bad") or 0), near + 1)
+        for k in keys
+        if k in rows and rows[k]["verdict"] == "differs"
+    )
+    return verdicts, bad
+
+
+def transitions(base, rows):
+    """``(moves, lost)``: ``(before, after)`` verdict counts over the keys of ``rows``
+    against ``base`` (``missing`` before for a new key), and the keys exact in
+    ``base`` but not in ``rows``."""
+    moves = Counter(
+        (base[k]["verdict"] if k in base else "missing", r["verdict"])
+        for k, r in rows.items()
+    )
+    lost = sorted(
+        k
+        for k, r in rows.items()
+        if k in base and base[k]["verdict"] == "exact" and r["verdict"] != "exact"
+    )
+    return moves, lost
+
+
+def compare_results(results_csv, keylists=(), base=None, near=NEAR):
+    """Print verdict tallies over key lists (files of ``<md5>_<song>`` keys) and,
+    with ``base``, the verdict moves from that baseline ``results.csv`` and every
+    subtune no longer exact; returns the moves."""
+    rows = read_results(results_csv)
+    moves = Counter()
+    if base:
+        moves, lost = transitions(read_results(base), rows)
+        print("| before | after | subtunes |\n| --- | --- | ---: |")
+        for (before, after), n in sorted(moves.items()):
+            print(f"| {before} | {after} | {n:,} |")
+        print(f"exact -> non-exact: {len(lost)}")
+        for k in lost:
+            print(f"  {k} {rows[k]['path']} {rows[k]['song']} {rows[k]['verdict']}")
+    for path in keylists:
+        keys = Path(path).read_text("utf-8").split()
+        verdicts, bad = tally(rows, keys, near)
+        print(f"{path}: {len(keys)} {dict(sorted(verdicts.items()))}")
+        print(f"  differs by min_bad ({near + 1} = more): {dict(sorted(bad.items()))}")
+    return moves
+
+
 def diff(hvsc, tunes_csv, key, work, render, context=3):
     """Print oracle (O) and renderer (L) rows around one subtune's first difference."""
     work = Path(work)
@@ -1096,11 +1153,15 @@ def main(argv=None):
     p.add_argument("--jobs", type=int, default=os.cpu_count())
     p = sub.add_parser("report", help=report.__doc__)
     p.add_argument("results")
+    p = sub.add_parser("compare", help=compare_results.__doc__)
+    p.add_argument("results")
+    p.add_argument("keylists", nargs="*", help="files of <md5>_<song> keys")
+    p.add_argument("--base", help="baseline results.csv to compare verdicts with")
     p = sub.add_parser("triage", help=triage.__doc__)
     p.add_argument("work")
     p.add_argument("--jobs", type=int, default=os.cpu_count())
     p.add_argument("--top", type=int, default=15)
-    for name in ("leads", "report", "triage"):
+    for name in ("leads", "report", "triage", "compare"):
         sub.choices[name].add_argument(
             "--near", type=int, default=NEAR, help="near-exact bad-frame limit"
         )
@@ -1167,6 +1228,8 @@ def main(argv=None):
         )
     elif a.cmd == "triage":
         triage(a.work, a.jobs, a.top, near=a.near)
+    elif a.cmd == "compare":
+        compare_results(a.results, a.keylists, a.base, a.near)
     elif a.cmd == "match":
         match(
             a.hvsc,

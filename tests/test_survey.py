@@ -823,3 +823,56 @@ def test_scope_records_a_vanished_tune_as_a_library_error(survey_tree, tmp_path)
     survey.scope(hvsc, tunes, render_exact, out=out, jobs=2)
     assert {v for _, v, _ in _scope_rows(out)} == {"library_error"}
     assert all("FileNotFoundError" in e for _, _, e in _scope_rows(out))
+
+
+def _results(tmp_path, name, rows):
+    path = tmp_path / name
+    path.write_text(
+        "key,path,song,verdict,min_bad\n"
+        + "".join(f"{k},p{k},1,{v},{b}\n" for k, v, b in rows),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_compare_moves_verdicts_and_lists_lost_exacts(tmp_path, capsys):
+    base = _results(
+        tmp_path,
+        "base.csv",
+        [("a", "exact", ""), ("b", "differs", "3"), ("c", "exact", "")],
+    )
+    new = _results(
+        tmp_path,
+        "new.csv",
+        [
+            ("a", "exact", ""),
+            ("b", "exact", ""),
+            ("c", "differs", "1"),
+            ("d", "exact", ""),
+            ("e", "differs", "9"),
+        ],
+    )
+    keys = tmp_path / "keys.txt"
+    keys.write_text("b c e z\n", encoding="utf-8")
+    assert survey.main(["compare", str(new), str(keys), "--base", str(base)]) == 0
+    out = capsys.readouterr().out
+    assert "| differs | exact | 1 |" in out
+    assert "| missing | exact | 1 |" in out
+    assert "exact -> non-exact: 1" in out and "  c pc 1 differs" in out
+    assert "{'differs': 2, 'exact': 1, 'missing': 1}" in out
+    assert "differs by min_bad (4 = more): {1: 1, 4: 1}" in out
+    moves, lost = survey.transitions(
+        survey.read_results(base), survey.read_results(new)
+    )
+    assert moves[("exact", "exact")] == 1 and lost == ["c"]
+    verdicts, bad = survey.tally(survey.read_results(new), ["e"], near=9)
+    assert verdicts == {"differs": 1} and bad == {9: 1}
+
+
+def test_compare_without_baseline_only_tallies(tmp_path, capsys):
+    new = _results(tmp_path, "new.csv", [("a", "exact", "")])
+    keys = tmp_path / "keys.txt"
+    keys.write_text("a\n", encoding="utf-8")
+    assert not survey.compare_results(new, [keys])
+    out = capsys.readouterr().out
+    assert "exact -> non-exact" not in out and "{'exact': 1}" in out
