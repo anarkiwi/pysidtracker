@@ -303,17 +303,20 @@ def oracle_grid(
     reg_count: int = 25,
     cycles_per_frame: Optional[int] = None,
     force: bool = False,
+    song: int = 1,
 ):
-    """Per-frame reference grid for ``tune_path`` from the sidtrace oracle.
+    """Per-frame reference grid for ``tune_path`` (1-based ``song``) from the sidtrace oracle.
 
-    The CSV is cached at ``oracle_cache/<stem>.csv.zst`` and reused from the
-    cache while present (``force`` re-renders). ``cycles_per_frame`` fixes the
+    The CSV is cached at ``oracle_cache/<stem>.csv.zst`` (``<stem>_<song>`` past
+    song 1) while present (``force`` re-renders). ``cycles_per_frame`` fixes the
     cadence. Returns the first ``frames`` rows (all when ``None``).
     """
     tune_path = Path(tune_path)
-    csv_path = Path(oracle_cache) / f"{tune_path.stem}.csv.zst"
+    stem = tune_path.stem if song == 1 else f"{tune_path.stem}_{song}"
+    extra = {} if song == 1 else {"song": song}
+    csv_path = Path(oracle_cache) / f"{stem}.csv.zst"
     rows = cached_sidtrace(
-        tune_path, csv_path, force=force, seconds=seconds, image=image
+        tune_path, csv_path, force=force, seconds=seconds, image=image, **extra
     )
     grid = sidtrace_grid(
         rows,
@@ -322,6 +325,81 @@ def oracle_grid(
         cycles_per_frame=cycles_per_frame,
     )
     return grid[:frames] if frames else grid
+
+
+def assert_matches(
+    data,
+    make_player,
+    reference,
+    *,
+    song: int = 1,
+    max_lead: int = 0,
+    name: str = "",
+    report_dir=None,
+) -> None:
+    """Assert ``make_player(data)`` renders ``reference``; else fail with the explanation.
+
+    The failure message is :meth:`~pysidtracker.whydiff.Divergence.text`: both sides'
+    dataflow of the first diverging cell and their full traced histories, also saved
+    to ``report_dir/<name>.txt`` and ``.json`` when given.
+    """
+    import json
+
+    from .whydiff import explain_divergence
+
+    name = name or "tune"
+    why = explain_divergence(
+        data, make_player, reference, song=song, max_lead=max_lead, name=name
+    )
+    if why is None:
+        return
+    text = why.text()
+    if report_dir is not None:
+        out = Path(report_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        stem = name.replace("/", "_").removesuffix(".sid")
+        (out / f"{stem}.txt").write_text(text + "\n", encoding="utf-8")
+        (out / f"{stem}.json").write_text(json.dumps(why.summary()), encoding="utf-8")
+    raise AssertionError(f"{name}: player render diverges from the reference\n{text}")
+
+
+def assert_oracle_match(
+    relpath: str,
+    make_player,
+    *,
+    hvsc_cache,
+    oracle_cache,
+    frames: int = 250,
+    song: int = 1,
+    seconds=None,
+    max_lead: int = 0,
+    local_env: str = "HVSC",
+    report_dir=None,
+) -> None:
+    """:func:`assert_matches` of an HVSC tune against its sidtrace oracle grid.
+
+    ``make_player(data)`` returns the library's
+    :class:`~pysidtracker.player.MemPlayer` for the tune's bytes.
+    """
+    path = resolve_tune(relpath, cache_dir=hvsc_cache, local_env=local_env)
+    if path is None:
+        raise TuneFetchError(f"{relpath} unavailable (offline, not cached)")
+    expected = oracle_grid(
+        path,
+        oracle_cache=oracle_cache,
+        seconds=seconds if seconds is not None else frames // 50 + 2,
+        frames=frames,
+        song=song,
+    )
+    assert_matches(
+        Path(path).read_bytes(),
+        make_player,
+        expected,
+        song=song,
+        max_lead=max_lead,
+        name=relpath,
+        report_dir=report_dir,
+    )
 
 
 def make_oracle_fixtures(
@@ -337,6 +415,8 @@ def make_oracle_fixtures(
     chip: int = 0,
     reg_count: int = 25,
     max_lead: int = 4,
+    player=None,
+    report_dir=None,
 ):
     """Return ``(tune_id, oracle_match)`` fixtures asserting a player == the oracle.
 
@@ -354,7 +434,8 @@ def make_oracle_fixtures(
 
     ``render`` is ``render(tune_bytes, nframes) -> grid`` and defaults to
     :func:`~pysidtracker.oracle.register_grid` (the base jennings renderer); a format
-    package passes its own :class:`~pysidtracker.player.MemPlayer` renderer.
+    package passes its own :class:`~pysidtracker.player.MemPlayer` renderer, or
+    ``player(tune_bytes) -> MemPlayer`` for a failure explained by :func:`assert_matches`.
 
     These tests are never skipped: an unavailable tune raises
     :class:`TuneFetchError` and a missing/failed oracle raises
@@ -387,6 +468,16 @@ def make_oracle_fixtures(
         )
 
         def _match():
+            if player is not None:
+                assert_matches(
+                    Path(path).read_bytes(),
+                    player,
+                    expected,
+                    max_lead=max_lead,
+                    name=tunes[tune_id],
+                    report_dir=report_dir,
+                )
+                return
             rendered = render(Path(path).read_bytes(), len(expected))
             assert aligned_match(
                 expected, rendered, max_lead=max_lead

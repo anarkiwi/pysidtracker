@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.17.2"
+version = "0.18.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -33,7 +33,7 @@ classifiers = [
 # host and release-media readers; its cpu extra is the jennings-backed flat host.
 # numpy: sample buffers and the image anchor scan.
 dependencies = [
-  "jennings>=0.1.1",
+  "jennings>=0.2.0",
   "pydexomizer>=0.1",
   "pyresidfp>=0.17",
   "vagrant-moses[cpu]>=0.4.0",

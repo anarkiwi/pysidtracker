@@ -1,0 +1,1000 @@
+"""Why a player's grid diverges from the C64: its Python execution beside the 6502's.
+
+:class:`PyTrace` records every line of the player's own code (values read, branch
+taken, values assigned); :func:`cpu_history` every jennings instruction (registers,
+memory touched). :func:`explain_divergence` aligns both on their SID writes.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import enum
+import importlib
+import json
+import linecache
+import numbers
+import os
+import reprlib
+import sys
+import textwrap
+import types
+from dataclasses import asdict, dataclass, field
+from itertools import zip_longest
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
+from vagrant_moses import memmap as mm
+
+from . import gridcmp
+from . import registers as reg
+from .emu import observe_data_access, run_to_rts
+from .image import SidImage
+from .oracle import boot_flat, register_grid
+
+_IMPURE = (
+    ast.Call,
+    ast.Lambda,
+    ast.NamedExpr,
+    ast.Await,
+    ast.Yield,
+    ast.YieldFrom,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+    ast.Starred,
+    ast.JoinedStr,
+)
+_HIDDEN = (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)
+_HIDDEN += (types.MethodType, types.BuiltinMethodType)
+_FLAGS = "NV-BDIZC"
+
+
+def _pure(node) -> bool:
+    """Whether evaluating ``node`` can run no user code beyond attribute reads."""
+    return not any(isinstance(n, _IMPURE) for n in ast.walk(node))
+
+
+def _compile(node) -> types.CodeType:
+    return compile(ast.unparse(node), "<whydiff>", "eval")
+
+
+def _expr(node) -> Tuple[str, types.CodeType, tuple]:
+    """``(text, code, key spec)`` of a pure name/attribute/subscript chain."""
+    if isinstance(node, ast.Name):
+        spec: tuple = ("N", node.id)
+    elif isinstance(node, ast.Attribute):
+        spec = ("A", _compile(node.value), node.attr)
+    elif isinstance(node.slice, ast.Slice):
+        spec = ("",)
+    else:
+        chain = isinstance(node.value, (ast.Name, ast.Attribute, ast.Subscript))
+        base = _expr(node.value)[2] if chain else ("",)
+        spec = ("S", _compile(node.value), _compile(node.slice), base)
+    return ast.unparse(node), _compile(node), spec
+
+
+def _reads(nodes) -> List[Tuple[str, types.CodeType, tuple]]:
+    """The maximal pure name/attribute/subscript chains ``nodes`` read, in order."""
+    out: Dict[str, tuple] = {}
+
+    def visit(node, store=False):
+        chain = isinstance(node, (ast.Name, ast.Attribute, ast.Subscript))
+        if chain and not store and _pure(node):
+            got = _expr(node)
+            out.setdefault(got[0], got)
+            if isinstance(node, ast.Subscript):
+                visit(node.slice)
+            return
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                visit(node.func.value)
+            elif not isinstance(node.func, ast.Name):
+                visit(node.func)
+            for arg in node.args + [k.value for k in node.keywords]:
+                visit(arg)
+            return
+        if store and isinstance(node, (ast.Attribute, ast.Subscript)):
+            visit(node.value)
+            if isinstance(node, ast.Subscript):
+                visit(node.slice)
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child, store and isinstance(node, (ast.Tuple, ast.List)))
+
+    for node, store in nodes:
+        visit(node, store)
+    return list(out.values())
+
+
+def _targets(nodes) -> List[Tuple[str, types.CodeType, tuple]]:
+    """The assignment targets of ``nodes``, tuples flattened, as load expressions."""
+    out = []
+    for node in nodes:
+        if isinstance(node, (ast.Tuple, ast.List)):
+            out += _targets(node.elts)
+        elif isinstance(node, (ast.Name, ast.Attribute, ast.Subscript)) and _pure(node):
+            out.append(_expr(node))
+    return out
+
+
+@dataclass(frozen=True)
+class _Stmt:
+    text: str
+    reads: tuple
+    cond: Optional[types.CodeType]
+    sets: tuple
+    start: int
+    control: Optional[int]
+
+
+_BRANCHING = (ast.If, ast.For, ast.AsyncFor, ast.While)
+
+
+def _header(node):
+    """``(last header line, [(read node, is_store)], condition, targets)`` of a statement."""
+    end = node.end_lineno
+    reads, cond, sets = [], None, []
+    if isinstance(node, (ast.If, ast.While)):
+        end, reads, cond = node.test.end_lineno, [(node.test, False)], node.test
+    elif isinstance(node, (ast.For, ast.AsyncFor)):
+        end, reads, sets = node.iter.end_lineno, [(node.iter, False)], [node.target]
+    elif isinstance(node, (ast.With, ast.AsyncWith)):
+        end = node.items[-1].context_expr.end_lineno
+        reads = [(i.context_expr, False) for i in node.items]
+        sets = [i.optional_vars for i in node.items if i.optional_vars is not None]
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        end = node.body[0].lineno - 1
+    elif isinstance(node, ast.Match):
+        end, reads = node.subject.end_lineno, [(node.subject, False)]
+    elif hasattr(node, "handlers"):
+        end = node.lineno
+    else:
+        reads = [(node, False)]
+        if isinstance(node, ast.Assign):
+            reads = [(node.value, False)] + [(t, True) for t in node.targets]
+            sets = node.targets
+        elif isinstance(node, ast.AugAssign):
+            reads = [(node.target, False), (node.value, False)]
+            sets = [node.target]
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            reads, sets = [(node.value, False), (node.target, True)], [node.target]
+        elif isinstance(node, ast.Assert):
+            cond = node.test
+    return end, reads, cond, sets
+
+
+def _statements(node, control=None):
+    """Every statement under ``node`` with the line of its nearest enclosing branch."""
+    for value in ast.iter_fields(node):
+        for child in value[1] if isinstance(value[1], list) else [value[1]]:
+            if isinstance(child, ast.stmt):
+                yield child, control
+                inner = child.lineno if isinstance(child, _BRANCHING) else control
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    inner = None
+                yield from _statements(child, inner)
+            elif isinstance(child, ast.AST) and not isinstance(child, ast.expr):
+                yield from _statements(child, control)
+
+
+def _index(path: str) -> Dict[int, _Stmt]:
+    """Each source line of ``path`` to the innermost statement header it is part of."""
+    lines = linecache.getlines(path)
+    try:
+        tree = ast.parse("".join(lines))
+    except (SyntaxError, ValueError):
+        return {}
+    index: Dict[int, _Stmt] = {}
+    for node, control in _statements(tree):
+        end, reads, cond, sets = _header(node)
+        end = max(end, node.lineno)
+        stmt = _Stmt(
+            " ".join(s.strip() for s in lines[node.lineno - 1 : end]),
+            tuple(_reads(reads)),
+            _compile(cond) if cond is not None and _pure(cond) else None,
+            tuple(_targets(sets)),
+            node.lineno,
+            control,
+        )
+        for line in range(node.lineno, end + 1):
+            held = index.get(line)
+            if held is None or held.start <= node.lineno:
+                index[line] = stmt
+    return index
+
+
+class _Repr(reprlib.Repr):
+    """Short value text: ints with hex, plain objects as stable ``<Class#n>`` handles."""
+
+    def __init__(self):
+        super().__init__()
+        self.maxstring, self.maxother, self.maxlist, self.maxtuple = 48, 48, 8, 8
+        self.maxdict, self.maxlevel = 6, 2
+        self._ids: Dict[int, int] = {}
+        self._held: List[object] = []
+
+    def repr_int(self, x, level):  # pylint: disable=unused-argument
+        return f"{x}/${x:02X}" if 9 < x < 0x10000 else str(x)
+
+    def repr_bool(self, x, level):  # pylint: disable=unused-argument
+        return str(x)
+
+    def repr_bytes(self, x, level):  # pylint: disable=unused-argument
+        head = " ".join(f"{b:02X}" for b in x[:12])
+        return f"{type(x).__name__}[{len(x)}] {head}{' ...' if len(x) > 12 else ''}"
+
+    repr_bytearray = repr_bytes
+
+    def repr_ndarray(self, x, level):  # pylint: disable=unused-argument
+        flat = ", ".join(str(v) for v in x.ravel()[:8])
+        return f"ndarray{list(x.shape)}[{flat}{', ...' if x.size > 8 else ''}]"
+
+    def repr_instance(self, x, level):
+        if isinstance(x, numbers.Integral):
+            return self.repr_int(int(x), level)
+        if isinstance(x, (enum.Enum, numbers.Number)) or x is None:
+            return str(x)
+        if type(x).__repr__ is object.__repr__ or hasattr(x, "__dataclass_fields__"):
+            n = self._ids.get(id(x))
+            if n is None:
+                n = self._ids[id(x)] = len(self._ids)
+                self._held.append(x)
+            return f"<{type(x).__name__}#{n}>"
+        return super().repr_instance(x, level)
+
+
+@dataclass
+class PyEvent:
+    """One step of a traced Python run.
+
+    ``call`` (``reads`` the arguments), ``line`` (``reads`` before it runs, ``cond``
+    a condition's outcome, ``sets`` what it assigned), ``return``, ``exception`` or
+    ``write`` (SID ``register``/``value``); ``deps`` the events its values came from.
+    """
+
+    kind: str
+    depth: int
+    func: str
+    path: str
+    line: int
+    text: str
+    reads: List[Tuple[str, str]] = field(default_factory=list)
+    cond: Optional[bool] = None
+    sets: List[Tuple[str, str]] = field(default_factory=list)
+    register: Optional[int] = None
+    value: Optional[int] = None
+    deps: List[int] = field(default_factory=list)
+    live: List[Tuple[str, str]] = field(default_factory=list)
+
+
+def _scalar(value) -> bool:
+    return value is None or isinstance(value, (numbers.Number, str))
+
+
+class PyTrace:
+    """A context manager tracing the Python code under ``roots`` line by line.
+
+    Other code runs untraced. A call of a ``writes`` code object (``(self, addr,
+    value)``, as :meth:`~pysidtracker.player.MemPlayer._wr`) to a SID address
+    records a ``write``. :func:`sys.settrace` is installed only while entered.
+    """
+
+    def __init__(self, roots: Sequence, writes: Sequence[types.CodeType] = ()):
+        self.roots = tuple(os.path.realpath(r) for r in roots)
+        self.events: List[PyEvent] = []
+        self._writes = frozenset(writes)
+        self._files: Dict[str, Dict[int, _Stmt]] = {}
+        self._repr = _Repr()
+        self._paths: Dict[str, bool] = {}
+        self._depth: Dict[object, int] = {}
+        self._serial: Dict[object, int] = {}
+        self._pending: Dict[object, Tuple[int, _Stmt]] = {}
+        self._branch: Dict[object, Dict[int, int]] = {}
+        self._last: Dict[tuple, int] = {}
+        self._saved = None
+
+    def __enter__(self) -> "PyTrace":
+        self._saved = sys.gettrace()
+        sys.settrace(self._global)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        sys.settrace(self._saved)
+        for held in (self._depth, self._serial, self._pending, self._branch):
+            held.clear()
+
+    def _traced(self, path: str) -> bool:
+        hit = self._paths.get(path)
+        if hit is None:
+            real = os.path.realpath(path)
+            hit = self._paths[path] = any(
+                real == r or real.startswith(r + os.sep) for r in self.roots
+            )
+        return hit
+
+    def _stmt(self, path: str, line: int) -> Optional[_Stmt]:
+        index = self._files.get(path)
+        if index is None:
+            index = self._files[path] = _index(path)
+        return index.get(line)
+
+    def _key(self, frame, spec, local) -> Optional[tuple]:
+        """The identity of the storage a chain names: a local, global, attribute or item."""
+        if not spec[0]:
+            return None
+        try:
+            if spec[0] == "N":
+                if spec[1] in local:
+                    return ("L", self._serial[frame], spec[1])
+                return ("G", spec[1])
+            base = eval(spec[1], frame.f_globals, local)  # pylint: disable=eval-used
+            if spec[0] == "A":
+                return (id(base), spec[2])
+            item = eval(spec[2], frame.f_globals, local)  # pylint: disable=eval-used
+            hash(item)
+            return (id(base), item)
+        except Exception:  # pylint: disable=broad-except
+            return None
+
+    def _eval(self, frame, exprs):
+        """``(text, value text, keys, scalar)`` of each chain that evaluates.
+
+        ``keys`` is the chain's storage, then for a subscript its container's.
+        """
+        out = []
+        local = frame.f_locals
+        for text, code, spec in exprs:
+            try:
+                value = eval(code, frame.f_globals, local)  # pylint: disable=eval-used
+            except Exception:  # pylint: disable=broad-except
+                continue
+            if not isinstance(value, _HIDDEN):
+                keys = [self._key(frame, spec, local)]
+                if spec[0] == "S":
+                    keys.append(self._key(frame, spec[3], local))
+                out.append((text, self._repr.repr(value), keys, _scalar(value)))
+        return out
+
+    def _emit(self, frame, kind: str, text: str, **kw) -> int:
+        code = frame.f_code
+        self.events.append(
+            PyEvent(
+                kind,
+                self._depth.get(frame, 0),
+                code.co_qualname,
+                code.co_filename,
+                frame.f_lineno,
+                text,
+                **kw,
+            )
+        )
+        return len(self.events) - 1
+
+    def _settle(self, frame) -> Optional[int]:
+        """Attach what the frame's pending statement assigned; return its event."""
+        held = self._pending.pop(frame, None)
+        if held is None:
+            return None
+        idx, stmt = held
+        if stmt.sets:
+            got = self._eval(frame, stmt.sets)
+            self.events[idx].sets = [(t, v) for t, v, _, _ in got]
+            for _, _, keys, _ in got:
+                if keys[0] is not None:
+                    self._last[keys[0]] = idx
+        return idx
+
+    def _caller(self, frame):
+        parent = frame.f_back
+        while parent is not None and parent not in self._depth:
+            parent = parent.f_back
+        return parent
+
+    def _site(self, frame) -> List[int]:
+        """The pending line of ``frame``'s traced caller, as a dependency."""
+        held = self._pending.get(self._caller(frame))
+        return [held[0]] if held else []
+
+    def _global(self, frame, event, arg):  # pylint: disable=unused-argument
+        code = frame.f_code
+        if code in self._writes:
+            self._write(frame)
+        if not self._traced(code.co_filename):
+            return None
+        parent = self._caller(frame)
+        self._depth[frame] = self._depth[parent] + 1 if parent is not None else 0
+        self._serial[frame] = len(self.events)
+        nargs = code.co_argcount + code.co_kwonlyargcount
+        nargs += bool(code.co_flags & 0x04) + bool(code.co_flags & 0x08)
+        local = frame.f_locals
+        names = [n for n in code.co_varnames[:nargs] if n in local]
+        idx = self._emit(
+            frame,
+            "call",
+            code.co_name,
+            reads=[(n, self._repr.repr(local[n])) for n in names],
+            deps=self._site(frame),
+        )
+        for n in names:
+            self._last[("L", self._serial[frame], n)] = idx
+        return self._local
+
+    def _write(self, frame) -> None:
+        try:
+            addr, value = (
+                int(frame.f_locals[n]) for n in frame.f_code.co_varnames[1:3]
+            )
+        except (KeyError, TypeError, ValueError):
+            return
+        offset = (addr & 0xFFFF) - mm.SID_BASE
+        if not 0 <= offset < reg.SID_REG_COUNT:
+            return
+        caller = self._caller(frame)
+        self.events.append(
+            PyEvent(
+                "write",
+                self._depth.get(caller, -1) + 1,
+                caller.f_code.co_qualname if caller else "",
+                caller.f_code.co_filename if caller else "",
+                caller.f_lineno if caller else 0,
+                f"SID ${offset:02X} {gridcmp.REG_NAMES[offset]} = ${value & 0xFF:02X}",
+                register=offset,
+                value=value & 0xFF,
+                deps=self._site(frame),
+            )
+        )
+
+    def _line(self, frame) -> None:
+        stmt = self._stmt(frame.f_code.co_filename, frame.f_lineno)
+        held = self._pending.get(frame)
+        if stmt is not None and held is not None and held[1] is stmt:
+            return
+        self._settle(frame)
+        if stmt is None:
+            text = linecache.getline(frame.f_code.co_filename, frame.f_lineno)
+            self._emit(frame, "line", text.strip())
+            return
+        cond = None
+        if stmt.cond is not None:
+            try:
+                cond = bool(
+                    eval(  # pylint: disable=eval-used
+                        stmt.cond, frame.f_globals, frame.f_locals
+                    )
+                )
+            except Exception:  # pylint: disable=broad-except
+                cond = None
+        got = self._eval(frame, stmt.reads)
+        branches = self._branch.setdefault(frame, {})
+        deps = [branches[stmt.control]] if stmt.control in branches else []
+        live = []
+        for text, value, keys, scalar in got:
+            if not scalar:
+                continue
+            hit = next((self._last[k] for k in keys if k in self._last), None)
+            if hit is None:
+                live.append((text, value))
+            else:
+                deps.append(hit)
+        idx = self._emit(
+            frame,
+            "line",
+            stmt.text,
+            reads=[(t, v) for t, v, _, _ in got],
+            cond=cond,
+            deps=sorted(set(deps)),
+            live=live,
+        )
+        branches[stmt.start] = idx
+        self._pending[frame] = (idx, stmt)
+
+    def _local(self, frame, event, arg):
+        if event == "line":
+            self._line(frame)
+        elif event == "return":
+            last = self._settle(frame)
+            idx = self._emit(
+                frame,
+                "return",
+                "return",
+                sets=[("", self._repr.repr(arg))],
+                deps=[] if last is None else [last],
+            )
+            site = self._site(frame)
+            if site:
+                self.events[site[0]].deps.append(idx)
+            for held in (self._depth, self._serial, self._branch):
+                held.pop(frame, None)
+        elif event == "exception":
+            kind, value, _ = arg
+            self._emit(frame, "exception", f"raise {kind.__name__}: {value}")
+        return self._local
+
+    def slice(self, root: int, limit: int = 200) -> List[int]:
+        """The events ``root``'s value came from, nearest first up to ``limit``, in order."""
+        seen = {root}
+        frontier = [root]
+        while frontier and len(seen) < limit:
+            frontier = [
+                d for i in frontier for d in self.events[i].deps if d not in seen
+            ]
+            frontier = list(dict.fromkeys(frontier))[: limit - len(seen)]
+            seen.update(frontier)
+        return sorted(seen)
+
+
+@dataclass
+class CpuStep:
+    """One executed 6502 instruction: the registers it left and the memory it touched.
+
+    ``flow`` is its :func:`jennings.dataflow.flow`: each location it set, to its inputs.
+    """
+
+    pc: int
+    raw: bytes
+    text: str
+    a: int
+    x: int
+    y: int
+    sp: int
+    p: int
+    cycle: int
+    reads: List[Tuple[int, int]] = field(default_factory=list)
+    writes: List[Tuple[int, int]] = field(default_factory=list)
+    flow: Dict[object, frozenset] = field(default_factory=dict)
+
+    def sid_writes(self) -> List[Tuple[int, int]]:
+        """The ``(register offset, value)`` SID writes this instruction made."""
+        out = []
+        for addr, value in self.writes:
+            offset = addr - mm.SID_BASE
+            if 0 <= offset < 0x400 and offset % mm.SID_STRIDE < reg.SID_REG_COUNT:
+                out.append((offset % mm.SID_STRIDE, value))
+        return out
+
+
+def cpu_slice(steps: Sequence[CpuStep], root: int):
+    """The steps ``root``'s SID store came from, and the state it read at entry.
+
+    A backward dynamic slice over each step's ``flow``: ``(indices, live)``, ``live``
+    mapping each location read before this call set it to the value read (registers None).
+    """
+    top = steps[root]
+    sid = {a for a, _ in top.writes if a - mm.SID_BASE in range(0x400)}
+    needed = set().union(*(top.flow.get(a, ()) for a in sid))
+    values = dict(top.reads)
+    keep = [root]
+    for i in range(root - 1, -1, -1):
+        hit = needed & steps[i].flow.keys()
+        if not hit:
+            continue
+        keep.append(i)
+        needed = (needed - hit).union(*(steps[i].flow[loc] for loc in hit))
+        values.update(steps[i].reads)
+    order = sorted(needed, key=lambda x: (isinstance(x, int), str(x)))
+    return sorted(keep), {loc: values.get(loc) for loc in order}
+
+
+def cpu_history(
+    data,
+    frame: int,
+    *,
+    subtune: int = 0,
+    max_cycles: int = 8_000_000,
+    labels: Optional[Dict[str, int]] = None,
+) -> List[CpuStep]:
+    """Every instruction of play call ``frame`` (0-based) of a tune on jennings.
+
+    Booted as :func:`~pysidtracker.oracle.register_grid` is, earlier calls untraced;
+    each step has its disassembly as the code stood, the registers after it, and the
+    bytes it loaded and stored.
+    """
+    from jennings.dataflow import flow
+    from jennings.devices.mpu6502 import MPU
+    from jennings.disassembler import Disassembler
+    from jennings.utils.addressing import AddressParser
+
+    image = data if isinstance(data, SidImage) else SidImage.from_bytes(bytes(data))
+    subject, mpu, mem, play = boot_flat(image, subtune, max_cycles)
+    for _ in range(frame):
+        run_to_rts(mpu, mem, play, 0, max_cycles)
+    dis = Disassembler(
+        MPU(memory=subject), AddressParser(labels=dict(labels or {}, PLAY=play))
+    )
+    reads: List[Tuple[int, int]] = []
+    writes: List[Tuple[int, int]] = []
+    observe_data_access(
+        mpu,
+        on_read=lambda addr: reads.append((addr, mem[addr] & 0xFF)),
+        on_write=lambda addr, value: writes.append((addr, value)),
+    )
+    steps: List[CpuStep] = []
+    code = bytearray(0x10000)
+    start_sp = mpu.sp
+    for byte in (0x00, 0x01):
+        mem[0x0100 + mpu.sp] = byte
+        mpu.sp = (mpu.sp - 1) & 0xFF
+    mpu.a, mpu.pc = 0, play
+    start = mpu.processorCycles
+    while mpu.sp < start_sp and mpu.processorCycles - start <= max_cycles:
+        pc = mpu.pc
+        size, text = dis.instruction_at(pc)
+        raw = bytes(subject[pc : pc + size])
+        for i, byte in enumerate(raw):
+            code[(pc + i) & 0xFFFF] = byte
+        mpu.step()
+        steps.append(
+            CpuStep(
+                pc,
+                raw,
+                text,
+                mpu.a,
+                mpu.x,
+                mpu.y,
+                mpu.sp,
+                mpu.p,
+                mpu.processorCycles - start,
+                reads[:],
+                writes[:],
+                flow(code, pc, [a for a, _ in reads], [a for a, _ in writes]),
+            )
+        )
+        reads.clear()
+        writes.clear()
+    mpu._vm._on_read = mpu._vm._on_write = None  # pylint: disable=protected-access
+    return steps
+
+
+def _flags(p: int) -> str:
+    return "".join(c if p & (0x80 >> i) else "." for i, c in enumerate(_FLAGS))
+
+
+def cpu_line(step: CpuStep) -> str:
+    """One instruction as a trace-log line: code, registers after it, memory touched."""
+    raw = " ".join(f"{b:02X}" for b in step.raw)
+    mems = [f"r${a:04X}={v:02X}" for a, v in step.reads]
+    mems += [f"w${a:04X}={v:02X}" for a, v in step.writes]
+    return (
+        f"${step.pc:04X} {raw:<8} {step.text:<16} A={step.a:02X} X={step.x:02X} "
+        f"Y={step.y:02X} SP={step.sp:02X} {_flags(step.p)} {' '.join(mems)}"
+    ).rstrip()
+
+
+def py_line(event: PyEvent) -> str:
+    """One Python event as a trace-log line, indented by its call depth."""
+    pad = "  " * max(event.depth, 0)
+    loc = f"{Path(event.path).name}:{event.line}"
+    if event.kind == "write":
+        return f"{pad}** {event.text}  [{event.func} {loc}]"
+    if event.kind == "call":
+        args = ", ".join(f"{n}={v}" for n, v in event.reads)
+        return f"{pad}-> {event.func}({args})  [{loc}]"
+    if event.kind == "return":
+        return f"{pad}<- {event.func} return {event.sets[0][1]}"
+    if event.kind == "exception":
+        return f"{pad}!! {event.text}  [{loc}]"
+    out = f"{pad}{event.line:5d}  {event.text}"
+    if event.cond is not None:
+        out += f"  => {event.cond}"
+    if event.reads:
+        out += "  | " + ", ".join(f"{n}={v}" for n, v in event.reads)
+    if event.sets:
+        out += "  := " + ", ".join(f"{n}={v}" for n, v in event.sets)
+    return out
+
+
+def _loc(loc) -> str:
+    return f"${loc:04X}" if isinstance(loc, int) else loc
+
+
+def _columns(left, right, width, lmarks=(), rmarks=(), top=False) -> List[str]:
+    """Two wrapped columns, ``>>``-marked lines, padded at the top when ``top``."""
+
+    def cells(lines, marks):
+        out = []
+        for i, line in enumerate(lines):
+            indent = " " * min(len(line) - len(line.lstrip()) + 4, 40)
+            wrapped = textwrap.wrap(line, width - 3, subsequent_indent=indent)
+            out += [(">> " if i in marks else "   ") + w for w in wrapped or [""]]
+        return out
+
+    a, b = cells(left, set(lmarks)), cells(right, set(rmarks))
+    if top:
+        n = max(len(a), len(b))
+        a, b = [""] * (n - len(a)) + a, [""] * (n - len(b)) + b
+    return [f"{x:<{width}} | {y}".rstrip() for x, y in zip_longest(a, b, fillvalue="")]
+
+
+@dataclass
+class Divergence:
+    """A diverging cell and both sides' execution of the frame it is in.
+
+    ``frame`` indexes the reference; the render plays it as ``frame + lead``, jennings
+    as call ``frame + cpu_lead``. ``cpu_agrees``: the jennings grid matches the
+    reference through ``frame``, so its history is the reference's own execution.
+    """
+
+    name: str
+    frame: int
+    register: int
+    lead: int
+    cpu_lead: int
+    render_value: int
+    reference_value: int
+    cpu_value: int
+    cpu_agrees: bool
+    verdict: str
+    window: str
+    py: List[PyEvent]
+    cpu: List[CpuStep]
+
+    def py_root(self) -> Optional[int]:
+        """The Python frame's last write of the diverging register, if it wrote one."""
+        hits = [
+            i
+            for i, e in enumerate(self.py)
+            if e.kind == "write" and e.register == self.register
+        ]
+        return hits[-1] if hits else None
+
+    def cpu_root(self) -> Optional[int]:
+        """The 6502 call's last store to the diverging register, if it made one."""
+        hits = [
+            i
+            for i, s in enumerate(self.cpu)
+            if any(r == self.register for r, _ in s.sid_writes())
+        ]
+        return hits[-1] if hits else None
+
+    def py_slice(self) -> Tuple[List[int], Dict[str, str]]:
+        """The Python events the diverging write's value came from, and the state they read."""
+        root = self.py_root()
+        if root is None:
+            return [], {}
+        trace = PyTrace(())
+        trace.events = self.py
+        keep = trace.slice(root)
+        return keep, {t: v for i in keep for t, v in self.py[i].live}
+
+    def cpu_dataflow(self) -> Tuple[List[int], dict]:
+        """:func:`cpu_slice` of the diverging store."""
+        root = self.cpu_root()
+        return ([], {}) if root is None else cpu_slice(self.cpu, root)
+
+    def header(self) -> List[str]:
+        """The cell, both sides' values, the frame alignment and the grid window."""
+        agree = "agrees" if self.cpu_agrees else "DOES NOT agree"
+        return [
+            f"divergence: {self.name}, reference frame {self.frame}, "
+            f"register ${self.register:02X} {gridcmp.REG_NAMES[self.register]}",
+            f"  python ${self.render_value:02X}, reference ${self.reference_value:02X}, "
+            f"jennings ${self.cpu_value:02X}",
+            f"  python frame {self.frame + self.lead} (lead {self.lead}); "
+            f"6502 play call {self.frame + self.cpu_lead} (lead {self.cpu_lead}), "
+            f"which {agree} with the reference to here",
+            f"  {self.verdict}",
+            "",
+            self.window,
+        ]
+
+    def text(self, width: int = 110) -> str:
+        """The header, both sides' dataflow of the value, then both full histories."""
+        py_keep, py_live = self.py_slice()
+        cpu_keep, cpu_live = self.cpu_dataflow()
+        rule = f"{'-' * width}-+-{'-' * width}"
+        rows = self.header() + [
+            "",
+            "WHY: the lines and instructions the diverging value came from",
+            f"{'PYTHON':<{width}} | 6502",
+            rule,
+        ]
+        rows += _columns(
+            [py_line(self.py[i]) for i in py_keep] or ["(register not written)"],
+            [cpu_line(self.cpu[i]) for i in cpu_keep] or ["(register not stored)"],
+            width,
+            [len(py_keep) - 1],
+            [len(cpu_keep) - 1],
+        )
+        rows += ["", "state read from earlier frames", rule]
+        rows += _columns(
+            [f"{t} = {v}" for t, v in py_live.items()],
+            [
+                f"{_loc(k)} = " + ("entry" if v is None else f"${v:02X}")
+                for k, v in cpu_live.items()
+            ],
+            width,
+        )
+        nw = sum(e.kind == "write" for e in self.py)
+        cw = sum(len(s.sid_writes()) for s in self.cpu)
+        rows += [
+            "",
+            f"FULL HISTORIES, meeting at the diverging write: python {len(self.py)} "
+            f"events, {nw} SID writes; 6502 {len(self.cpu)} instructions, {cw} SID "
+            "writes ('**', 'w$D4xx'); '>>' the dataflow above",
+            f"{'PYTHON':<{width}} | 6502",
+            rule,
+        ]
+        pr = self.py_root()
+        cr = self.cpu_root()
+        pr = len(self.py) - 1 if pr is None else pr
+        cr = len(self.cpu) - 1 if cr is None else cr
+        for lo, hi, clo, chi, top in (
+            (0, pr + 1, 0, cr + 1, True),
+            (pr + 1, len(self.py), cr + 1, len(self.cpu), False),
+        ):
+            rows += _columns(
+                [py_line(e) for e in self.py[lo:hi]],
+                [cpu_line(s) for s in self.cpu[clo:chi]],
+                width,
+                [i - lo for i in py_keep if lo <= i < hi],
+                [i - clo for i in cpu_keep if clo <= i < chi],
+                top,
+            )
+        return "\n".join(rows)
+
+    def summary(self) -> dict:
+        """The machine-readable form for ``json.dumps``."""
+        out = {k: v for k, v in asdict(self).items() if k not in ("py", "cpu")}
+        py_keep, py_live = self.py_slice()
+        cpu_keep, cpu_live = self.cpu_dataflow()
+        out.update(
+            register_name=gridcmp.REG_NAMES[self.register],
+            py_slice=py_keep,
+            py_live=py_live,
+            cpu_slice=cpu_keep,
+            cpu_live={_loc(k): v for k, v in cpu_live.items()},
+            py=[asdict(e) for e in self.py],
+            cpu=[
+                dict(
+                    asdict(s),
+                    raw=s.raw.hex(),
+                    sid_writes=s.sid_writes(),
+                    flow={_loc(k): sorted(map(_loc, v)) for k, v in s.flow.items()},
+                )
+                for s in self.cpu
+            ],
+        )
+        return out
+
+
+def player_roots(player) -> List[str]:
+    """The source roots of ``player``'s own packages: its MRO's, bar the base class."""
+    from .player import MemPlayer
+
+    roots = set()
+    for cls in type(player).__mro__:
+        if cls is MemPlayer or not issubclass(cls, MemPlayer):
+            continue
+        top = sys.modules[cls.__module__.partition(".")[0]]
+        path = top.__file__
+        roots.add(os.path.dirname(path) if path.endswith("__init__.py") else path)
+    return sorted(roots)
+
+
+def trace_frame(
+    make_player: Callable[[], object],
+    frame: int,
+    *,
+    roots: Optional[Sequence] = None,
+    progress: bool = False,
+) -> List[PyEvent]:
+    """The :class:`PyTrace` events of ``make_player()``'s frame ``frame`` (0-based).
+
+    Earlier frames play untraced; ``roots`` defaults to :func:`player_roots`.
+    """
+    player = make_player()
+    steps = range(frame)
+    if progress:
+        from tqdm import tqdm
+
+        steps = tqdm(steps, desc="python frames", unit="frame")
+    for _ in steps:
+        player.play_frame()
+    write = type(player)._wr.__code__  # pylint: disable=protected-access
+    with PyTrace(roots or player_roots(player), [write]) as trace:
+        player.play_frame()
+    return trace.events
+
+
+def explain_divergence(
+    data,
+    make_player: Callable[[bytes], object],
+    reference=None,
+    *,
+    song: int = 1,
+    max_lead: int = 0,
+    frames: int = 250,
+    frame: Optional[int] = None,
+    register: Optional[int] = None,
+    name: str = "",
+    roots: Optional[Sequence] = None,
+    progress: bool = False,
+) -> Optional[Divergence]:
+    """The first divergence of ``make_player(data)``'s render, explained; None if none.
+
+    ``reference`` is the expected grid (default ``frames`` of jennings'), compared under
+    :func:`~pysidtracker.gridcmp.verdict_lead` up to ``max_lead``; ``frame`` and
+    ``register`` pick a reference cell instead of the first mismatch.
+    """
+    data = bytes(data)
+    nref = len(reference) if reference is not None else max(frames, (frame or 0) + 1)
+    jen = np.asarray(register_grid(data, nref + max_lead, subtune=song - 1), np.int16)
+    ref = jen[:nref] if reference is None else np.asarray(reference, np.int16)
+    lib = np.asarray(make_player(data).render_grid(len(ref) + max_lead), np.int16)
+    found = gridcmp.verdict_lead(ref, lib, max_lead=max_lead)
+    cpu = gridcmp.verdict_lead(ref, jen, max_lead=max_lead)
+    if frame is None:
+        if found.ok:
+            return None
+        frame, register = found.first, found.first_reg
+    if register is None:
+        bad = np.flatnonzero(ref[frame] != lib[frame + found.lead])
+        register = int(bad[0]) if bad.size else 0
+    at, ct = frame + found.lead, frame + cpu.lead
+    return Divergence(
+        name=name or "tune",
+        frame=frame,
+        register=register,
+        lead=found.lead,
+        cpu_lead=cpu.lead,
+        render_value=int(lib[at, register]),
+        reference_value=int(ref[frame, register]),
+        cpu_value=int(jen[ct, register]),
+        cpu_agrees=cpu.ok or cpu.first > frame,
+        verdict=gridcmp.lead_report(found),
+        window=gridcmp.window_report(*gridcmp.aligned(ref, lib, found.lead), frame),
+        py=trace_frame(lambda: make_player(data), at, roots=roots, progress=progress),
+        cpu=cpu_history(data, ct, subtune=song - 1),
+    )
+
+
+def main(argv=None) -> int:
+    """``python -m pysidtracker.whydiff``: explain a render's first divergence.
+
+    ``player`` is ``module:callable(data, song) -> MemPlayer``; the reference is a
+    ``gridcmp`` grid file (``--reference``) or the jennings grid. Exit 0 on agreement.
+    """
+    parser = argparse.ArgumentParser(description="Explain a render's first divergence.")
+    parser.add_argument("tune", type=Path)
+    parser.add_argument("player", help="module:callable(data, song) -> MemPlayer")
+    parser.add_argument("--song", type=int, default=1)
+    parser.add_argument("--frames", type=int, default=250)
+    parser.add_argument("--reference", type=Path, help="a gridcmp grid file")
+    parser.add_argument("--max-lead", type=int, default=0)
+    parser.add_argument("--frame", type=int, help="reference frame to explain")
+    parser.add_argument("--register", type=lambda s: int(s, 0), help="SID offset")
+    parser.add_argument("--width", type=int, default=110)
+    parser.add_argument("--json", dest="json_path", type=Path)
+    args = parser.parse_args(argv)
+    module, _, attr = args.player.partition(":")
+    make = getattr(importlib.import_module(module), attr)
+    data = args.tune.read_bytes()
+    if args.reference:
+        ref = gridcmp.read_grid(args.reference, args.frames)
+    else:
+        ref = register_grid(data, args.frames, subtune=args.song - 1)
+    why = explain_divergence(
+        data,
+        lambda d: make(d, args.song),
+        ref,
+        song=args.song,
+        max_lead=args.max_lead,
+        frame=args.frame,
+        register=args.register,
+        name=args.tune.name,
+        progress=True,
+    )
+    if why is None:
+        print(f"verified: {args.frames} frames agree")
+        return 0
+    print(why.text(args.width))
+    if args.json_path:
+        args.json_path.write_text(json.dumps(why.summary()), encoding="utf-8")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
