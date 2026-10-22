@@ -16,6 +16,7 @@ python -m pysidtracker.survey leads $HVSC tunes.csv <md5>_<song> --work .hvsc-su
 python -m pysidtracker.survey leads $HVSC tunes.csv --verdict differs --work .hvsc-survey
 python -m pysidtracker.survey variants build1.sid build2.sid --ref base.sid --out variants.csv
 python -m pysidtracker.survey file scripts/oracle_hvsc.py native.prg --frames 3000
+python -m pysidtracker.survey file --format auto tune.sid --frames 3000
 ```
 
 `run` also takes `--player REGEX`, `--limit N` (first N tunes), `--jobs`,
@@ -37,6 +38,12 @@ masked to a nibble). `nframes` already includes the `LEAD` frames the
 alignment may shift by, so a renderer needs nothing from `pysidtracker.survey`.
 The dict is recorded as the `info` column. Raising `pysidtracker.errors.SidParseError` (or a subclass)
 means the tune was not recognised; any other exception is a library error.
+
+`--format NAME` (on `run`, `diff`, `leads`, `explain` and `file`, in place of a
+renderer) renders with an installed format's player
+(`pysidtracker.formats.render`): `SidFormat.play(data, song - 1)`, `info`
+`{"format": NAME}`. `--format auto` picks, per tune, the format whose parser
+recognises it; a tune no installed format plays is `not_decompiled`.
 
 ## `find`
 

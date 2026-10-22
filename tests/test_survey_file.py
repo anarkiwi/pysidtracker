@@ -3,12 +3,14 @@
 import csv
 import hashlib
 import io
+import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import zstandard
 
-from pysidtracker import oracle, registers, survey
+from pysidtracker import formats, oracle, registers, survey
 from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidFormatError, SidParseError
 from pysidtracker.header import parse_sid_header
@@ -223,3 +225,49 @@ def test_file_cli_pool(prg, tmp_path):
 def test_load_render_specs(tmp_path):
     assert survey.load_render(str(_hook(tmp_path))) is render_exact
     assert survey.load_render(f"{__name__}:render_glitch") is render_glitch
+
+
+class _GridPlayer:
+    """A format player of the synthetic tune: its expected grid."""
+
+    def __init__(self, subtune):
+        self.subtune = subtune
+
+    def render_grid(self, nframes):
+        return expected(nframes)
+
+
+FAKE_FORMAT = formats.SidFormat(
+    name="fake",
+    parser=SimpleNamespace(
+        parse=lambda data, subtune: subtune, recognize=lambda image: True
+    ),
+    player=_GridPlayer,
+)
+
+
+def test_file_cli_format(prg, tmp_path, monkeypatch):
+    monkeypatch.setattr(formats, "discover_formats", lambda: [FAKE_FORMAT])
+    files = [tmp_path / f"{i}.prg" for i in range(2)]
+    for f in files:
+        f.write_bytes(prg)
+    out = tmp_path / "out.csv"
+    args = ["file", *map(str, files), "--frames", "16", "--jobs", "1"]
+    for name in ("auto", "fake"):
+        assert survey.main(args + ["--out", str(out), "--format", name]) == 0
+        rows = survey.load_tunes(out)
+        assert [(r["path"], r["verdict"]) for r in rows] == [
+            (str(f), "exact") for f in files
+        ]
+        assert {json.loads(r["info"])["format"] for r in rows} == {"fake"}
+    assert survey.main(args + ["--out", str(out), "--format", "other"]) == 0
+    assert {r["verdict"] for r in survey.load_tunes(out)} == {"not_decompiled"}
+    with pytest.raises(SystemExit):
+        survey.main(["file", str(files[0]), "--frames", "16"])
+
+
+def test_renderer_prefers_format_over_spec():
+    assert survey.renderer() is None
+    assert survey.renderer(f"{__name__}:render_exact") is render_exact
+    render = survey.renderer(f"{__name__}:render_exact", "auto")
+    assert render.func is formats.render and render.args == ("auto",)

@@ -124,7 +124,9 @@ API.
   / `disasm`) that discovers installed formats through the `pysidtracker.formats`
   entry-point group and runs against each format's parser + player, plus any
   subcommands it contributes. A format package registers a `SidFormat` instead
-  of shipping its own CLI. `cli` holds the underlying argparse scaffold
+  of shipping its own CLI; `find_format(data, name)` and `SidFormat.play(data,
+  subtune)` play a tune's subtune (default its start song) on the installed
+  format, as `survey --format` and `whydiff --format` do. `cli` holds the underlying argparse scaffold
   (`run_cli`, `print_info`, `add_reglog_command`, `add_wav_command`).
 - `registers` additions — `SID_VOICES`, voice/global register indices, and the
   `attack_decay` / `sustain_release` ADSR nibble packers.

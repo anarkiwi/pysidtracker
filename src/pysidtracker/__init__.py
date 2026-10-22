@@ -57,7 +57,9 @@ from .formats import (
     FormatCommand,
     SidFormat,
     discover_formats,
+    find_format,
     recognize_format,
+    start_subtune,
 )
 from .fixtures import (
     CsdbFetchError,
@@ -232,7 +234,7 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.20.2"
+__version__ = "0.21.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -350,6 +352,7 @@ __all__ = [
     "init_effects",
     "subtune_selection",
     "discover_formats",
+    "find_format",
     "editor_io",
     "encode_cstr",
     "entry_labels",
@@ -398,6 +401,7 @@ __all__ = [
     "raise_cycles",
     "read_sidwr",
     "recognize_format",
+    "start_subtune",
     "register_grid",
     "register_writes_from_player",
     "registers",
