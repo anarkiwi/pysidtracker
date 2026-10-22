@@ -501,6 +501,9 @@ def test_a_side_without_a_store_traces_its_last_store():
     assert (cpu.frame, cpu.traced) == (3, 2) and cpu.events[cpu.root].text.startswith(
         "STA"
     )
+    ram = whydiff.cpu_side(sid, 2, 0, address=labels["cnt"])
+    assert [ram.events[i].text.split()[0] for i in ram.keep] == ["INC"]
+    assert ram.live == {f"${labels['cnt']:04X}": "$02"}
     never = whydiff.cpu_side(sid, 3, 4, grid=jen)
     assert never.root is None and never.traced == 3
     assert (
