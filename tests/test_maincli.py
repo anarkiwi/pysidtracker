@@ -107,6 +107,7 @@ def test_wav_renders(monkeypatch, tmp_path, tune):
     )
     assert written["dst"].endswith("o.wav")
     assert written["kw"]["cycles_per_frame"] > 0  # framed at the tune's clock
+    assert written["kw"]["clock_frequency"] > 0
 
 
 def test_format_specific_subcommand(capsys, tune):

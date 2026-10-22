@@ -204,6 +204,11 @@ imported lazily; a missing `audio` extra raises `AudioUnavailable`. Any object
 with `write_register` / `clock(timedelta)` / `sampling_frequency` may be passed
 as `device`.
 
+`render_player_samples(player, *, seconds, ..., progress=False)` and
+`render_player_wav` drive a player's `play_frame()` through the same path; the
+default device is built at the render's `clock_frequency` (an NTSC tune renders
+at the NTSC clock), and `progress` shows a tqdm bar over the frames.
+
 `default_device(model, sampling_frequency=None, clock_frequency=None)` is the
 public accessor dependents use to construct that default pyresidfp device (the
 old private `_default_device` remains as a thin alias for back-compat), and

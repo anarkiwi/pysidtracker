@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Iterable, Tuple
 
 import numpy as _np
+from tqdm import tqdm
 from vagrant_moses.memmap import PAL
 
 from .errors import AudioUnavailable
@@ -67,20 +68,23 @@ def default_device(model: str, sampling_frequency=None, clock_frequency=None):
 _default_device = default_device
 
 
-def resolve_device(device=None, model: str = "6581", sampling_frequency=None):
+def resolve_device(
+    device=None, model: str = "6581", sampling_frequency=None, clock_frequency=None
+):
     """Return a render device, validating ``model`` and building the default.
 
     Centralises the model-in-:data:`CHIP_MODELS` check plus default pyresidfp
     device creation every leaf's ``audio.py`` duplicated. When ``device`` is
     given it is validated (``model``) and returned as-is; otherwise the default
-    device is built (which raises :class:`~pysidtracker.errors.AudioUnavailable`
-    if pyresidfp is missing). Raises ``ValueError`` for an unknown ``model``.
+    device is built at ``clock_frequency`` (which raises
+    :class:`~pysidtracker.errors.AudioUnavailable` if pyresidfp is missing).
+    Raises ``ValueError`` for an unknown ``model``.
     """
     if model not in CHIP_MODELS:
         raise ValueError(f"chip model must be one of {CHIP_MODELS}")
     if device is not None:
         return device
-    return default_device(model, sampling_frequency)
+    return default_device(model, sampling_frequency, clock_frequency)
 
 
 def seconds_to_frames(
@@ -195,6 +199,7 @@ def render_player_samples(
     cycles_per_frame: "int | None" = None,
     clock_frequency: "float | None" = None,
     write_spacing: int = DEFAULT_WRITE_SPACING,
+    progress: bool = False,
 ):
     """Render ``seconds`` of a :class:`~pysidtracker.player.MemPlayer` to samples.
 
@@ -202,9 +207,10 @@ def render_player_samples(
     renders them through :func:`render_samples`. ``cycles_per_frame`` defaults to
     the player's own play-routine cadence (its ``cycles_per_frame`` attribute)
     or the PAL video frame; ``clock_frequency`` defaults to the device's clock or
-    the PAL system clock. Returns ``(samples, sampling_frequency)``.
+    the PAL system clock, and a default device is built at it. ``progress``
+    shows a tqdm bar over the frames. Returns ``(samples, sampling_frequency)``.
     """
-    device = resolve_device(device, model, sampling_frequency)
+    device = resolve_device(device, model, sampling_frequency, clock_frequency)
     if cycles_per_frame is None:
         cycles_per_frame = getattr(player, "cycles_per_frame", None) or (
             PAL.cycles_per_frame
@@ -212,7 +218,10 @@ def render_player_samples(
     if clock_frequency is None:
         clock_frequency = float(getattr(device, "clock_frequency", PAL.clock_hz))
     nframes = seconds_to_frames(seconds, cycles_per_frame, clock_frequency)
-    frames = (player.play_frame() for _ in range(nframes))
+    frames = (
+        player.play_frame()
+        for _ in tqdm(range(nframes), desc="render", unit="frame", disable=not progress)
+    )
     samples = render_samples(
         frames,
         model=model,
