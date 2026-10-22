@@ -14,6 +14,7 @@ import pytest
 from pysidtracker import testing
 from pysidtracker.testing import (
     DEFAULT_MIRROR,
+    ChecksumMismatch,
     TuneFetchError,
     default_tune_cache,
     fetch_archive_member,
@@ -195,6 +196,14 @@ def test_gather_tune_relpaths_from_ast(tmp_path):
     assert gather_tune_relpaths([tmp_path]) == ["A/x.sid", "B/y.sid", "C/z.sid"]
 
 
+def test_gather_tune_relpaths_from_a_manifest(tmp_path):
+    (tmp_path / "t.py").write_text('T = "A/x.sid"\n', encoding="utf-8")
+    manifest = tmp_path / "tunes.txt"
+    manifest.write_text("B/y.sid\n\n  C/z.sid notes.txt\n", encoding="utf-8")
+    assert gather_tune_relpaths([manifest]) == ["B/y.sid", "C/z.sid"]
+    assert gather_tune_relpaths([tmp_path]) == ["A/x.sid"]
+
+
 def test_fetch_main_caches_reachable_reports_missing(monkeypatch, tmp_path, capsys):
     def fake(req, timeout=60):  # pylint: disable=unused-argument
         if "good.sid" in req.full_url:
@@ -252,7 +261,7 @@ def test_fetch_verified_caches_while_it_verifies(monkeypatch, tmp_path):
     dest.write_bytes(b"torn")
     assert fetch_verified(url, _sha(b"one"), cache_dir=tmp_path).read_bytes() == b"one"
     assert len(fetched) == 2
-    with pytest.raises(TuneFetchError, match="SHA-256"):
+    with pytest.raises(ChecksumMismatch, match="SHA-256"):
         fetch_verified(url, _sha(b"two"), cache_dir=tmp_path, name="other")
     assert not (tmp_path / "other").exists()
 

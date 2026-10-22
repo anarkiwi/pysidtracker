@@ -70,12 +70,13 @@ def default_tune_cache(root=None) -> Path:
 
 
 def gather_tune_relpaths(paths: Iterable) -> List[str]:
-    """Every ``*.sid`` string literal in the Python files under ``paths``.
+    """Every ``*.sid`` relpath named by the files under ``paths``.
 
-    Parses each file with :mod:`ast` (no import, no side effects) and collects
+    A Python file is parsed with :mod:`ast` (no import, no side effects) for
     every string constant ending in ``.sid`` -- so a suite declares the tunes it
     needs as plain relpath literals (in dicts/lists/constants) and the fetch CLI
-    pre-caches exactly those, with no hand-maintained manifest.
+    pre-caches exactly those. Any other file given directly is a manifest: its
+    whitespace-separated words ending in ``.sid``.
     """
     files: List[Path] = []
     for entry in paths:
@@ -83,7 +84,11 @@ def gather_tune_relpaths(paths: Iterable) -> List[str]:
         files.extend(sorted(path.rglob("*.py")) if path.is_dir() else [path])
     rels = set()
     for file in files:
-        tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+        text = file.read_text(encoding="utf-8")
+        if file.suffix != ".py":
+            rels.update(word for word in text.split() if word.endswith(".sid"))
+            continue
+        tree = ast.parse(text, filename=str(file))
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 if node.value.endswith(".sid"):
@@ -93,6 +98,11 @@ def gather_tune_relpaths(paths: Iterable) -> List[str]:
 
 class TuneFetchError(SidError):
     """A tune could not be fetched (mirror unreachable or the tune not found)."""
+
+
+class ChecksumMismatch(TuneFetchError):
+    """A pinned download's SHA-256 is not the pinned one: the content changed, so a
+    test fails rather than skipping as for an unreachable download."""
 
 
 def _mirror(mirror: str) -> str:
@@ -193,10 +203,10 @@ def _sha256_file(path: Path) -> Optional[str]:
 
 
 def _verified(data: bytes, sha256: str, what: str) -> bytes:
-    """``data``, raising :class:`TuneFetchError` unless its SHA-256 is ``sha256``."""
+    """``data``, raising :class:`ChecksumMismatch` unless its SHA-256 is ``sha256``."""
     got = hashlib.sha256(data).hexdigest()
     if got != sha256:
-        raise TuneFetchError(f"{what}: SHA-256 {got}, expected {sha256}")
+        raise ChecksumMismatch(f"{what}: SHA-256 {got}, expected {sha256}")
     return data
 
 

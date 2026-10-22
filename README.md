@@ -56,7 +56,8 @@ API.
   `read_sidtrace`, `sidtrace_cadence`, `sidtrace_grid`.
 - `testing` — HVSC tune fetch/resolve for test suites (`fetch_tune`,
   `resolve_tune`, `make_tune_fixtures`), SHA-256-pinned release downloads
-  (`fetch_verified`, `fetch_archive_member` for one zip/tar member), and
+  (`fetch_verified`, `fetch_archive_member` for one zip/tar member; a changed
+  pin raises `ChecksumMismatch`), and
   `make_oracle_fixtures` / `oracle_grid` — a reusable byte-exact player-vs-`sidtrace`-oracle test
   ([docs/oracle-testing.md](docs/oracle-testing.md)); `assert_matches` /
   `assert_oracle_match` fail with the `whydiff` explanation.
@@ -66,7 +67,8 @@ API.
   the frame it first parted (`python -m pysidtracker.whydiff`,
   [docs/whydiff.md](docs/whydiff.md)).
 - `survey` — whole-song HVSC survey and failure triage of any format's renderer
-  against the `sidtrace` oracle, an oracle-free decompile scope check (`scope`),
+  against the `sidtrace` oracle, verdict moves against a baseline (`compare`),
+  an oracle-free decompile scope check (`scope`),
   and the same compare for single native files (`survey file`, bare PRGs
   wrapped); `sidid` — pure-Python SIDId with the bundled
   `sidid.cfg` (`pysidid` CLI). `pip install "pysidtracker[survey]"`,

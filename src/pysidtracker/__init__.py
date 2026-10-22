@@ -214,6 +214,7 @@ from .variants import (
 )
 from .testing import (
     DEFAULT_MIRROR,
+    ChecksumMismatch,
     TuneFetchError,
     assert_matches,
     assert_oracle_match,
@@ -242,7 +243,7 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.24.0"
+__version__ = "0.25.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -325,6 +326,7 @@ __all__ = [
     "SidtraceUnavailable",
     "Source",
     "TriggerSource",
+    "ChecksumMismatch",
     "TuneFetchError",
     "Insn",
     "Provenance",

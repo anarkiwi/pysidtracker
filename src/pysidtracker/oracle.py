@@ -80,11 +80,14 @@ def boot_flat(
     subtune: int = 0,
     max_cycles: int = 8_000_000,
     illegal_opcodes: bool = True,
+    setup=None,
 ):
     """``(subject, mpu, mem, play)``: ``image`` booted on jennings, ``init`` run, ready to play.
 
     Power-on RAM, ``$D418`` at the driver's maximum volume, ``init`` banked and run
     with ``A = subtune``, then the play address's iomap, as the PSID driver does.
+    ``setup(mpu, subject)``, if given, runs before ``init`` (e.g. to install a
+    :func:`~pysidtracker.emu.observe_data_access` observer that sees init too).
     """
     subject = power_on_ram()
     subject[image.load : image.load + len(image.image)] = image.image
@@ -94,6 +97,8 @@ def boot_flat(
     mpu, mem = wire_mpu(
         subject, illegal_opcodes, reg.sid_model_for_flags(image.header.flags)
     )
+    if setup is not None:
+        setup(mpu, subject)
     run_to_rts(mpu, mem, init, subtune, max_cycles)
     play = image.header.play_address or init
     set_iomap(mpu, psid_play_bank(play))

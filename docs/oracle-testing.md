@@ -123,6 +123,11 @@ it in CI:
 - run: pytest -m oracle -n auto
 ```
 
+`pysid-tune-fetch --cache DIR --tests PATH` pre-caches every tune a suite names:
+the `*.sid` string literals of the Python files under `PATH`, or the
+whitespace-separated `*.sid` relpaths of a manifest file given directly (e.g. a
+committed corpus sample list).
+
 See this repo's [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) `oracle`
 job and [`tests/test_oracle_hvsc.py`](../tests/test_oracle_hvsc.py) for a complete
 example (the base package validates its own `register_grid` this way).
