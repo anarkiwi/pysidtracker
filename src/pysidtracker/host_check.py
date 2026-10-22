@@ -10,14 +10,14 @@ import csv
 import os
 import sys
 from collections import Counter
-from concurrent.futures import as_completed
 from pathlib import Path
 
 from tqdm import tqdm
 
 from .irqhost import InterruptHost
 from .oracle import SidtraceUnavailable, cached_sidtrace
-from .survey import ORACLE_ARGS, _err, deadline, load_tunes, oracle_cache, pool
+from .jobs import deadline, results
+from .survey import ORACLE_ARGS, _err, load_tunes, oracle_cache
 
 FIELDS = ["key", "path", "song", "verdict", "rows", "first", "cycle"]
 FIELDS += ["oracle_row", "host_row", "error"]
@@ -34,11 +34,22 @@ def first_difference(want, got):
     return n if first is None and len(want) != len(got) else first
 
 
+def _job_row(job):
+    """The identifying fields of a :func:`check` job's row."""
+    _, tune, song, *_ = job
+    return {"key": f"{tune['md5']}_{song}", "path": tune["path"], "song": song}
+
+
+def _failed(job, error):
+    """The row of a :func:`check` job whose worker raised or died."""
+    return dict(_job_row(job), verdict="host_error", error=_err(error))
+
+
 def check(job):
     """One subtune's comparison row (see ``FIELDS``)."""
-    sid_path, tune, song, work, seconds, timeout = job
-    key = f"{tune['md5']}_{song}"
-    row = {"key": key, "path": tune["path"], "song": song}
+    sid_path, _, song, work, seconds, timeout = job
+    row = _job_row(job)
+    key = row["key"]
     try:
         want = cached_sidtrace(
             sid_path,
@@ -51,7 +62,10 @@ def check(job):
     except (SidtraceUnavailable, OSError, ValueError) as e:
         return dict(row, verdict="oracle_error", error=_err(e))
     try:
-        with deadline(timeout):
+        with deadline(
+            timeout,
+            dict(row, verdict="host_error", error=f"TimeoutError: exceeded {timeout}s"),
+        ):
             host = InterruptHost(Path(sid_path).read_bytes(), song - 1)
             end = host.start + int(seconds * host.clock_hz)
             host.run(end + 1 - host.cycle)
@@ -82,16 +96,12 @@ def run(hvsc, tunes_csvs, work, *, seconds=10.0, jobs=None, timeout=3600, out=No
         for song in range(1, int(t["songs"]) + 1)
     ]
     tally = Counter()
-    with (
-        pool(jobs) as ex,
-        open(out or work / "host_check.csv", "w", newline="", encoding="utf-8") as f,
-    ):
+    with open(out or work / "host_check.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, FIELDS)
         writer.writeheader()
-        futures = [ex.submit(check, item) for item in work_items]
-        bar = tqdm(as_completed(futures), total=len(futures), unit="song")
-        for done in bar:
-            result = done.result()
+        rows = results(check, work_items, jobs, _failed)
+        bar = tqdm(rows, total=len(work_items), unit="song")
+        for result in bar:
             writer.writerow(result)
             tally[result["verdict"]] += 1
             bar.set_postfix(tally)

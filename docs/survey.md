@@ -21,8 +21,10 @@ python -m pysidtracker.survey file --format auto tune.sid --frames 3000
 
 `run` also takes `--player REGEX`, `--limit N` (first N tunes), `--jobs`,
 `--default-seconds` (subtunes with no HVSC length) and `--timeout` (render
-seconds per subtune before it is a `library_error`, default 600). Player regexes are
-case-insensitive.
+seconds per subtune before it is a `library_error`, default 600; 0 for none). Player regexes
+are case-insensitive. Jobs run in `pysidtracker.jobs` workers: a job's `deadline` arms its
+parent, which kills the worker's process group at the deadline (whether the job is in Python,
+in a C extension or waiting on a child pool) and records the job's timeout row.
 
 ## Renderer
 
