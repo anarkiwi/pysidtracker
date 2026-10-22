@@ -95,7 +95,11 @@ def test_diverging_tune():
                         hvsc_cache=HVSC, oracle_cache=CSV, report_dir=".oracle-cache/why")
 ```
 
-`assert_matches(data, player, reference)` is the same check against any grid.
+`song` (1-based, default 1) selects the subtune on both sides: sidtrace plays it
+(`-o<song>`, cached as `<stem>_<song>.csv.zst`) and the jennings reference runs it.
+`oracle_grid(..., song=None)`, as `make_oracle_fixtures` uses, plays the header's
+start song. `assert_matches(data, player, reference)` is the same check against any
+grid.
 
 ## Never skipped
 

@@ -1,6 +1,13 @@
 """Tests for the HVSC fetch/resolve test helper."""
 
+import hashlib
+import http.client
+import io
+import tarfile
+import threading
+import time
 import urllib.error
+import zipfile
 
 import pytest
 
@@ -9,7 +16,9 @@ from pysidtracker.testing import (
     DEFAULT_MIRROR,
     TuneFetchError,
     default_tune_cache,
+    fetch_archive_member,
     fetch_tune,
+    fetch_verified,
     gather_tune_relpaths,
     make_tune_fixtures,
     resolve_tune,
@@ -202,3 +211,136 @@ def test_fetch_main_caches_reachable_reports_missing(monkeypatch, tmp_path, caps
     assert fetch_main(["--cache", str(cache), "--tests", str(tests_dir)]) == 0
     assert (cache / "A" / "good.sid").read_bytes() == _SID
     assert "A/bad.sid" in capsys.readouterr().err
+
+
+def test_fetch_tune_retries_an_incomplete_read(monkeypatch, tmp_path):
+    replies = [http.client.IncompleteRead(b"PS"), _FakeResp(_SID)]
+
+    def fake(*_a, **_k):
+        reply = replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    _patch_urlopen(monkeypatch, fake)
+    assert fetch_tune("A/x.sid", cache_dir=tmp_path).read_bytes() == _SID
+
+
+def _sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _serve(monkeypatch, blobs):
+    """Serve ``{url: bytes}``; return the list of fetched URLs."""
+    fetched = []
+
+    def fake(req, timeout=60):  # pylint: disable=unused-argument
+        fetched.append(req.full_url)
+        return _FakeResp(blobs[req.full_url])
+
+    _patch_urlopen(monkeypatch, fake)
+    return fetched
+
+
+def test_fetch_verified_caches_while_it_verifies(monkeypatch, tmp_path):
+    url = "https://x.example/get.php/1/rel.tar.gz"
+    fetched = _serve(monkeypatch, {url: b"one"})
+    dest = fetch_verified(url, _sha(b"one"), cache_dir=tmp_path)
+    assert dest == tmp_path / "rel.tar.gz" and dest.read_bytes() == b"one"
+    assert fetch_verified(url, _sha(b"one"), cache_dir=tmp_path) == dest
+    assert len(fetched) == 1
+    dest.write_bytes(b"torn")
+    assert fetch_verified(url, _sha(b"one"), cache_dir=tmp_path).read_bytes() == b"one"
+    assert len(fetched) == 2
+    with pytest.raises(TuneFetchError, match="SHA-256"):
+        fetch_verified(url, _sha(b"two"), cache_dir=tmp_path, name="other")
+    assert not (tmp_path / "other").exists()
+
+
+def test_download_retries_an_empty_body(monkeypatch):
+    replies = [b"", b"data"]
+    _patch_urlopen(monkeypatch, lambda *a, **k: _FakeResp(replies.pop(0)))
+    assert testing._download("http://x/f") == b"data"
+    _patch_urlopen(monkeypatch, lambda *a, **k: _FakeResp(b""))
+    with pytest.raises(TuneFetchError, match="an empty body"):
+        testing._download("http://x/f", retries=2)
+
+
+def test_fetch_verified_downloads_once_for_concurrent_callers(monkeypatch, tmp_path):
+    url = "https://x.example/rel.zip"
+    fetched = []
+
+    def fake(req, timeout=60):  # pylint: disable=unused-argument
+        fetched.append(req.full_url)
+        time.sleep(0.05)
+        return _FakeResp(b"one")
+
+    _patch_urlopen(monkeypatch, fake)
+    got = []
+    workers = [
+        threading.Thread(
+            target=lambda: got.append(
+                fetch_verified(url, _sha(b"one"), cache_dir=tmp_path)
+            )
+        )
+        for _ in range(4)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert fetched == [url] and got == [tmp_path / "rel.zip"] * 4
+
+
+def _zip(members):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def _tgz(members, dirs=()):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name in dirs:
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.DIRTYPE
+            tf.addfile(info)
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("pack", [_zip, _tgz])
+def test_fetch_archive_member_extracts_and_verifies(monkeypatch, tmp_path, pack):
+    archive = pack({"rel/a/tune.swm": b"tune", "rel/b.swm": b"other"})
+    url = "https://x.example/rel.pack"
+    fetched = _serve(monkeypatch, {url: archive})
+    args = (url, _sha(archive), "rel/a/tune.swm", _sha(b"tune"))
+    dest = fetch_archive_member(*args, cache_dir=tmp_path)
+    assert dest == tmp_path / "tune.swm" and dest.read_bytes() == b"tune"
+    (tmp_path / "rel.pack").unlink()
+    named = fetch_archive_member(*args, cache_dir=tmp_path, name="t-1.swm")
+    assert named.read_bytes() == b"tune" and len(fetched) == 2
+    assert fetch_archive_member(*args, cache_dir=tmp_path) == dest
+    assert len(fetched) == 2
+    with pytest.raises(TuneFetchError, match="rel/b.swm: SHA-256"):
+        fetch_archive_member(
+            url, _sha(archive), "rel/b.swm", _sha(b"x"), cache_dir=tmp_path
+        )
+    with pytest.raises(KeyError):
+        fetch_archive_member(
+            url, _sha(archive), "rel/none", _sha(b""), cache_dir=tmp_path
+        )
+
+
+def test_fetch_archive_member_rejects_a_directory(monkeypatch, tmp_path):
+    archive = _tgz({}, dirs=("rel/sub",))
+    _serve(monkeypatch, {"https://x.example/r.tgz": archive})
+    with pytest.raises(TuneFetchError, match="not a regular file"):
+        fetch_archive_member(
+            "https://x.example/r.tgz", _sha(archive), "rel/sub", "", cache_dir=tmp_path
+        )

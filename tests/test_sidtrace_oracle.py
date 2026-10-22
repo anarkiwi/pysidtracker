@@ -287,6 +287,24 @@ def test_oracle_grid_renders_on_miss(tmp_path, monkeypatch):
     assert (tmp_path / "csv" / "song.csv.zst").exists() and len(grid) == 2
 
 
+def test_oracle_grid_plays_the_given_song(tmp_path, monkeypatch):
+    seen = []
+
+    def _run(cmd, **kw):
+        seen.append(cmd)
+        return _fake_docker(_CSV)(cmd, **kw)
+
+    monkeypatch.setattr(oracle.subprocess, "run", _run)
+    tune = tmp_path / "song.sid"
+    tune.write_bytes(b"PSID" + b"\x00" * 60)
+    for song in (None, 1, 2):
+        oracle_grid(tune, oracle_cache=tmp_path / "csv", seconds=2, song=song)
+    names = sorted(p.name for p in (tmp_path / "csv").glob("*.csv.zst"))
+    assert names == ["song.csv.zst", "song_1.csv.zst", "song_2.csv.zst"]
+    songs = [[a for a in cmd if a.startswith("-o")] for cmd in seen]
+    assert songs == [[], ["-o1"], ["-o2"]]
+
+
 def test_make_oracle_fixtures_returns_two_fixtures():
     tune_id, oracle_match = make_oracle_fixtures(
         {"x": "A/x.sid"}, hvsc_cache="/tmp/h", oracle_cache="/tmp/o"

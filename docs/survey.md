@@ -9,6 +9,7 @@ full HVSC song length (`DOCUMENTS/Songlengths.md5`).
 pip install "pysidtracker[survey]"
 python -m pysidtracker.survey find $HVSC --player 'goattracker|^\(gt' --out tunes.csv
 python -m pysidtracker.survey run $HVSC tunes.csv --work .hvsc-survey --render mypkg.survey:render
+python -m pysidtracker.survey scope $HVSC tunes.csv --render scripts/oracle_hvsc.py --out scope.csv
 python -m pysidtracker.survey report .hvsc-survey/results.csv
 python -m pysidtracker.survey triage .hvsc-survey
 python -m pysidtracker.survey diff $HVSC tunes.csv <md5>_<song> --work .hvsc-survey --render mypkg.survey:render
@@ -38,7 +39,10 @@ def render(data: bytes, song: int, nframes: int) -> tuple[numpy.ndarray, dict]:
 rows of the 25 per-frame SID registers (`$D400..$D418`, pulse-width highs
 masked to a nibble). `nframes` already includes the `LEAD` frames the
 alignment may shift by, so a renderer needs nothing from `pysidtracker.survey`.
-The dict is recorded as the `info` column. Raising `pysidtracker.errors.SidParseError` (or a subclass)
+The dict is recorded as the `info` column;
+`pysidtracker.cadence.cadence_info(data, song)` gives the play-routine fields
+(`rsid`, `trigger`, `speed`, `dynamic`) for it, so `triage` breaks exact rates
+down by them. Raising `pysidtracker.errors.SidParseError` (or a subclass)
 means the tune was not recognised; any other exception is a library error.
 
 `--format NAME` (on `run`, `diff`, `leads`, `explain` and `file`, in place of a
@@ -146,6 +150,17 @@ default 3) grouped by bad-frame count, first bad frame, lead and registers.
 Results written before these columns existed still report, without that list. `diff` prints the oracle (`O`) and render (`L`) register rows around
 a subtune's first difference. The work directory derives from copyright tunes:
 keep it untracked.
+
+## `scope`
+
+Renders the first `--frames` (default 1) frames of every subtune of a `find`
+CSV with the renderer (`--render`, a `module:function` or `oracle_hvsc.py` spec,
+or `--format`) and no oracle, so the `not_decompiled` and `library_error`
+buckets of `run` come without Docker. The CSV (`--out`, default stdout) has
+`key`, `path`, `player`, `song`, `verdict` (`ok`, `not_decompiled`,
+`library_error`), `info` and `error`; `report` reads it. `--player`, `--limit`,
+`--jobs` and `--timeout` are as for `run`; `survey.scope(...)` and
+`survey.scope_check(job)` are the Python entry points.
 
 ## `triage`
 

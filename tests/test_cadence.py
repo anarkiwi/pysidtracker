@@ -6,7 +6,7 @@ from vagrant_moses import memmap as mm
 
 from pysidtracker import Cadence, SidImage, TriggerSource, playroutine_cadence
 from pysidtracker import registers as reg
-from pysidtracker.cadence import _cadence, _driver_base, _Machine
+from pysidtracker.cadence import _cadence, _driver_base, _Machine, cadence_info
 from pysidtracker.errors import SidParseError
 from pysidtracker.testing import resolve_tune
 
@@ -107,6 +107,17 @@ def test_cia_multispeed_latch():
     cad = _cad(psid(latch(PAL // 4 - 1), speed=1))
     assert (cad.source, cad.cycles_per_call) == (TriggerSource.CIA_TIMER, PAL // 4)
     assert cad.calls_per_frame == 4.0
+
+
+def test_cadence_info_reports_the_songs_build():
+    data = psid(latch(PAL // 4 - 1), songs=2, speed=0b10)
+    assert cadence_info(data) == dict(
+        rsid=False, trigger="pal_video", speed=1, dynamic=False
+    )
+    assert cadence_info(data, 2) == dict(
+        rsid=False, trigger="cia_timer", speed=4, dynamic=False
+    )
+    assert cadence_info(rsid(RTS))["rsid"]
 
 
 def test_multispeed_raster_chain_counts_calls_per_frame():

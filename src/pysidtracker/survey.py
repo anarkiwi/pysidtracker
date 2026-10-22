@@ -1,7 +1,8 @@
 """Whole-song HVSC survey of a format's renderer against the sidplayfp oracle.
 
 ``find`` lists tunes by SIDId signature, ``run`` compares every subtune's oracle
-and ``module:function`` renderer grids, ``report`` tallies, ``diff`` shows frames,
+and ``module:function`` renderer grids, ``scope`` renders them without the oracle,
+``report`` tallies, ``diff`` shows frames,
 ``triage`` classifies first differences and renderer ``info`` exact rates,
 ``leads`` tabulates every alignment lead's mismatches, ``file`` compares native
 files (bare PRGs wrapped as PSID) with their own player.
@@ -102,6 +103,7 @@ RESULT_FIELDS = [
     "error",
 ]
 FILE_FIELDS = RESULT_FIELDS + ["oracle"]
+SCOPE_FIELDS = ["key", "path", "player", "song", "verdict", "info", "error"]
 _FIND = {}
 
 
@@ -225,11 +227,10 @@ def oracle_rows(sid_path, ocsv, seconds, song):
     )
 
 
-def library_row(row, oracle, render, data, song, *, lead=LEAD, timeout=0, lcsv=None):
-    """``row`` completed by ``render(data, song, len(oracle) + lead)`` against
-    ``oracle``: its :func:`verdict_fields`, or a ``not_decompiled`` /
-    ``library_error`` verdict. The render grid is cached at ``lcsv`` if given."""
-    need = len(oracle) + lead
+def rendered(row, render, data, song, need, *, timeout=0, lcsv=None):
+    """``(row, grid)``: ``render(data, song, need)``'s int16 grid with ``row`` given
+    its ``info``, or ``(row, None)`` with a ``not_decompiled`` / ``library_error``
+    verdict. The grid is cached at ``lcsv`` if given."""
     late = dict(
         row, verdict="library_error", error=f"TimeoutError: exceeded {timeout}s"
     )
@@ -242,25 +243,39 @@ def library_row(row, oracle, render, data, song, *, lead=LEAD, timeout=0, lcsv=N
         if lcsv is not None:
             write_grid(lib, lcsv)
     except SidParseError as e:
-        return dict(row, verdict="not_decompiled", error=str(e))
+        return dict(row, verdict="not_decompiled", error=str(e)), None
     except Exception as e:  # pylint: disable=broad-except
-        return dict(row, verdict="library_error", error=_err(e))
+        return dict(row, verdict="library_error", error=_err(e)), None
+    return dict(row, info=json.dumps(info, sort_keys=True, default=str)), lib
+
+
+def library_row(row, oracle, render, data, song, *, lead=LEAD, timeout=0, lcsv=None):
+    """``row`` completed by ``render(data, song, len(oracle) + lead)`` against
+    ``oracle``: its :func:`verdict_fields`, or a ``not_decompiled`` /
+    ``library_error`` verdict. The render grid is cached at ``lcsv`` if given."""
+    row, lib = rendered(
+        row, render, data, song, len(oracle) + lead, timeout=timeout, lcsv=lcsv
+    )
+    if lib is None:
+        return row
     return dict(
         row,
         **verdict_fields(scan_leads(oracle, lib, lead)),
-        info=json.dumps(info, sort_keys=True, default=str),
         oracle_gated=gated(oracle),
         library_gated=gated(lib),
     )
 
 
+def _tune_row(tune, song, **fields):
+    """The identifying fields of subtune ``song`` of a ``find`` CSV row."""
+    key = f"{tune['md5']}_{song}"
+    return dict(key=key, path=tune["path"], player=tune["player"], song=song, **fields)
+
+
 def _job_row(job):
     """The identifying fields of a :func:`check` job's row."""
     _, tune, song, seconds, *_ = job
-    key = f"{tune['md5']}_{song}"
-    return dict(
-        key=key, path=tune["path"], player=tune["player"], song=song, seconds=seconds
-    )
+    return _tune_row(tune, song, seconds=seconds)
 
 
 def _failed(job, error):
@@ -370,6 +385,11 @@ def load_tunes(path):
         return list(csv.DictReader(f))
 
 
+def player_tunes(path, player=None):
+    """The rows of a ``find`` CSV whose player matches the case-insensitive regex."""
+    return [t for t in load_tunes(path) if re.search(player or "", t["player"], re.I)]
+
+
 @functools.lru_cache(maxsize=None)
 def load_render(spec):
     """The callable named by ``module:function`` or ``path.py[:function]``
@@ -460,15 +480,65 @@ def run(
     """Compare every subtune; write ``results.csv`` under ``work``, return tallies."""
     work = Path(work)
     oracle_cache(work)
-    tunes = [
-        t for t in load_tunes(tunes_csv) if re.search(player or "", t["player"], re.I)
-    ]
+    tunes = player_tunes(tunes_csv, player)
     jobs_ = list(jobs_for(hvsc, tunes[:limit], work, render, default_seconds, timeout))
     tally = Counter()
     with open(work / "results.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, RESULT_FIELDS)
         w.writeheader()
         bar = tqdm(results(check, jobs_, jobs, _failed), total=len(jobs_), unit="song")
+        for row in bar:
+            w.writerow(row)
+            tally[row["verdict"]] += 1
+            bar.set_postfix(tally)
+    return tally
+
+
+def scope_check(job):
+    """One subtune's render-only row: ``ok`` when the renderer (a :func:`load_render`
+    spec or a callable) returns the frames, else :func:`rendered`'s verdict."""
+    sid_path, tune, song, frames, render, timeout = job
+    render = load_render(render) if isinstance(render, str) else render
+    data = Path(sid_path).read_bytes()
+    row, lib = rendered(
+        _tune_row(tune, song), render, data, song, frames, timeout=timeout
+    )
+    return row if lib is None else dict(row, verdict="ok")
+
+
+def _failed_scope(job, error):
+    """The row of a :func:`scope_check` job whose worker raised or died."""
+    return dict(_tune_row(job[1], job[2]), verdict="library_error", error=_err(error))
+
+
+def scope(
+    hvsc,
+    tunes_csv,
+    render,
+    *,
+    out=None,
+    player=None,
+    limit=None,
+    frames=1,
+    jobs=None,
+    timeout=600,
+):
+    """Render every subtune's first ``frames`` frames without the oracle; write
+    ``SCOPE_FIELDS`` rows to ``out`` (default stdout), return verdict tallies."""
+    tunes = player_tunes(tunes_csv, player)[:limit]
+    jobs_ = [
+        (Path(hvsc) / t["path"], t, song, frames, render, timeout)
+        for t in tunes
+        for song in range(1, int(t["songs"]) + 1)
+    ]
+    tally = Counter()
+    with (
+        open(out, "w", newline="", encoding="utf-8") if out else nullcontext(sys.stdout)
+    ) as f:
+        w = csv.DictWriter(f, SCOPE_FIELDS)
+        w.writeheader()
+        rows = results(scope_check, jobs_, jobs, _failed_scope)
+        bar = tqdm(rows, total=len(jobs_), unit="song")
         for row in bar:
             w.writerow(row)
             tally[row["verdict"]] += 1
@@ -915,7 +985,7 @@ def triage(work, jobs=None, top=15, max_values=20, near=NEAR):
 
 def main(argv=None):
     """``python -m pysidtracker.survey``:
-    ``find run report diff triage leads explain match variants file``."""
+    ``find run scope report diff triage leads explain match variants file``."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("find", help=find.__doc__)
@@ -994,14 +1064,26 @@ def main(argv=None):
         "--timeout", type=float, default=600, help="render seconds (0: none)"
     )
     p.add_argument("--jobs", type=int, default=os.cpu_count())
-    p = sub.choices["run"]
-    p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
-    p.add_argument("--limit", type=int, help="only the first N tunes")
-    p.add_argument("--default-seconds", type=float, default=180)
+    p = sub.add_parser("scope", help=scope.__doc__)
+    p.add_argument("hvsc")
+    p.add_argument("tunes")
     p.add_argument(
-        "--timeout", type=float, default=600, help="render seconds (0: none)"
+        "--render", help="renderer: oracle_hvsc.py[:function] or module:function"
     )
-    p.add_argument("--jobs", type=int, default=os.cpu_count())
+    p.add_argument("--format", help="an installed format's renderer, or auto")
+    p.add_argument("--frames", type=int, default=1, help="frames rendered per subtune")
+    p.add_argument("--out", help="output CSV (default: stdout)")
+    for name in ("run", "scope"):
+        p = sub.choices[name]
+        p.add_argument(
+            "--player", help="case-insensitive regex on the SIDId player name"
+        )
+        p.add_argument("--limit", type=int, help="only the first N tunes")
+        p.add_argument(
+            "--timeout", type=float, default=600, help="render seconds (0: none)"
+        )
+        p.add_argument("--jobs", type=int, default=os.cpu_count())
+    sub.choices["run"].add_argument("--default-seconds", type=float, default=180)
     p = sub.choices["leads"]
     p.add_argument("keys", nargs="*", help="<md5>_<song> subtune keys")
     p.add_argument(
@@ -1027,7 +1109,7 @@ def main(argv=None):
         ap.error("leads needs keys, --all or --verdict")
     if getattr(a, "format", None) and a.cmd == "file" and a.render:
         a.files, a.render = [a.render] + a.files, None
-    if a.cmd in ("run", "diff", "file") and not (a.render or a.format):
+    if a.cmd in ("run", "diff", "file", "scope") and not (a.render or a.format):
         ap.error(f"{a.cmd} needs a renderer or --format")
     render = renderer(getattr(a, "render", None), getattr(a, "format", None))
     if a.cmd == "find":
@@ -1044,6 +1126,19 @@ def main(argv=None):
             default_seconds=a.default_seconds,
             timeout=a.timeout,
         )
+    elif a.cmd == "scope":
+        out = scope(
+            a.hvsc,
+            a.tunes,
+            render if a.format else a.render,
+            out=a.out,
+            player=a.player,
+            limit=a.limit,
+            frames=a.frames,
+            jobs=a.jobs,
+            timeout=a.timeout,
+        )
+        print(dict(out), file=sys.stderr)
     elif a.cmd == "diff":
         out = diff(a.hvsc, a.tunes, a.key, a.work, render, a.context)
     elif a.cmd == "explain":

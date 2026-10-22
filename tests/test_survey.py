@@ -759,3 +759,67 @@ def test_run_kills_a_render_spinning_in_c_at_its_deadline(survey_tree):
     assert tally == {"library_error": len(rows)}
     assert {r["error"] for r in rows} == {"TimeoutError: exceeded 1s"}
     assert all(r["frames"] for r in rows)
+
+
+def _scope_rows(out):
+    with open(out, newline="", encoding="utf-8") as f:
+        return [(r["song"], r["verdict"], r["error"]) for r in csv.DictReader(f)]
+
+
+def test_scope_classifies_each_subtune_without_the_oracle(survey_tree, tmp_path):
+    hvsc, tunes, _, tune = survey_tree
+    out = tmp_path / "scope.csv"
+    tally = survey.scope(hvsc, tunes, render_exact, out=out, frames=3, jobs=1)
+    assert tally == {"ok": 1, "library_error": 1}
+    with open(out, newline="", encoding="utf-8") as f:
+        rows = sorted(csv.DictReader(f), key=lambda r: r["song"])
+    assert [r["key"] for r in rows] == [f"{tune['md5']}_{s}" for s in (1, 2)]
+    assert "AssertionError" in rows[0]["error"] and rows[1]["verdict"] == "ok"
+    assert json.loads(rows[1]["info"]) == {"variant": "test", "nframes": 3}
+    survey.scope(hvsc, tunes, render_parse_error, out=out, jobs=1, player="nomatch")
+    assert not _scope_rows(out)
+
+
+@pytest.mark.parametrize(
+    "render,verdict,error",
+    [
+        (render_parse_error, "not_decompiled", "cannot decompile"),
+        (render_crash, "library_error", "KeyError"),
+        (render_short, "library_error", "ValueError: render grid shape"),
+    ],
+)
+def test_scope_check_failures(survey_tree, render, verdict, error):
+    hvsc, _, _, tune = survey_tree
+    job = (hvsc / tune["path"], tune, 2, 4, render, 0)
+    row = survey.scope_check(job)
+    assert row["verdict"] == verdict and error in row["error"]
+    assert row["key"] == f"{tune['md5']}_2" and "info" not in row
+
+
+def test_scope_cli_loads_a_renderer_file_and_times_out(survey_tree, tmp_path, capsys):
+    hvsc, tunes, _, _ = survey_tree
+    spec = tmp_path / "oracle_hvsc.py"
+    spec.write_text(
+        "def render(data, song, nframes):\n"
+        "    while song == 2:\n"
+        "        pass\n"
+        "    return [[0] * 25] * nframes, {}\n",
+        "utf-8",
+    )
+    out = tmp_path / "scope.csv"
+    args = ["scope", str(hvsc), str(tunes), "--render", str(spec), "--out", str(out)]
+    assert survey.main(args + ["--jobs", "2", "--timeout", "0.5", "--frames", "5"]) == 0
+    assert sorted(_scope_rows(out)) == [
+        ("1", "ok", ""),
+        ("2", "library_error", "TimeoutError: exceeded 0.5s"),
+    ]
+    assert "'ok': 1" in capsys.readouterr().err
+
+
+def test_scope_records_a_vanished_tune_as_a_library_error(survey_tree, tmp_path):
+    hvsc, tunes, _, tune = survey_tree
+    (hvsc / tune["path"]).unlink()
+    out = tmp_path / "scope.csv"
+    survey.scope(hvsc, tunes, render_exact, out=out, jobs=2)
+    assert {v for _, v, _ in _scope_rows(out)} == {"library_error"}
+    assert all("FileNotFoundError" in e for _, _, e in _scope_rows(out))
