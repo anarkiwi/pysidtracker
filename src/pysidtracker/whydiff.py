@@ -612,15 +612,19 @@ class CpuStep:
         return out
 
 
-def cpu_slice(steps: Sequence[CpuStep], root: int):
-    """The steps ``root``'s SID store came from, and the state it read at entry.
+def cpu_slice(steps: Sequence[CpuStep], root: int, address: Optional[int] = None):
+    """The steps ``root``'s store to ``address`` (default its SID stores) came from, and
+    the state it read at entry.
 
     A backward dynamic slice over each step's ``flow``: ``(indices, live)``, ``live``
     mapping each location read before this call set it to the value read (registers None).
     """
     top = steps[root]
-    sid = {a for a, _ in top.writes if a - mm.SID_BASE in range(0x400)}
-    needed = set().union(*(top.flow.get(a, ()) for a in sid))
+    if address is None:
+        cells = {a for a, _ in top.writes if a - mm.SID_BASE in range(0x400)}
+    else:
+        cells = {address}
+    needed = set().union(*(top.flow.get(a, ()) for a in cells))
     values = dict(top.reads)
     keep = [root]
     for i in range(root - 1, -1, -1):
@@ -1108,7 +1112,7 @@ def cpu_side(
             address=address,
         )
     root = hits[-1] if hits else None
-    keep, live = cpu_slice(steps, root) if root is not None else ([], {})
+    keep, live = cpu_slice(steps, root, address) if root is not None else ([], {})
     return Side(
         label,
         frame,
