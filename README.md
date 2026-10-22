@@ -57,7 +57,12 @@ API.
 - `testing` — HVSC tune fetch/resolve for test suites (`fetch_tune`,
   `resolve_tune`, `make_tune_fixtures`), and `make_oracle_fixtures` /
   `oracle_grid` — a reusable byte-exact player-vs-`sidtrace`-oracle test
-  ([docs/oracle-testing.md](docs/oracle-testing.md)).
+  ([docs/oracle-testing.md](docs/oracle-testing.md)); `assert_matches` /
+  `assert_oracle_match` fail with the `whydiff` explanation.
+- `whydiff` — why a `MemPlayer` render diverges: the player's traced Python lines
+  (values read, branches, assignments) beside the jennings 6502 history, with each
+  side's backward dataflow of the diverging value (`python -m pysidtracker.whydiff`,
+  [docs/whydiff.md](docs/whydiff.md)).
 - `survey` — whole-song HVSC survey and failure triage of any format's renderer
   against the `sidtrace` oracle, and the same compare for single native files
   (`survey file`, bare PRGs wrapped); `sidid` — pure-Python SIDId with the bundled

@@ -78,6 +78,25 @@ def test_render_matches_oracle(oracle_match):
 `render(tune_bytes, nframes) -> grid` defaults to `register_grid` (the base jennings
 renderer) when omitted.
 
+## Explained failures
+
+Pass `player(tune_bytes) -> MemPlayer` instead of `render` and a mismatch fails with
+the [whydiff](whydiff.md) report: the diverging cell, the Python lines and 6502
+instructions its value came from side by side, and both full traced histories
+(`report_dir` also saves it as `<tune>.txt` / `.json`). For a single tune:
+
+```python
+from pysidtracker.testing import assert_oracle_match
+
+@pytest.mark.oracle
+@pytest.mark.xfail(strict=True, reason="detune carry")
+def test_diverging_tune():
+    assert_oracle_match("GAMES/S-Z/Your_Fathers_Nightmare.sid", lambda d: MyPlayer(d),
+                        hvsc_cache=HVSC, oracle_cache=CSV, report_dir=".oracle-cache/why")
+```
+
+`assert_matches(data, player, reference)` is the same check against any grid.
+
 ## Never skipped
 
 An unavailable tune raises `TuneFetchError` and a missing/failed oracle raises

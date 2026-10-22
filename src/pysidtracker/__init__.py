@@ -207,6 +207,8 @@ from .variants import (
 from .testing import (
     DEFAULT_MIRROR,
     TuneFetchError,
+    assert_matches,
+    assert_oracle_match,
     default_tune_cache,
     fetch_disk,
     fetch_prgs,
@@ -218,8 +220,9 @@ from .testing import (
     resolve_tune,
 )
 from .trace import InitTrace, trace_init
+from .whydiff import Divergence, PyTrace, cpu_history, explain_divergence
 
-__version__ = "0.17.2"
+__version__ = "0.18.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -426,4 +429,10 @@ __all__ = [
     "format_diff",
     "nearest_ref",
     "variants",
+    "Divergence",
+    "PyTrace",
+    "assert_matches",
+    "assert_oracle_match",
+    "cpu_history",
+    "explain_divergence",
 ]

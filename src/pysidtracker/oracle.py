@@ -75,6 +75,31 @@ class SidtraceUnavailable(SidError):
     """The sidtrace oracle could not be run (Docker missing or the render failed)."""
 
 
+def boot_flat(
+    image: SidImage,
+    subtune: int = 0,
+    max_cycles: int = 8_000_000,
+    illegal_opcodes: bool = True,
+):
+    """``(subject, mpu, mem, play)``: ``image`` booted on jennings, ``init`` run, ready to play.
+
+    Power-on RAM, ``$D418`` at the driver's maximum volume, ``init`` banked and run
+    with ``A = subtune``, then the play address's iomap, as the PSID driver does.
+    """
+    subject = power_on_ram()
+    subject[image.load : image.load + len(image.image)] = image.image
+    subject[SID_VOLUME] = DRIVER_VOLUME  # PSID driver cold-start: maximum volume
+    init = image.header.init_address or image.header.real_load_address
+    subject[1] = psid_init_bank(init)
+    mpu, mem = wire_mpu(
+        subject, illegal_opcodes, reg.sid_model_for_flags(image.header.flags)
+    )
+    run_to_rts(mpu, mem, init, subtune, max_cycles)
+    play = image.header.play_address or init
+    set_iomap(mpu, psid_play_bank(play))
+    return subject, mpu, mem, play
+
+
 def register_grid(
     image_or_bytes,
     nframes: int,
@@ -110,21 +135,9 @@ def register_grid(
     if image.header is None:
         raise SidParseError("cannot build a register grid: image has no SID header")
 
-    subject = power_on_ram()
-    subject[image.load : image.load + len(image.image)] = image.image
-    subject[SID_VOLUME] = DRIVER_VOLUME  # PSID driver cold-start: maximum volume
-    # The driver banks the init's ROM space before calling it (KERNAL/BASIC in).
-    init_bank_addr = image.header.init_address or image.header.real_load_address
-    subject[1] = psid_init_bank(init_bank_addr)
-    mpu, mem = wire_mpu(
-        subject, illegal_opcodes, reg.sid_model_for_flags(image.header.flags)
+    subject, mpu, mem, play_address = boot_flat(
+        image, subtune, max_cycles, illegal_opcodes
     )
-
-    init_address = image.header.init_address or image.header.real_load_address
-    run_to_rts(mpu, mem, init_address, subtune, max_cycles)
-
-    play_address = image.header.play_address or init_address
-    set_iomap(mpu, psid_play_bank(play_address))  # the driver's map around play calls
     rows: List[List[int]] = []
     for _ in range(nframes):
         run_to_rts(mpu, mem, play_address, 0, max_cycles)

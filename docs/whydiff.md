@@ -1,0 +1,99 @@
+# whydiff: why a render diverges
+
+`gridcmp` says *which* register cell of a `MemPlayer` render differs from the
+reference. `whydiff` says *why*: it traces the player's Python execution of that
+frame and the tune's own 6502 play call on jennings, and puts them side by side.
+
+```
+python -m pysidtracker.whydiff tune.sid mypkg.player:make --frames 250 [--reference grid.csv.zst]
+```
+
+`make(tune_bytes, song) -> MemPlayer`. The reference is a `gridcmp` grid file (e.g.
+a cached sidtrace grid), or the jennings grid. `--frame`/`--register` explain a
+chosen cell; `--json` saves the machine-readable form. In tests, use
+`assert_matches` / `assert_oracle_match` (see [oracle-testing.md](oracle-testing.md)).
+From Python:
+
+```python
+why = explain_divergence(data, lambda d: MyPlayer(d), reference)  # None on agreement
+print(why.text())
+```
+
+## The report
+
+For a synthetic tune whose Python transcription drops a carry:
+
+```
+divergence: toy.sid, reference frame 2, register $00 v1_freq_lo
+  python $10, reference $11, jennings $11
+  python frame 2 (lead 0); 6502 play call 2 (lead 0), which agrees with the reference to here
+  ...grid window around the cell...
+
+WHY: the lines and instructions the diverging value came from
+PYTHON                                          | 6502
+      36  carry = self.cnt >= self.threshold    |    $1006 AD 19 10 LDA $1019    A=10 ... r$1019=10
+          | self.cnt=2, self.threshold=3        |    $1009 48       PHA          ... w$01FD=10
+          := carry=False                        |    $100A AD 1A 10 LDA $101a    A=02 ... r$101A=02
+      37  self._wr(0xD400, 0x10 + carry)        |    $100D C9 02    CMP #$02     ..-B..ZC
+>>   ** SID $00 v1_freq_lo = $10                |    $100F 68       PLA          A=10 ... r$01FD=10
+                                                |    $1010 69 00    ADC #$00     A=11
+                                                | >> $1012 8D 00 D4 STA $d400    w$D400=11
+
+state read from earlier frames
+   self.cnt = 2                                 |    SP = entry
+   self.threshold = 3                           |    $1019 = $10
+                                                |    $101A = $02
+
+FULL HISTORIES, meeting at the diverging write
+...
+```
+
+- **Header**: the cell, the Python, reference and jennings values, and the frame
+  each side played. If the jennings grid does not match the reference up to the
+  cell, the header says so (the 6502 history is then not the reference's own run).
+- **WHY**: the backward dynamic slice of the diverging write on each side. These are
+  the lines and instructions its value was computed from, oldest first.
+- **State read from earlier frames**: the inputs of each slice that were set before
+  this frame. Compare these first: a wrong value here means an earlier frame
+  diverged in state without diverging in output.
+- **Full histories**: every traced Python event and every 6502 instruction of the
+  frame. The two columns meet at the diverging write, and `>>` marks the slice.
+
+## Python side
+
+`PyTrace` is installed with `sys.settrace` only while the one frame plays (earlier
+frames play untraced, and nothing is hooked otherwise). It traces only the
+player's own package (`player_roots`). For each executed statement it records:
+
+- the values of the names, attributes and subscripts it reads, before it runs;
+- the outcome of an `if`/`while`/`assert` condition;
+- the values it assigned, after it ran;
+- calls with their arguments and returns with their values;
+- each `MemPlayer._wr` to a SID register.
+
+Only side-effect-free expressions are evaluated: chains with calls, lambdas or
+comprehensions are not.
+
+Each read is linked to the event that last stored to the same storage: a local of
+that call, a global, an attribute of that exact object, or that item of that
+container (falling back to the container's own store). Calls link to their call
+site, returns to the caller's line, and statements to the branch that guards them.
+The slice follows only scalar values. A container mutated by a method call
+(`list.append`) is not seen as a store.
+
+## 6502 side
+
+`cpu_history` boots the tune as `register_grid` does and steps the target play
+call. Each `CpuStep` records the disassembly as the code stood, the registers and
+flags after it, the bytes it loaded and stored (`observe_data_access`), and
+`flow`: jennings' `dataflow.flow`, each location it set mapped to the registers,
+flags and bytes its value came from. The flow is read off the pcode jennings
+executes, so it is exact for every legal and illegal opcode. `cpu_slice` walks
+these backwards from the SID store.
+
+## Limits
+
+- The 6502 history is the flat jennings PSID host, not sidplayfp. For tunes whose
+  jennings grid differs from sidtrace, the header reports where they part.
+- Code that runs inside a `sys.settrace` callback is invisible to coverage's
+  tracer, so the tracer's tests drive its callbacks directly.
