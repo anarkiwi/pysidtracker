@@ -13,7 +13,6 @@ import functools
 import hashlib
 import importlib
 import importlib.util
-import io
 import json
 import math
 import multiprocessing
@@ -27,15 +26,34 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import numpy as np
-import zstandard
 from tqdm import tqdm
 
 from vagrant_moses import memmap as mm
 
-from . import registers
 from .cadence import playroutine_cadence
 from .disasm import entry_labels
 from .errors import SidParseError
+from .gridcmp import (  # the shared grid-diff core, re-exported for the survey API
+    LEAD,
+    NEAR,
+    NREGS,
+    aligned,
+    classify,
+    gated,
+    read_grid,
+    reg_names,
+    scan_leads,
+    verdict_fields,
+    window_report,
+    write_grid,
+)
+from .gridcmp import (  # pylint: disable=unused-import
+    REG_NAMES,
+    ROLES,
+    compare,
+    compare_grids,
+    min_lead,
+)
 from .header import PSID_MAGIC, RSID_MAGIC, parse_sid_header, write_psid
 from .image import SidImage
 from .oracle import (
@@ -50,22 +68,6 @@ from .oracle import (
 from .sidid import identify, sidid_signatures
 from .variants import variants_cli
 
-LEAD = 8
-NEAR = 3
-NREGS = registers.SID_REG_COUNT
-VOICE_ROLES = ("freq", "freq", "pw", "pw", "ctrl", "ad", "sr")
-GATE_COLS = [off + registers.CTRL for off in registers.SID_VOICE_OFFSET]
-ROLES = [n for _ in range(registers.SID_VOICES) for n in VOICE_ROLES] + [
-    "fc",
-    "fc",
-    "res",
-    "vol",
-]
-REG_NAMES = [
-    f"v{v + 1}_{n}"
-    for v in range(registers.SID_VOICES)
-    for n in ("freq_lo", "freq_hi", "pw_lo", "pw_hi", "ctrl", "ad", "sr")
-] + ["fc_lo", "fc_hi", "res_filt", "mode_vol"]
 ORACLE_ARGS = ("-f8000",)
 ORACLE_ROWS = ("raise", "entry", "rti")
 THREAD_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
@@ -171,32 +173,6 @@ def find(hvsc, out_csv, cfg=None, player_regex=None, jobs=None):
     return tally
 
 
-def write_grid(grid, out):
-    """A register grid as a zstd CSV of per-frame register changes."""
-    grid = np.asarray(grid)
-    change = np.ones(grid.shape, bool)
-    change[1:] = grid[1:] != grid[:-1]
-    f, r = np.nonzero(change)
-    buf = io.StringIO()
-    buf.write("frame,reg,value\n")
-    np.savetxt(buf, np.column_stack([f, r, grid[f, r]]), fmt="%d", delimiter=",")
-    out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(zstandard.ZstdCompressor().compress(buf.getvalue().encode()))
-
-
-def read_grid(path, nframes):
-    """Inverse of :func:`write_grid`, forward-filled to ``nframes``."""
-    text = zstandard.ZstdDecompressor().decompress(Path(path).read_bytes()).decode()
-    rows = np.loadtxt(io.StringIO(text), np.int64, delimiter=",", skiprows=1, ndmin=2)
-    f, r, v = rows[rows[:, 0] < nframes].T
-    grid = np.zeros((nframes, NREGS), dtype=np.int16)
-    src = np.zeros((nframes, NREGS), dtype=np.int64)
-    grid[f, r], src[f, r] = v, f
-    np.maximum.accumulate(src, axis=0, out=src)
-    return np.take_along_axis(grid, src, 0)
-
-
 def oracle_frames(ocsv, seconds=0.0, clock="PAL", nframes=None):
     """``(nframes, grid)`` of a sidtrace CSV (or its rows) over ``seconds`` at ``clock``.
 
@@ -209,98 +185,6 @@ def oracle_frames(ocsv, seconds=0.0, clock="PAL", nframes=None):
     grid = np.asarray(sidtrace_grid(rows, cycles_per_frame=cpf), np.int16)
     grid = grid.reshape(-1, NREGS) if grid.size else np.zeros((1, NREGS), np.int16)
     return nframes, grid[np.minimum(np.arange(nframes), len(grid) - 1)]
-
-
-def aligned(oracle, lib, lead):
-    """Equal-length ``(oracle, lib)`` views, ``lib`` shifted by ``lead`` frames."""
-    if lead >= 0:
-        return oracle, lib[lead : lead + len(oracle)]
-    return oracle[-lead:], lib[: len(oracle) + lead]
-
-
-def scan_leads(oracle, lib, max_lead=LEAD):
-    """Mismatches of ``lib`` against ``oracle`` at every lead up to ``max_lead``,
-    in ``|lead|`` order (``lib`` holds at least ``len(oracle) + max_lead`` frames).
-
-    Returns ``(leads, ne, size, first, nbad)``: ``ne[i, f, r]`` is whether register
-    ``r`` differs on aligned frame ``f`` at ``leads[i]`` (False past that lead's
-    ``size[i]`` aligned frames), ``first[i]`` the first bad frame (``size[i]``
-    when none) and ``nbad[i]`` the count of bad frames.
-    """
-    n = len(oracle)
-    leads = np.array(sorted(range(-min(max_lead, n - 1), max_lead + 1), key=abs))
-    frames = np.arange(n)
-    size = n - np.maximum(-leads, 0)
-    o = np.minimum(frames + np.maximum(-leads, 0)[:, None], n - 1)
-    l = frames + np.maximum(leads, 0)[:, None]
-    ne = (oracle[o] != lib[l]) & (frames < size[:, None])[..., None]
-    bad = ne.any(2)
-    first = np.where(bad.any(1), bad.argmax(1), size)
-    return leads, ne, size, first, bad.sum(1)
-
-
-def reg_names(mask):
-    """Space-separated :data:`REG_NAMES` of a boolean register mask."""
-    return " ".join(REG_NAMES[r] for r in np.flatnonzero(mask))
-
-
-def compare(oracle, lib):
-    """``(lead, bad, first)``: the lead of ``lib`` with the latest first mismatch."""
-    leads, ne, size, first, _ = scan_leads(oracle, lib)
-    i = int(np.argmax(first))
-    return int(leads[i]), ne[i, : size[i]].any(1), int(first[i])
-
-
-def min_lead(scan):
-    """``min_lead``/``min_bad``/``min_first``/``min_regs`` of a :func:`scan_leads`.
-
-    The lead with the fewest bad frames (the smallest ``|lead|`` on ties), its
-    bad-frame count and first bad frame, and the registers differing on them.
-    """
-    leads, ne, size, first, nbad = scan
-    i = int(np.argmin(nbad))
-    return dict(
-        min_lead=int(leads[i]),
-        min_bad=int(nbad[i]),
-        min_first=int(first[i]) if nbad[i] else "",
-        min_regs=reg_names(ne[i, : size[i]].any(0)),
-    )
-
-
-def verdict_fields(scan):
-    """The ``results.csv`` comparison columns of a :func:`scan_leads`.
-
-    ``lead`` has the latest first mismatch; ``min_lead`` the fewest bad frames.
-    """
-    leads, ne, size, first, nbad = scan
-    i = int(np.argmax(first))
-    return dict(
-        verdict="differs" if nbad[i] else "exact",
-        lead=int(leads[i]),
-        first_diff=int(first[i]) if nbad[i] else "",
-        diff_frames=int(nbad[i]),
-        diff_regs=reg_names(ne[i, : size[i]].any(0)),
-        **min_lead(scan),
-    )
-
-
-def compare_grids(a, b, max_shift=LEAD):
-    """:func:`verdict_fields` of render ``b`` against render ``a`` at every
-    constant frame shift up to ``max_shift``, plus the compared ``frames``.
-
-    ``b[f + min_lead]`` best matches ``a[f]``; ``a`` is cut to
-    ``len(b) - max_shift`` frames.
-    """
-    a, b = np.asarray(a, np.int16), np.asarray(b, np.int16)
-    n = min(len(a), len(b) - max_shift)
-    if n < 1:
-        raise ValueError(f"grids of {len(a)} and {len(b)} frames, shift {max_shift}")
-    return dict(frames=n, **verdict_fields(scan_leads(a[:n], b, max_shift)))
-
-
-def gated(grid):
-    """Whether any voice's gate bit is ever set."""
-    return bool((np.asarray(grid)[:, GATE_COLS] & 1).any())
 
 
 def _err(exc):
@@ -777,13 +661,7 @@ def diff(hvsc, tunes_csv, key, work, render, context=3):
     _, oracle = oracle_frames(work / "oracle" / f"{key}.csv.zst", job[3], tune["clock"])
     lib = read_grid(work / "library" / f"{key}.csv.zst", len(oracle) + LEAD)
     oracle, lib = aligned(oracle, lib, row["lead"])
-    first = row["first_diff"] or 0
-    for f in range(max(0, first - context), min(len(lib), first + context + 1)):
-        o, l = oracle[f], lib[f]
-        print(f"{f:6d} O {' '.join(f'{x:02x}' for x in o)}")
-        print(f"{'':6} L {' '.join(f'{x:02x}' for x in l)}")
-        if (o != l).any():
-            print(f"{'':8} " + " ".join("^^" if x != y else "  " for x, y in zip(o, l)))
+    print(window_report(oracle, lib, row["first_diff"] or 0, context))
     return row
 
 
@@ -958,34 +836,6 @@ def first_difference(work, row):
     first = int(row["first_diff"])
     grids = cached_grids(work, row["key"], int(row["frames"]))
     return first, _diffs_at(*grids, int(row["lead"]), first)
-
-
-def classify(frame, diffs, row):
-    """``(when, kind, roles)`` of a first difference (see docs/survey.md)."""
-    when = (
-        "frame0"
-        if frame == 0
-        else "early" if frame < 10 else "mid" if frame < 250 else "late"
-    )
-    roles = " ".join(sorted({ROLES[r] for r, _, _ in diffs}))
-    wrong = {r: (o, l) for r, o, l in diffs}
-    deltas = {l - o for o, l in wrong.values()}
-    if row.get("library_gated") == "False" and row.get("oracle_gated") == "True":
-        kind = "silent"
-    elif any(
-        o and any(l2 == o for r2, (_, l2) in wrong.items() if r2 != r)
-        for r, (o, _) in wrong.items()
-    ):
-        kind = "misplaced"
-    elif len(wrong) > 1 and len(deltas) == 1:
-        kind = f"offset{deltas.pop():+#x}"
-    elif all(not l for _, l in wrong.values()):
-        kind = "missing"
-    elif all(not o for o, _ in wrong.values()):
-        kind = "extra"
-    else:
-        kind = "value"
-    return when, kind, roles
 
 
 def _triage_one(args):

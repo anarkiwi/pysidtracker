@@ -226,3 +226,6 @@ __marimo__/
 
 # cadence_check work dir (sidtrace traces, results, libsidplayfp reference)
 .cadence-check/
+
+# feature-branch worktrees (never committed)
+.worktrees/
