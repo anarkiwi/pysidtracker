@@ -18,11 +18,10 @@ import math
 import multiprocessing
 import os
 import re
-import signal
 import sys
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from contextlib import contextmanager, nullcontext
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +33,7 @@ from .cadence import playroutine_cadence
 from .disasm import entry_labels
 from .errors import SidParseError
 from .formats import render as format_render
+from .jobs import deadline, results
 from .gridcmp import (  # the shared grid-diff core, re-exported for the survey API
     LEAD,
     NEAR,
@@ -225,29 +225,16 @@ def oracle_rows(sid_path, ocsv, seconds, song):
     )
 
 
-@contextmanager
-def deadline(seconds):
-    """Raise :class:`TimeoutError` in the main thread after ``seconds`` (0: never)."""
-
-    def _expire(*_):
-        raise TimeoutError(f"render exceeded {seconds}s")
-
-    old = signal.signal(signal.SIGALRM, _expire)
-    signal.setitimer(signal.ITIMER_REAL, seconds)
-    try:
-        yield
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, old)
-
-
 def library_row(row, oracle, render, data, song, *, lead=LEAD, timeout=0, lcsv=None):
     """``row`` completed by ``render(data, song, len(oracle) + lead)`` against
     ``oracle``: its :func:`verdict_fields`, or a ``not_decompiled`` /
     ``library_error`` verdict. The render grid is cached at ``lcsv`` if given."""
     need = len(oracle) + lead
+    late = dict(
+        row, verdict="library_error", error=f"TimeoutError: exceeded {timeout}s"
+    )
     try:
-        with deadline(timeout):
+        with deadline(timeout, late):
             lib, info = render(data, song, need)
         lib = np.asarray(lib, dtype=np.int16)
         if lib.ndim != 2 or lib.shape[1] != NREGS or len(lib) < need:
@@ -267,12 +254,25 @@ def library_row(row, oracle, render, data, song, *, lead=LEAD, timeout=0, lcsv=N
     )
 
 
+def _job_row(job):
+    """The identifying fields of a :func:`check` job's row."""
+    _, tune, song, seconds, *_ = job
+    key = f"{tune['md5']}_{song}"
+    return dict(
+        key=key, path=tune["path"], player=tune["player"], song=song, seconds=seconds
+    )
+
+
+def _failed(job, error):
+    """The row of a :func:`check` job whose worker raised or died."""
+    return dict(_job_row(job), verdict="library_error", error=_err(error))
+
+
 def check(job):
     """One subtune's oracle-vs-renderer comparison row (see ``RESULT_FIELDS``)."""
     sid_path, tune, song, seconds, work, render, timeout = job
-    key = f"{tune['md5']}_{song}"
-    row = dict(key=key, path=tune["path"], player=tune["player"], song=song)
-    row["seconds"] = seconds
+    row = _job_row(job)
+    key = row["key"]
     ocsv, lcsv = (Path(work) / d / f"{key}.csv.zst" for d in ("oracle", "library"))
     try:
         nframes, oracle = oracle_frames(
@@ -399,6 +399,11 @@ def _file_row(job):
     )
 
 
+def _failed_file(job, error):
+    """The row of a :func:`_file_row` job whose worker raised or died."""
+    return dict(path=str(job[1]), verdict="library_error", error=_err(error))
+
+
 def file_cli(render, files, *, out=None, jobs=None, **kw):
     """Compare a renderer with each native file's own player (bare PRGs wrapped).
 
@@ -411,16 +416,16 @@ def file_cli(render, files, *, out=None, jobs=None, **kw):
         oracle_cache(kw["work"])
     tally = Counter()
     with (
-        pool(jobs) if jobs != 1 else nullcontext() as ex,
-        (
-            open(out, "w", newline="", encoding="utf-8")
-            if out
-            else nullcontext(sys.stdout)
-        ) as f,
-    ):
+        open(out, "w", newline="", encoding="utf-8") if out else nullcontext(sys.stdout)
+    ) as f:
         w = csv.DictWriter(f, FILE_FIELDS)
         w.writeheader()
-        rows = (ex.map if ex else map)(_file_row, [(render, p, kw) for p in files])
+        jobs_ = [(render, p, kw) for p in files]
+        rows = (
+            map(_file_row, jobs_)
+            if jobs == 1
+            else results(_file_row, jobs_, jobs, _failed_file)
+        )
         bar = tqdm(rows, total=len(files), unit="file")
         for row in bar:
             w.writerow(row)
@@ -460,16 +465,11 @@ def run(
     ]
     jobs_ = list(jobs_for(hvsc, tunes[:limit], work, render, default_seconds, timeout))
     tally = Counter()
-    with (
-        pool(jobs) as ex,
-        open(work / "results.csv", "w", newline="", encoding="utf-8") as f,
-    ):
+    with open(work / "results.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, RESULT_FIELDS)
         w.writeheader()
-        futures = [ex.submit(check, job) for job in jobs_]
-        bar = tqdm(as_completed(futures), total=len(jobs_), unit="song")
-        for done in bar:
-            row = done.result()
+        bar = tqdm(results(check, jobs_, jobs, _failed), total=len(jobs_), unit="song")
+        for row in bar:
             w.writerow(row)
             tally[row["verdict"]] += 1
             bar.set_postfix(tally)
@@ -990,13 +990,17 @@ def main(argv=None):
     p.add_argument("--lead", type=int, default=LEAD, help="largest frame lead")
     p.add_argument("--work", help="sidtrace oracle cache dir (default: jennings)")
     p.add_argument("--out", help="output CSV (default: stdout)")
-    p.add_argument("--timeout", type=float, default=600, help="render seconds")
+    p.add_argument(
+        "--timeout", type=float, default=600, help="render seconds (0: none)"
+    )
     p.add_argument("--jobs", type=int, default=os.cpu_count())
     p = sub.choices["run"]
     p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
     p.add_argument("--limit", type=int, help="only the first N tunes")
     p.add_argument("--default-seconds", type=float, default=180)
-    p.add_argument("--timeout", type=float, default=600, help="render seconds")
+    p.add_argument(
+        "--timeout", type=float, default=600, help="render seconds (0: none)"
+    )
     p.add_argument("--jobs", type=int, default=os.cpu_count())
     p = sub.choices["leads"]
     p.add_argument("keys", nargs="*", help="<md5>_<song> subtune keys")

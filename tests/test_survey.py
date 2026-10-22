@@ -175,6 +175,11 @@ def render_hang(data, song, nframes):
         pass
 
 
+def render_spin(data, song, nframes):
+    """Fake renderer that spins in C, where no signal handler runs."""
+    return hashlib.pbkdf2_hmac("sha256", data, bytes(song), (1 << 31) - 1 + 0 * nframes)
+
+
 def render_short(data, song, nframes):
     """Fake renderer that returns too few frames."""
     return render_exact(data, song, nframes)[0][: nframes - 1], {}
@@ -452,7 +457,7 @@ def test_sidtrace_image_id_without_docker(monkeypatch):
 def test_check_render_timeout(survey_tree):
     row = survey.check(_job(survey_tree, render_hang, timeout=0.2))
     assert row["verdict"] == "library_error"
-    assert row["error"] == "TimeoutError: render exceeded 0.2s"
+    assert row["error"] == "TimeoutError: exceeded 0.2s"
     assert survey.check(_job(survey_tree, render_exact, 5))["verdict"] == "exact"
 
 
@@ -745,3 +750,12 @@ def test_match_cli_out_and_body(tmp_path, capsys):
     assert lines[0] == "native\thvsc\tlength\tndiff\toffset"
     assert lines[1].split("\t")[1:] == ["a.sid", "80", "0", "0"]
     assert capsys.readouterr().out == ""
+
+
+def test_run_kills_a_render_spinning_in_c_at_its_deadline(survey_tree):
+    hvsc, tunes, work, _ = survey_tree
+    tally = survey.run(hvsc, tunes, work, render_spin, jobs=2, timeout=1)
+    rows = survey.load_tunes(work / "results.csv")
+    assert tally == {"library_error": len(rows)}
+    assert {r["error"] for r in rows} == {"TimeoutError: exceeded 1s"}
+    assert all(r["frames"] for r in rows)

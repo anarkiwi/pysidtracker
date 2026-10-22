@@ -10,7 +10,6 @@ import csv
 import os
 import sys
 from collections import Counter
-from concurrent.futures import as_completed
 from pathlib import Path
 
 import numpy as np
@@ -20,8 +19,8 @@ from vagrant_moses import memmap as mm
 
 from .header import parse_sid_header
 from .oracle import SidtraceUnavailable, cached_sidtrace, play_source, raise_cycles
-from .survey import ORACLE_ARGS, _err, deadline, load_render, load_tunes
-from .survey import oracle_cache, pool
+from .jobs import deadline, results
+from .survey import ORACLE_ARGS, _err, load_render, load_tunes, oracle_cache
 
 SOURCES = ("video_irq", "cia_irq", "nmi")
 PREDICTED = {"pal_video": "video_irq", "ntsc_video": "video_irq"}
@@ -79,6 +78,13 @@ def verdict(pred_source, pred_cpf, meas, frame):
     return "agree" if abs(expect - meas["calls"]) <= max(1.0, pred_cpf) else "rate"
 
 
+def _failed(job, error):
+    """The row of a :func:`check` job whose worker raised or died."""
+    _, tune, *_ = job
+    row = {"key": f"{tune['md5']}_1", "path": tune["path"], "player": tune["player"]}
+    return dict(row, verdict="cadence_error", error=_err(error))
+
+
 def check(job):
     """One tune's comparison row (see ``FIELDS``)."""
     sid_path, tune, work, cadence, seconds, timeout = job
@@ -101,8 +107,11 @@ def check(job):
     except (SidtraceUnavailable, OSError, ValueError) as e:
         return dict(row, verdict="oracle_error", error=_err(e))
     row.update(meas)
+    late = dict(
+        row, verdict="cadence_error", error=f"TimeoutError: exceeded {timeout}s"
+    )
     try:
-        with deadline(timeout):
+        with deadline(timeout, late):
             got = load_render(cadence)(data, subtune=0)
     except Exception as e:  # pylint: disable=broad-except
         return dict(row, verdict="cadence_error", error=_err(e))
@@ -127,15 +136,11 @@ def run(hvsc, tunes_csvs, work, *, cadence=DEFAULT_CADENCE, out=None, **kw):
         for t in tunes.values()
     ]
     tally = Counter()
-    with (
-        pool(kw.get("jobs")) as ex,
-        open(out or work / "cadence.csv", "w", newline="", encoding="utf-8") as f,
-    ):
+    with open(out or work / "cadence.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, FIELDS)
         w.writeheader()
-        bar = tqdm(as_completed([ex.submit(check, j) for j in jobs]), total=len(jobs))
-        for done in bar:
-            row = done.result()
+        bar = tqdm(results(check, jobs, kw.get("jobs"), _failed), total=len(jobs))
+        for row in bar:
             w.writerow(row)
             tally[row["verdict"]] += 1
             bar.set_postfix(tally)
