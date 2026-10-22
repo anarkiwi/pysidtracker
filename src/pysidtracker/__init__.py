@@ -228,10 +228,11 @@ from .whydiff import (
     cpu_side,
     explain_cell,
     explain_divergence,
+    explain_state,
     python_side,
 )
 
-__version__ = "0.19.1"
+__version__ = "0.20.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -448,4 +449,5 @@ __all__ = [
     "cpu_side",
     "explain_cell",
     "python_side",
+    "explain_state",
 ]

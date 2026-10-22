@@ -3,6 +3,7 @@
 import inspect
 import json
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -89,7 +90,7 @@ def test_agreement_is_none_and_slices_skip_unwritten_registers():
     assert whydiff.explain_divergence(SID, lambda d: Faithful(b"", 0)) is None
     why = whydiff.explain_divergence(SID, _toy, frame=1, register=4)
     assert why.left.keep == why.right.keep == [] and why.left.root is None
-    assert "(register not stored this frame)" in why.text()
+    assert "(not stored on the traced frame)" in why.text()
     picked = whydiff.explain_divergence(SID, _toy, frame=2)
     assert picked.register == 0
 
@@ -501,8 +502,10 @@ def test_a_side_without_a_store_traces_its_last_store():
         "STA"
     )
     never = whydiff.cpu_side(sid, 3, 4, grid=jen)
-    assert never.root is None and never.traced == 0
-    assert whydiff.last_change(jen, 5, 0) == 4 and whydiff.last_change(jen, 1, 4) == 0
+    assert never.root is None and never.traced == 3
+    assert (
+        whydiff.last_change(jen, 5, 0) == 4 and whydiff.last_change(jen, 1, 4) is None
+    )
     left = whydiff.python_side(lambda: Sparse(b"", 0), 3, 0, grid=grid)
     why = whydiff.explain_cell(left, cpu, (grid, jen), frame=3, register=0)
     assert "python frame 3 (traced 2: its last store)" in why.notes[0]
@@ -549,3 +552,154 @@ def test_explain_divergence_takes_an_execd_player():
     assert why.values == {"generic": 0x10, "6502": 0x11, "reference": 0x11}
     texts = [why.left.events[i].text for i in why.left.keep]
     assert texts[-1] == "out[0:2] = [0x10 + lift, 0]"
+
+
+# The gate cell is never stored by the 6502; frame 3 outputs $41 EOR gate.
+GATED = (
+    "init:\n  LDA #0\n  STA cnt\n  RTS\n"
+    "play:\n  INC cnt\n  LDA cnt\n  CMP #4\n  BNE out\n  LDA #$41\n  EOR gate\n"
+    "  STA $D404\nout:\n  RTS\n"
+    "cnt:\n  .byte $00\ngate:\n  .byte $00\n"
+)
+GCODE, GLABELS = assemble(GATED, ORG)
+GSID = write_psid(load=ORG, init=GLABELS["init"], play=GLABELS["play"], image=GCODE)
+
+
+class Gated(MemPlayer):
+    """:data:`GATED` with a model state bug from ``bug`` on: frame 1 sets the gate."""
+
+    bug = True
+
+    def _init(self, subtune):
+        self.cnt = self.gate = 0
+
+    def _frame(self):
+        self.cnt += 1
+        if self.cnt == 2 and self.bug:
+            self.gate = 1
+        if self.cnt == 4:
+            self._wr(0xD404, 0x41 ^ self.gate)
+
+
+class Ungated(Gated):
+    bug = False
+
+
+def test_state_is_chased_to_where_it_parts():
+    why = whydiff.explain_divergence(
+        GSID, lambda d: Gated(b"", 0), frames=8, state=True
+    )
+    assert (why.frame, why.register) == (3, 4)
+    state = why.state
+    assert state.frames == (0, 2)
+    assert ("player.gate", f"${GLABELS['gate']:04X}", 1) in state.pairs
+    assert ("player.cnt", f"${GLABELS['cnt']:04X}", None) in state.pairs
+    onset = state.why
+    assert onset.frame == 1 and onset.cell.startswith("state player.gate ~ $")
+    assert onset.values == {"python": 1, "6502": 0}
+    left = onset.left
+    assert left.events[left.root].text == "self.gate = 1"
+    assert onset.right.root is None and onset.right.traced == 1
+    text = why.text(80)
+    assert "parts at frame 1" in text and "STATE ONSET" in text
+    assert json.loads(json.dumps(why.summary()))["state"]["why"]["frame"] == 1
+
+
+def test_state_between_two_python_players_and_its_edges():
+    grids = (Gated(b"", 0).render_grid(6), Ungated(b"", 0).render_grid(6))
+    left = whydiff.python_side(lambda: Gated(b"", 0), 3, 4, grid=grids[0])
+    right = whydiff.python_side(
+        lambda: Ungated(b"", 0), 3, 4, label="native", grid=grids[1]
+    )
+    why = whydiff.explain_cell(left, right, grids, frame=3, register=4)
+    state = whydiff.explain_state(why)
+    assert ("player.gate", "player.gate", 1) in state.pairs
+    assert state.why.right.root is None and state.why.left.root is not None
+    agree = whydiff.explain_cell(right, right, grids[::-1], frame=3, register=4)
+    assert whydiff.explain_state(agree).why is None
+    first = whydiff.python_side(lambda: Gated(b"", 0), 0, 4)
+    alone = whydiff.explain_cell(first, first, grids, frame=0, register=4)
+    assert whydiff.explain_state(alone) is None
+
+
+def test_first_break_and_object_paths():
+    assert whydiff.first_break([0, 1, 2], [0, 1, 3]) == 2
+    assert whydiff.first_break([0, 1, 0], [0xFF, 0, 0xFF]) == 3
+    assert whydiff.first_break([0, 1, 2], [5, 6, 6]) == 2
+    assert whydiff.first_break([1, 1], [1, 1]) == 2
+    player = Gated(b"", 0)
+    box = {"k": [player]}
+    assert whydiff.object_path(box, player) == (("S", "k"), ("S", 0))
+    assert whydiff.object_path(player, player) == ()
+    assert whydiff.object_path(player, object()) is None
+    assert (
+        whydiff.path_name((("A", "voices"), ("S", 2), ("A", "gate")))
+        == "player.voices[2].gate"
+    )
+
+
+def test_cli_format_and_state(tmp_path, capsys, monkeypatch):
+    from pysidtracker import formats
+
+    tune = tmp_path / "gated.sid"
+    tune.write_bytes(GSID)
+    fmt = SimpleNamespace(
+        name="gated",
+        parser=SimpleNamespace(parse=lambda d: d, recognize=lambda image: True),
+        player=lambda model: Gated(b"", 0),
+    )
+    monkeypatch.setattr(formats, "discover_formats", lambda: [fmt])
+    monkeypatch.setattr(formats, "recognize_format", lambda found, data: found[0])
+    assert (
+        whydiff.main([str(tune), "--format", "gated", "--frames", "8", "--state"]) == 1
+    )
+    assert "STATE ONSET" in capsys.readouterr().out
+    assert whydiff.main([str(tune), "--format", "auto", "--frames", "8"]) == 1
+    with pytest.raises(SystemExit):
+        whydiff.main([str(tune), "--format", "nope"])
+    with pytest.raises(SystemExit):
+        whydiff.main([str(tune)])
+
+
+# Three voices' gate cells at a stride of 7; voice 3's is never stored, as is the decoy.
+VOICED = (
+    "init:\n  LDA #0\n  STA cnt\n  RTS\n"
+    "play:\n  INC cnt\n  LDA decoy\n  LDA cnt\n  AND #1\n  STA g0\n  STA g1\n"
+    "  LDA cnt\n  CMP #6\n  BNE out\n  LDA #$41\n  EOR g2\n  EOR decoy\n  STA $D412\n"
+    "out:\n  RTS\n"
+    "decoy:\n  .byte 0\ncnt:\n  .byte 0\n"
+    "g0:\n  .byte 0, 0, 0, 0, 0, 0, 0\ng1:\n  .byte 0, 0, 0, 0, 0, 0, 0\ng2:\n  .byte 0\n"
+)
+VCODE, VLABELS = assemble(VOICED, ORG)
+VSID = write_psid(load=ORG, init=VLABELS["init"], play=VLABELS["play"], image=VCODE)
+
+
+class Voiced(MemPlayer):
+    """:data:`VOICED` whose voice 3 gate goes stale from frame 1."""
+
+    def _init(self, subtune):
+        self.cnt = 0
+        self.voices = [SimpleNamespace(gate=0) for _ in range(3)]
+
+    def _frame(self):
+        self.cnt += 1
+        for v in self.voices[:2]:
+            v.gate = self.cnt & 1
+        if self.cnt == 2:
+            self.voices[2].gate = 1
+        if self.cnt == 6:
+            self._wr(0xD412, 0x41 ^ self.voices[2].gate)
+
+
+def test_a_list_member_pairs_with_its_strided_cell():
+    why = whydiff.explain_divergence(
+        VSID, lambda d: Voiced(b"", 0), frames=10, state=True
+    )
+    assert (why.frame, why.register) == (5, 0x12)
+    pairs = {a: (b, f) for a, b, f in why.state.pairs}
+    assert pairs["player.voices[2].gate"] == (f"${VLABELS['g2']:04X}", 1)
+    assert VLABELS["g2"] - VLABELS["g1"] == VLABELS["g1"] - VLABELS["g0"] == 7
+    ram = np.zeros((4, 0x10000), np.int64)
+    ram[:, 0x100], ram[:, 0x107] = [1, 0, 1, 0], [0, 1, 0, 1]
+    sib = np.array([[1, 0, 0], [0, 1, 0], [1, 0, 0], [0, 1, 0]])
+    assert whydiff.fit_family(sib, 2, ram, [0x10E, 0x200]) == 0x10E

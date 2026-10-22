@@ -340,8 +340,8 @@ def assert_matches(
     """Assert ``make_player(data)`` renders ``reference``; else fail with the explanation.
 
     The failure message is :meth:`~pysidtracker.whydiff.Divergence.text`: both sides'
-    dataflow of the first diverging cell and their full traced histories, also saved
-    to ``report_dir/<name>.txt`` and ``.json`` when given.
+    dataflow of the first diverging cell, the state it read chased to where it parted,
+    and full traced histories; saved to ``report_dir/<name>.txt``/``.json`` when given.
     """
     import json
 
@@ -349,7 +349,13 @@ def assert_matches(
 
     name = name or "tune"
     why = explain_divergence(
-        data, make_player, reference, song=song, max_lead=max_lead, name=name
+        data,
+        make_player,
+        reference,
+        song=song,
+        max_lead=max_lead,
+        name=name,
+        state=True,
     )
     if why is None:
         return

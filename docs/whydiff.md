@@ -5,10 +5,12 @@ reference. `whydiff` says *why*: it traces the player's Python execution of that
 frame and the tune's own 6502 play call on jennings, and puts them side by side.
 
 ```
+python -m pysidtracker.whydiff tune.sid --format sidwizard --state     # an installed format
 python -m pysidtracker.whydiff tune.sid mypkg.player:make --frames 250 [--reference grid.csv.zst]
 ```
 
-`make(tune_bytes, song) -> MemPlayer`. The reference is a `gridcmp` grid file (e.g.
+`--format NAME` (or `auto`) plays the installed format's player on its parser's default
+song; otherwise `make(tune_bytes, song) -> MemPlayer`. The reference is a `gridcmp` grid file (e.g.
 a cached sidtrace grid), or the jennings grid. `--frame`/`--register` explain a
 chosen cell; `--json` saves the machine-readable form. In tests, use
 `assert_matches` / `assert_oracle_match` (see [oracle-testing.md](oracle-testing.md)).
@@ -41,6 +43,34 @@ with that text as its source. Given its own `grid`, a side that does not store t
 register on the diverging frame is traced on `last_change`, the last frame that
 changed it, and the header says so. `explain_divergence` takes the same
 `label`/`cell`/`roots`/`sources`, so an exec'd player can face the 6502 directly.
+
+## State: where it first parted
+
+An output can diverge long after the state behind it did. `--state`
+(`explain_divergence(state=True)`, always in `assert_matches`) takes the state the
+left slice read from earlier frames and finds where it first stopped matching the
+other side:
+
+- Each such value is replayed frame by frame (a Python path from the player, e.g.
+  `player.voices[2].ptn_gate`) beside the other side's frame state: the RAM cells its
+  play call read before writing them, or the other player's paths.
+- A list member's 6502 cell is fitted as a family (`fit_family`): the base and stride
+  under which all of the list's members agree on the most frames, so a cell that never
+  changes is still found through its siblings.
+- Otherwise its partner starts equal if one does, then tracks longest (`first_break`,
+  exact, or one-to-one when the representations differ), then shares its name, agrees
+  most and is in the other side's slice.
+- The earliest parting is explained like the output was, rooted at both sides' stores
+  to that state, and chased again from there.
+
+```
+STATE: the state read from earlier frames, tracked over frames 0-263
+  player.voices[2].wf_pos ~ $1048: tracks
+  player.voices[2].ptn_gate ~ $1034: parts at frame 2
+STATE ONSET ====
+divergence: tune, reference frame 2, state player.voices[2].ptn_gate ~ $1034
+  python $FE, 6502 $00
+```
 
 ## The report
 

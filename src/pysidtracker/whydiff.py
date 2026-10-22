@@ -285,6 +285,7 @@ class PyEvent:
     site: Optional[int] = None
     rets: List[int] = field(default_factory=list)
     live: List[Tuple[str, str]] = field(default_factory=list)
+    state: List[Tuple[str, str, tuple]] = field(default_factory=list, repr=False)
 
 
 def _scalar(value) -> bool:
@@ -318,6 +319,7 @@ class PyTrace:
         self._branch: Dict[object, Dict[int, int]] = {}
         self._last: Dict[tuple, int] = {}
         self._fresh: set = set()
+        self.objects: Dict[int, object] = {}
         self._saved = None
 
     def __enter__(self) -> "PyTrace":
@@ -359,6 +361,7 @@ class PyTrace:
                     return [("L", self._serial[frame], spec[1])]
                 return [("G", spec[1])]
             base = eval(spec[1], frame.f_globals, local)  # pylint: disable=eval-used
+            self.objects[id(base)] = base
             if spec[0] == "A":
                 return [(id(base), spec[2])]
             item = eval(spec[2], frame.f_globals, local)  # pylint: disable=eval-used
@@ -383,7 +386,9 @@ class PyTrace:
                     self._keys(frame, spec[3], local) if spec[0] in ("S", "Z") else []
                 )
                 own = self._keys(frame, spec, local)
-                out.append((text, self._repr.repr(value), own, held, _scalar(value)))
+                out.append(
+                    (text, self._repr.repr(value), own, held, _scalar(value), spec[0])
+                )
         return out
 
     def store(self, container, index) -> Optional[int]:
@@ -413,8 +418,8 @@ class PyTrace:
         idx, stmt = held
         if stmt.sets:
             got = self._eval(frame, stmt.sets)
-            self.events[idx].sets = [(t, v) for t, v, _, _, _ in got]
-            for _, _, own, _, _ in got:
+            self.events[idx].sets = [(t, v) for t, v, *_ in got]
+            for _, _, own, *_ in got:
                 for key in own:
                     self._last[key] = idx
         return idx
@@ -502,9 +507,9 @@ class PyTrace:
         got = self._eval(frame, stmt.reads)
         branches = self._branch.setdefault(frame, {})
         deps = [branches[stmt.control]] if stmt.control in branches else []
-        live = []
+        live, state = [], []
         last = self._last
-        for text, value, own, held, scalar in got:
+        for text, value, own, held, scalar, kind in got:
             if not scalar:
                 continue
             hits = [last[k] for k in own if k in last] or [
@@ -514,14 +519,17 @@ class PyTrace:
                 deps += hits
             else:
                 live.append((text, value))
+                if kind in ("A", "S") and own:
+                    state.append((text, kind, own[0]))
         idx = self._emit(
             frame,
             "line",
             stmt.text,
-            reads=[(t, v) for t, v, _, _, _ in got],
+            reads=[(t, v) for t, v, *_ in got],
             cond=cond,
             deps=sorted(set(deps)),
             live=live,
+            state=state,
         )
         branches[stmt.start] = idx
         if stmt.fresh:
@@ -772,6 +780,10 @@ class Side:
     root: Optional[int]
     keep: List[int]
     live: Dict[str, str]
+    state: List[Tuple[str, object, bool, Optional[tuple]]] = field(default_factory=list)
+    history: Optional[Callable] = field(default=None, repr=False, compare=False)
+    retrace: Optional[Callable] = field(default=None, repr=False, compare=False)
+    ram: Optional[Callable] = field(default=None, repr=False, compare=False)
 
     def summary(self) -> dict:
         """The machine-readable form for ``json.dumps``."""
@@ -795,6 +807,7 @@ class Side:
             root=self.root,
             slice=self.keep,
             live=self.live,
+            state=[name for name, _, sliced, _ in self.state if sliced],
             events=events,
         )
 
@@ -823,11 +836,151 @@ def player_roots(player) -> List[str]:
     return sorted(roots)
 
 
-def last_change(grid, frame: int, register: int) -> int:
-    """The last frame ``<= frame`` whose ``register`` differs from the frame before (or 0)."""
+_LEAVES = (str, bytes, bytearray, memoryview, np.ndarray, numbers.Number, type(None))
+_UNSET = -(1 << 62)
+
+
+def _children(obj):
+    """``((kind, key), child)`` of an object graph node: attributes, items, values."""
+    if isinstance(obj, _LEAVES + _HIDDEN):
+        return
+    if isinstance(obj, (list, tuple)):
+        yield from ((("S", i), c) for i, c in enumerate(obj))
+    elif isinstance(obj, dict):
+        yield from ((("S", k), c) for k, c in obj.items() if isinstance(k, (int, str)))
+    yield from ((("A", k), v) for k, v in getattr(obj, "__dict__", {}).items())
+
+
+def object_path(root, target, depth: int = 5) -> Optional[tuple]:
+    """The ``(kind, key)`` steps from ``root`` to ``target``, breadth first, else None."""
+    if root is target:
+        return ()
+    seen, frontier = {id(root)}, [(root, ())]
+    for _ in range(depth):
+        nxt = []
+        for obj, path in frontier:
+            for step, child in _children(obj):
+                if id(child) in seen:
+                    continue
+                if child is target:
+                    return path + (step,)
+                seen.add(id(child))
+                nxt.append((child, path + (step,)))
+        frontier = nxt
+    return None
+
+
+def _resolve(obj, path):
+    for kind, key in path:
+        obj = getattr(obj, key) if kind == "A" else obj[key]
+    return obj
+
+
+def _family(player, path) -> Optional[tuple]:
+    """``(sibling paths, own index)`` over ``path``'s last list index, else None."""
+    for at in range(len(path) - 1, -1, -1):
+        kind, key = path[at]
+        if kind == "S" and isinstance(key, int):
+            try:
+                size = len(_resolve(player, path[:at]))
+            except (AttributeError, LookupError, TypeError):
+                return None
+            if size < 2:
+                return None
+            head, tail = path[:at], path[at + 1 :]
+            return tuple(head + (("S", j),) + tail for j in range(size)), key
+    return None
+
+
+def fit_family(siblings, own: int, ram, bases, span: int = 256) -> int:
+    """The cell of sibling ``own`` in the strided RAM layout the most sibling frames fit.
+
+    ``siblings`` ``(n, s)`` are a list's members' histories, ``ram`` ``(n, 65536)`` the
+    6502's; every ``base`` cell (for ``own``) and stride up to ``span`` is scored.
+    """
+    bases = np.asarray(sorted(set(bases)), np.int64)
+    offsets = np.arange(siblings.shape[1]) - own
+    best = (-1, 0, bases[0])
+    for stride in (*range(1, span + 1), *range(-span, 0)):
+        cells = bases[:, None] + stride * offsets[None, :]
+        ok = ((cells >= 0) & (cells < ram.shape[1])).all(1)
+        if not ok.any():
+            continue
+        score = (ram[:, cells[ok]] == siblings[:, None, :]).sum((0, 2))
+        k = int(np.argmax(score))
+        if (score[k], -abs(stride)) > best[:2]:
+            best = (int(score[k]), -abs(stride), bases[ok][k])
+    return int(best[2])
+
+
+def path_name(path) -> str:
+    """``path`` as an expression on the player."""
+    return "player" + "".join(
+        f".{k}" if kind == "A" else f"[{k!r}]" for kind, k in path
+    )
+
+
+def _python_history(make_player, paths, frames: int) -> np.ndarray:
+    """Each of ``paths``' integer value after each of ``frames`` play calls."""
+    player, rows = make_player(), []
+    for _ in range(frames):
+        player.play_frame()
+        row = []
+        for path in paths:
+            try:
+                value = _resolve(player, path)
+            except (AttributeError, LookupError, TypeError):
+                value = None
+            row.append(int(value) if isinstance(value, numbers.Integral) else _UNSET)
+        rows.append(row)
+    return np.asarray(rows, np.int64).reshape(frames, len(paths))
+
+
+def _cpu_history(data, subtune: int, addrs, frames: int) -> np.ndarray:
+    """Each of ``addrs``' byte after each of ``frames`` jennings play calls."""
+    image = data if isinstance(data, SidImage) else SidImage.from_bytes(bytes(data))
+    subject, mpu, mem, play = boot_flat(image, subtune)
+    rows = np.empty((frames, len(addrs)), np.int64)
+    for f in range(frames):
+        run_to_rts(mpu, mem, play, 0, 8_000_000)
+        rows[f] = [subject[a] for a in addrs]
+    return rows
+
+
+def _live_cells(steps) -> List[int]:
+    """The memory cells a call read before writing them: the state it took in."""
+    written, live = set(), {}
+    for step in steps:
+        for addr, _ in step.reads:
+            if addr not in written:
+                live.setdefault(addr, None)
+        written.update(a for a, _ in step.writes)
+    return list(live)
+
+
+def first_break(x, y) -> int:
+    """The first index from which ``x`` and ``y`` stop tracking each other (``len`` if never).
+
+    They track as equals when they start equal, else under a one-to-one value map.
+    """
+    x, y = np.asarray(x), np.asarray(y)
+    if x[0] == y[0]:
+        bad = x != y
+    else:
+        _, fx, ix = np.unique(x, return_index=True, return_inverse=True)
+        _, fy, iy = np.unique(y, return_index=True, return_inverse=True)
+        bad = (y != y[fx[ix]]) | (x != x[fy[iy]])
+    return int(np.argmax(bad)) if bad.any() else len(x)
+
+
+def last_change(grid, frame: int, register: int) -> Optional[int]:
+    """The last frame ``<= frame`` whose ``register`` differs from the frame before.
+
+    None when no frame changed it: then nothing earlier explains its value.
+    """
     col = np.asarray(grid)[: frame + 1, register]
     moved = np.flatnonzero(col[1:] != col[:-1])
-    return int(moved[-1]) + 1 if moved.size else 0
+    return int(moved[-1]) + 1 if moved.size else None
 
 
 def python_side(
@@ -878,6 +1031,28 @@ def python_side(
         )
     keep = trace.slice(root) if root is not None else []
     events = trace.events
+    state: Dict[tuple, bool] = {}
+    sliced = set(keep)
+    for i, event in enumerate(events):
+        for _, kind, (obj_id, key) in event.state:
+            obj = trace.objects.get(obj_id)
+            path = None if obj is None else object_path(player, obj)
+            if path is not None:
+                loc = path + ((kind, key),)
+                state[loc] = state.get(loc, False) or i in sliced
+
+    def retrace(at, path, column):
+        return python_side(
+            make_player,
+            at,
+            0,
+            label=label,
+            cell=lambda p, _: (_resolve(p, path[:-1]), path[-1][1]),
+            roots=roots,
+            sources=sources,
+            grid=column,
+        )
+
     return Side(
         label,
         frame,
@@ -887,6 +1062,9 @@ def python_side(
         root,
         keep,
         {t: v for i in keep for t, v in events[i].live},
+        [(path_name(p), p, sliced, _family(player, p)) for p, sliced in state.items()],
+        lambda paths, n: _python_history(make_player, paths, n),
+        retrace,
     )
 
 
@@ -899,19 +1077,35 @@ def cpu_side(
     subtune: int = 0,
     grid=None,
     traced: Optional[int] = None,
+    address: Optional[int] = None,
 ) -> Side:
     """The jennings :func:`cpu_history` of play call ``frame``, sliced from its last store
-    to ``register``; without one, ``grid`` (the jennings grid) retraces :func:`last_change`.
+    to SID ``register`` (or RAM ``address``, ``grid`` then its column 0); without one,
+    ``grid`` (the jennings grid) retraces :func:`last_change`.
     """
     traced = frame if traced is None else traced
     steps = cpu_history(data, traced, subtune=subtune)
-    hits = [
-        i for i, s in enumerate(steps) if any(r == register for r, _ in s.sid_writes())
-    ]
-    back = None if grid is None else last_change(grid, traced, register)
+    if address is None:
+        hits = [
+            i
+            for i, s in enumerate(steps)
+            if any(r == register for r, _ in s.sid_writes())
+        ]
+    else:
+        hits = [
+            i for i, s in enumerate(steps) if any(a == address for a, _ in s.writes)
+        ]
+    col = register if address is None else 0
+    back = None if grid is None else last_change(grid, traced, col)
     if not hits and back not in (None, traced):
         return cpu_side(
-            data, frame, register, label=label, subtune=subtune, traced=back
+            data,
+            frame,
+            register,
+            label=label,
+            subtune=subtune,
+            traced=back,
+            address=address,
         )
     root = hits[-1] if hits else None
     keep, live = cpu_slice(steps, root) if root is not None else ([], {})
@@ -924,6 +1118,12 @@ def cpu_side(
         root,
         keep,
         {_loc(k): "entry" if v is None else f"${v:02X}" for k, v in live.items()},
+        [(_loc(a), a, a in live, None) for a in _live_cells(steps)],
+        lambda addrs, n: _cpu_history(data, subtune, addrs, n),
+        lambda at, addr, column: cpu_side(
+            data, at, 0, label=label, subtune=subtune, grid=column, address=addr
+        ),
+        lambda n: _cpu_history(data, subtune, range(0x10000), n),
     )
 
 
@@ -943,13 +1143,17 @@ class Divergence:
     window: str
     left: Side
     right: Side
+    cell: str = ""
+    state: Optional["StateOnset"] = None
 
     def header(self) -> List[str]:
         """The cell, every grid's value at it, the frame alignment and the grid window."""
-        values = ", ".join(f"{k} ${v:02X}" for k, v in self.values.items())
+        values = ", ".join(f"{k} ${v & 0xFF:02X}" for k, v in self.values.items())
+        cell = self.cell or (
+            f"register ${self.register:02X} {gridcmp.REG_NAMES[self.register]}"
+        )
         return [
-            f"divergence: {self.name}, reference frame {self.frame}, "
-            f"register ${self.register:02X} {gridcmp.REG_NAMES[self.register]}",
+            f"divergence: {self.name}, reference frame {self.frame}, {cell}",
             f"  {values}",
             *(f"  {n}" for n in self.notes),
             "",
@@ -968,8 +1172,8 @@ class Divergence:
             rule,
         ]
         rows += _columns(
-            [a.lines[i] for i in a.keep] or ["(register not stored this frame)"],
-            [b.lines[i] for i in b.keep] or ["(register not stored this frame)"],
+            [a.lines[i] for i in a.keep] or ["(not stored on the traced frame)"],
+            [b.lines[i] for i in b.keep] or ["(not stored on the traced frame)"],
             width,
             [len(a.keep) - 1] if a.keep else (),
             [len(b.keep) - 1] if b.keep else (),
@@ -980,6 +1184,8 @@ class Divergence:
             [f"{t} = {v}" for t, v in b.live.items()],
             width,
         )
+        if self.state is not None:
+            rows += ["", *self.state.lines(width)]
         rows += [
             "",
             f"FULL HISTORIES, meeting at the diverging store: {a.label} {len(a.lines)} "
@@ -1015,7 +1221,119 @@ class Divergence:
             window=self.window,
             left=self.left.summary(),
             right=self.right.summary(),
+            cell=self.cell,
+            state=None if self.state is None else self.state.summary(),
         )
+
+
+@dataclass
+class StateOnset:
+    """When the state a divergence read from earlier frames first disagreed.
+
+    ``pairs`` are ``(left state, right state, frame)``: each left state's best-tracking
+    right state and the left frame they part (None if they never do); ``why`` explains
+    the earliest such frame, from the stores of that pair.
+    """
+
+    frames: Tuple[int, int]
+    pairs: List[Tuple[str, str, Optional[int]]]
+    why: Optional["Divergence"] = None
+
+    def lines(self, width: int = 110) -> List[str]:
+        """The pairing table, then the earliest parting explained."""
+        lo, hi = self.frames
+        rows = [
+            f"STATE: the state read from earlier frames, tracked over frames {lo}-{hi}"
+        ]
+        rows += [
+            f"  {a} ~ {b}: " + ("tracks" if f is None else f"parts at frame {f}")
+            for a, b, f in self.pairs
+        ]
+        if self.why is not None:
+            rows += ["", "STATE ONSET " + "=" * 60, self.why.text(width)]
+        return rows
+
+    def summary(self) -> dict:
+        """The machine-readable form for ``json.dumps``."""
+        return dict(
+            frames=list(self.frames),
+            pairs=[list(p) for p in self.pairs],
+            why=None if self.why is None else self.why.summary(),
+        )
+
+
+def explain_state(why: "Divergence", depth: int = 4) -> Optional[StateOnset]:
+    """Pair the earlier-frame state each side of ``why`` read and explain where it parts.
+
+    Each state the left slice read is paired with a right one over the frames before the
+    divergence: a list member against a 6502 by :func:`fit_family`, else the right
+    frame's state that starts equal, tracks longest (:func:`first_break`), shares its
+    name, agrees most, and is in the right slice. The earliest parting is explained from
+    both stores, and chased again up to ``depth``.
+    """
+    a, b = why.left, why.right
+    asked = [(name, loc, family) for name, loc, sliced, family in a.state if sliced]
+    pool = b.state
+    n = min(a.frame, b.frame)
+    if not (asked and pool and a.history and b.history and n):
+        return None
+    lfull = a.history([loc for _, loc, _ in asked], a.frame)
+    rfull = b.history([loc for _, loc, *_ in pool], b.frame)
+    ram = b.ram(b.frame) if b.ram and any(f for *_, f in asked) else None
+    lh, rh = lfull[a.frame - n :], rfull[b.frame - n :]
+    pairs, best, partners = [], None, []
+    for i, (name, _, family) in enumerate(asked):
+        if family and ram is not None:
+            sib = a.history(family[0], a.frame)[a.frame - n :]
+            addr = fit_family(sib, family[1], ram[b.frame - n :], [p[1] for p in pool])
+            partner = (_loc(addr), addr, ram[:, addr].astype(np.int64))
+        else:
+            same, agree = lh[0, i] == rh[0], (lh[:, [i]] == rh).sum(0)
+            j = max(
+                range(len(pool)),
+                key=lambda j: (
+                    same[j],
+                    first_break(lh[:, i], rh[:, j]),
+                    pool[j][0] == name,
+                    agree[j],
+                    pool[j][2],
+                ),
+            )
+            partner = (pool[j][0], pool[j][1], rfull[:, j])
+        partners.append(partner)
+        cut = first_break(lh[:, i], partner[2][b.frame - n :])
+        at = cut if cut < n else None
+        pairs.append((name, partner[0], None if at is None else a.frame - n + at))
+        if at is not None and (best is None or at < best[0]):
+            best = (at, i)
+    onset = StateOnset((a.frame - n, a.frame - 1), pairs)
+    if best is None:
+        return onset
+    at, i = best
+    pname, ploc, pcol = partners[i]
+    theirs = pcol[b.frame - n :]
+    lf, rf = a.frame - n + at, b.frame - n + at
+    left = a.retrace(lf, asked[i][1], lfull[:, [i]])
+    right = b.retrace(rf, ploc, pcol[:, None])
+    window = "\n".join(
+        f"{a.frame - n + f:6d} {a.label} {lh[f, i]}  {b.label} {theirs[f]}"
+        + ("  ^^" if f >= at else "")
+        for f in range(max(0, at - 3), min(n, at + 4))
+    )
+    onset.why = Divergence(
+        name=why.name,
+        frame=lf,
+        register=why.register,
+        values={a.label: int(lh[at, i]), b.label: int(theirs[at])},
+        notes=[f"{a.label} frame {lf}, {b.label} frame {rf}"],
+        window=window,
+        left=left,
+        right=right,
+        cell=f"state {asked[i][0]} ~ {pname}",
+    )
+    if depth > 1:
+        onset.why.state = explain_state(onset.why, depth - 1)
+    return onset
 
 
 def explain_cell(
@@ -1078,13 +1396,15 @@ def explain_divergence(
     roots: Optional[Sequence] = None,
     sources: Optional[Dict[str, str]] = None,
     progress: bool = False,
+    state: bool = False,
 ) -> Optional[Divergence]:
     """The first divergence of ``make_player(data)``'s render from the 6502's, explained.
 
     ``reference`` is the expected grid (default ``frames`` of jennings'), compared under
     :func:`~pysidtracker.gridcmp.verdict_lead` up to ``max_lead``; ``frame`` and
     ``register`` pick a reference cell instead of the first mismatch. None on agreement.
-    ``label``/``cell``/``roots``/``sources`` are :func:`python_side`'s.
+    ``label``/``cell``/``roots``/``sources`` are :func:`python_side`'s; ``state`` adds
+    :func:`explain_state`.
     """
     data = bytes(data)
     nref = len(reference) if reference is not None else max(frames, (frame or 0) + 1)
@@ -1126,18 +1446,29 @@ def explain_divergence(
     )
     why.values["reference"] = int(ref[frame, register])
     why.window = gridcmp.window_report(*gridcmp.aligned(ref, lib, found.lead), frame)
+    if state:
+        why.state = explain_state(why)
     return why
 
 
 def main(argv=None) -> int:
     """``python -m pysidtracker.whydiff``: explain a render's first divergence.
 
-    ``player`` is ``module:callable(data, song) -> MemPlayer``; the reference is a
+    The player is ``module:callable(data, song) -> MemPlayer``, or an installed format's
+    (``--format NAME``, or ``auto``; its parser's default song). The reference is a
     ``gridcmp`` grid file (``--reference``) or the jennings grid. Exit 0 on agreement.
     """
     parser = argparse.ArgumentParser(description="Explain a render's first divergence.")
     parser.add_argument("tune", type=Path)
-    parser.add_argument("player", help="module:callable(data, song) -> MemPlayer")
+    parser.add_argument(
+        "player", nargs="?", help="module:callable(data, song) -> MemPlayer"
+    )
+    parser.add_argument("--format", help="an installed format's player, or auto")
+    parser.add_argument(
+        "--state",
+        action="store_true",
+        help="chase the state read back to where it parts",
+    )
     parser.add_argument("--song", type=int, default=1)
     parser.add_argument("--frames", type=int, default=250)
     parser.add_argument("--reference", type=Path, help="a gridcmp grid file")
@@ -1147,9 +1478,27 @@ def main(argv=None) -> int:
     parser.add_argument("--width", type=int, default=110)
     parser.add_argument("--json", dest="json_path", type=Path)
     args = parser.parse_args(argv)
-    module, _, attr = args.player.partition(":")
-    make = getattr(importlib.import_module(module), attr)
     data = args.tune.read_bytes()
+    if args.format:
+        from .formats import discover_formats, recognize_format
+
+        found = discover_formats()
+        fmt = (
+            recognize_format(found, data)
+            if args.format == "auto"
+            else next((f for f in found if f.name == args.format), None)
+        )
+        if fmt is None:
+            parser.error(f"no installed format {args.format!r} plays {args.tune}")
+
+        def make(d, _song):
+            return fmt.player(fmt.parser.parse(d))
+
+    elif args.player:
+        module, _, attr = args.player.partition(":")
+        make = getattr(importlib.import_module(module), attr)
+    else:
+        parser.error("give a player or --format")
     if args.reference:
         ref = gridcmp.read_grid(args.reference, args.frames)
     else:
@@ -1164,6 +1513,7 @@ def main(argv=None) -> int:
         register=args.register,
         name=args.tune.name,
         progress=True,
+        state=args.state,
     )
     if why is None:
         print(f"verified: {args.frames} frames agree")
