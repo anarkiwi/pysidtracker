@@ -2,6 +2,7 @@
 
 import hashlib
 
+import numpy as np
 import pytest
 
 from pysidtracker import (
@@ -10,6 +11,7 @@ from pysidtracker import (
     FormatCommand,
     MemPlayer,
     SidFormat,
+    SidParseError,
 )
 from pysidtracker import formats as formats_mod
 from pysidtracker import maincli
@@ -217,3 +219,53 @@ def test_fixtures_subcommand_is_wired_into_the_cli(tmp_path):
     )
     assert args.func(args) == 0
     assert out.exists() and sha in out.read_text()
+
+
+class _SubtuneParser(_FakeParser):
+    def parse(self, data, subtune=0, **kwargs):
+        return subtune
+
+
+class _GridPlayer:
+    def __init__(self, subtune):
+        self.subtune = subtune
+
+    def render_grid(self, nframes):
+        return [[self.subtune] * 25] * nframes
+
+
+def _subtune_format():
+    return SidFormat(name="sub", parser=_SubtuneParser(), player=_GridPlayer)
+
+
+def test_start_subtune_reads_the_header():
+    psid = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1000, songs=3)
+    assert formats_mod.start_subtune(psid) == 0
+    psid = build_psid(_SIMPLE, load=0x1000, init=0x1000, songs=3, start_song=3)
+    assert formats_mod.start_subtune(psid) == 2
+    assert formats_mod.start_subtune(bytes([0x00, 0x10]) + _SIMPLE) == 0
+
+
+def test_load_and_play_select_the_subtune():
+    fmt = _subtune_format()
+    psid = build_psid(_SIMPLE, load=0x1000, init=0x1000, songs=3, start_song=2)
+    assert fmt.load(psid) == 1 and fmt.load(psid, 2) == 2 and fmt.load(psid, 0) == 0
+    assert fmt.play(psid).subtune == 1 and fmt.play(psid, 2).subtune == 2
+
+
+def test_find_format_by_name_or_recognition(tune):
+    data = tune.read_bytes()
+    formats = [_fake_format(), _subtune_format()]
+    assert formats_mod.find_format(data, "sub", formats).name == "sub"
+    assert formats_mod.find_format(data, "auto", formats).name == "fake"
+    for name in ("none", "auto"):
+        with pytest.raises(SidParseError, match="no installed pysidtracker format"):
+            formats_mod.find_format(data, name, [] if name == "auto" else formats)
+
+
+def test_render_plays_the_one_based_song(monkeypatch):
+    monkeypatch.setattr(formats_mod, "discover_formats", lambda: [_subtune_format()])
+    psid = build_psid(_SIMPLE, load=0x1000, init=0x1000, songs=3)
+    grid, info = formats_mod.render("auto", psid, 3, 4)
+    assert info == {"format": "sub"} and grid.dtype == np.int16
+    assert grid.shape == (4, 25) and (grid == 2).all()

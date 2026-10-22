@@ -9,8 +9,8 @@ python -m pysidtracker.whydiff tune.sid --format sidwizard --state     # an inst
 python -m pysidtracker.whydiff tune.sid mypkg.player:make --frames 250 [--reference grid.csv.zst]
 ```
 
-`--format NAME` (or `auto`) plays the installed format's player on its parser's default
-song; otherwise `make(tune_bytes, song) -> MemPlayer`. The reference is a `gridcmp` grid file (e.g.
+`--format NAME` (or `auto`) plays the installed format's player on `--song`
+(`SidFormat.play`); otherwise `make(tune_bytes, song) -> MemPlayer`. The reference is a `gridcmp` grid file (e.g.
 a cached sidtrace grid), or the jennings grid. `--frame`/`--register` explain a
 chosen cell; `--json` saves the machine-readable form. In tests, use
 `assert_matches` / `assert_oracle_match` (see [oracle-testing.md](oracle-testing.md)).

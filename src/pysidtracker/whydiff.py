@@ -31,6 +31,7 @@ from vagrant_moses import memmap as mm
 from . import gridcmp
 from . import registers as reg
 from .emu import observe_data_access, run_to_rts
+from .errors import SidParseError
 from .image import SidImage
 from .oracle import boot_flat, register_grid
 
@@ -1460,7 +1461,7 @@ def main(argv=None) -> int:
     """``python -m pysidtracker.whydiff``: explain a render's first divergence.
 
     The player is ``module:callable(data, song) -> MemPlayer``, or an installed format's
-    (``--format NAME``, or ``auto``; its parser's default song). The reference is a
+    (``--format NAME``, or ``auto``, playing ``--song``). The reference is a
     ``gridcmp`` grid file (``--reference``) or the jennings grid. Exit 0 on agreement.
     """
     parser = argparse.ArgumentParser(description="Explain a render's first divergence.")
@@ -1485,19 +1486,15 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     data = args.tune.read_bytes()
     if args.format:
-        from .formats import discover_formats, recognize_format
+        from .formats import find_format
 
-        found = discover_formats()
-        fmt = (
-            recognize_format(found, data)
-            if args.format == "auto"
-            else next((f for f in found if f.name == args.format), None)
-        )
-        if fmt is None:
-            parser.error(f"no installed format {args.format!r} plays {args.tune}")
+        try:
+            fmt = find_format(data, args.format)
+        except SidParseError as exc:
+            parser.error(f"{exc}: {args.tune}")
 
-        def make(d, _song):
-            return fmt.player(fmt.parser.parse(d))
+        def make(d, song):
+            return fmt.play(d, song - 1)
 
     elif args.player:
         module, _, attr = args.player.partition(":")

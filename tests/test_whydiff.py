@@ -646,18 +646,23 @@ def test_cli_format_and_state(tmp_path, capsys, monkeypatch):
 
     tune = tmp_path / "gated.sid"
     tune.write_bytes(GSID)
-    fmt = SimpleNamespace(
+    parsed = []
+
+    def parse(data, subtune):
+        parsed.append(subtune)
+        return data
+
+    fmt = formats.SidFormat(
         name="gated",
-        parser=SimpleNamespace(parse=lambda d: d, recognize=lambda image: True),
+        parser=SimpleNamespace(parse=parse, recognize=lambda image: True),
         player=lambda model: Gated(b"", 0),
     )
     monkeypatch.setattr(formats, "discover_formats", lambda: [fmt])
-    monkeypatch.setattr(formats, "recognize_format", lambda found, data: found[0])
-    assert (
-        whydiff.main([str(tune), "--format", "gated", "--frames", "8", "--state"]) == 1
-    )
+    argv = [str(tune), "--format", "gated", "--frames", "8", "--song", "2", "--state"]
+    assert whydiff.main(argv) == 1
     assert "STATE ONSET" in capsys.readouterr().out
     assert whydiff.main([str(tune), "--format", "auto", "--frames", "8"]) == 1
+    assert set(parsed) == {1, 0}
     with pytest.raises(SystemExit):
         whydiff.main([str(tune), "--format", "nope"])
     with pytest.raises(SystemExit):

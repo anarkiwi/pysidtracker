@@ -12,9 +12,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
-from typing import Any, Callable, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 from .base import BaseSidParser
+from .errors import SidParseError
 from .image import SidImage
 from .player import MemPlayer
 
@@ -43,8 +46,10 @@ class SidFormat:
     """One registered SID format: how to recognise, play, describe and extend it.
 
     ``parser`` is a :class:`~pysidtracker.base.BaseSidParser` (its ``recognize``
-    selects the format and its ``parse`` yields the song model).  ``player``
-    builds a :class:`~pysidtracker.player.MemPlayer` from that model for the
+    selects the format and its ``parse`` yields the song model; ``parse(data,
+    subtune=k)`` yields the model of 0-based subtune ``k``, the song the
+    container's song ``k + 1`` plays).  ``player`` builds a
+    :class:`~pysidtracker.player.MemPlayer` of that model's subtune for the
     ``reglog`` / ``wav`` commands.  ``describe`` optionally yields extra ``info``
     lines; ``metadata`` optionally overrides how the shared metadata block is
     read from the model (default: the standard ``name``/``author``/``released``/
@@ -72,6 +77,22 @@ class SidFormat:
             model.init_addr,
             model.play_addr,
         )
+
+    def load(self, data: bytes, subtune: Optional[int] = None) -> Any:
+        """The model of ``data``'s 0-based ``subtune``, by default its start song."""
+        return self.parser.parse(
+            data, subtune=start_subtune(data) if subtune is None else subtune
+        )
+
+    def play(self, data: bytes, subtune: Optional[int] = None) -> MemPlayer:
+        """A fresh :class:`~pysidtracker.player.MemPlayer` of ``data``'s ``subtune``."""
+        return self.player(self.load(data, subtune))
+
+
+def start_subtune(data: bytes) -> int:
+    """The 0-based subtune ``data``'s PSID/RSID header starts on (0 without one)."""
+    header = SidImage.from_bytes(data).header
+    return max(header.start_song, 1) - 1 if header is not None else 0
 
 
 def discover_formats() -> List[SidFormat]:
@@ -101,3 +122,35 @@ def recognize_format(formats: Iterable[SidFormat], data: bytes) -> Optional[SidF
         except Exception:  # pylint: disable=broad-except
             continue
     return None
+
+
+def find_format(
+    data: bytes, name: str = "auto", formats: Optional[Iterable[SidFormat]] = None
+) -> SidFormat:
+    """The installed format ``name`` (``auto``: the one recognising ``data``).
+
+    ``formats`` defaults to :func:`discover_formats`; raises
+    :class:`~pysidtracker.errors.SidParseError` when there is none.
+    """
+    found = discover_formats() if formats is None else list(formats)
+    if name == "auto":
+        fmt = recognize_format(found, data)
+    else:
+        fmt = next((f for f in found if f.name == name), None)
+    if fmt is None:
+        raise SidParseError(
+            f"no installed pysidtracker format {name!r} plays this tune"
+        )
+    return fmt
+
+
+def render(
+    name: str, data: bytes, song: int, nframes: int
+) -> Tuple[np.ndarray, Dict[str, str]]:
+    """A survey renderer: 1-based ``song`` of ``data`` on format ``name`` (or ``auto``).
+
+    ``(grid, {"format": name})``, the grid ``nframes`` rows of the 25 SID registers.
+    """
+    fmt = find_format(data, name)
+    grid = fmt.play(data, song - 1).render_grid(nframes)
+    return np.asarray(grid, np.int16), {"format": fmt.name}

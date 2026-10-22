@@ -33,6 +33,7 @@ from vagrant_moses import memmap as mm
 from .cadence import playroutine_cadence
 from .disasm import entry_labels
 from .errors import SidParseError
+from .formats import render as format_render
 from .gridcmp import (  # the shared grid-diff core, re-exported for the survey API
     LEAD,
     NEAR,
@@ -383,15 +384,26 @@ def load_render(spec):
     return getattr(module, name or "render")
 
 
+def renderer(render=None, fmt=None):
+    """The installed format ``fmt``'s renderer (``auto``: the one recognising
+    each tune), else :func:`load_render` of spec ``render`` (None without either)."""
+    if fmt:
+        return functools.partial(format_render, fmt)
+    return render and load_render(render)
+
+
 def _file_row(job):
     spec, path, kw = job
-    return compare_file(path, load_render(spec), **kw)
+    return compare_file(
+        path, load_render(spec) if isinstance(spec, str) else spec, **kw
+    )
 
 
 def file_cli(render, files, *, out=None, jobs=None, **kw):
     """Compare a renderer with each native file's own player (bare PRGs wrapped).
 
-    ``render`` is a ``load_render`` spec, e.g. a library's ``oracle_hvsc.py``;
+    ``render`` is a ``load_render`` spec, e.g. a library's ``oracle_hvsc.py``,
+    or a picklable renderer (:func:`renderer`);
     ``kw`` goes to :func:`compare_file`. Writes ``run``'s ``results.csv``
     columns plus ``oracle`` to ``out`` (default stdout); returns verdict tallies.
     """
@@ -924,9 +936,9 @@ def main(argv=None):
         p.add_argument("--work", required=True)
         p.add_argument(
             "--render",
-            required=name not in ("leads", "explain"),
             help="module:function renderer (leads: only for uncached grids)",
         )
+        p.add_argument("--format", help="an installed format's renderer, or auto")
     sub.choices["diff"].add_argument("key")
     sub.choices["diff"].add_argument("--context", type=int, default=3)
     pe = sub.choices["explain"]
@@ -965,9 +977,12 @@ def main(argv=None):
     pv.add_argument("--threshold", type=float, default=0.8)
     p = sub.add_parser("file", help=file_cli.__doc__)
     p.add_argument(
-        "render", help="renderer: oracle_hvsc.py[:function] or module:function"
+        "render",
+        nargs="?",
+        help="renderer: oracle_hvsc.py[:function] or module:function",
     )
     p.add_argument("files", nargs="+", help=".sid or bare .prg native files")
+    p.add_argument("--format", help="an installed format's renderer, or auto")
     p.add_argument("--frames", type=int, required=True, help="oracle frames")
     p.add_argument("--song", type=int, default=1, help="1-based subtune")
     p.add_argument("--init", type=_hex_addr, help="bare PRG init (default: load)")
@@ -1006,6 +1021,11 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd == "leads" and not (a.keys or a.all or a.verdict):
         ap.error("leads needs keys, --all or --verdict")
+    if getattr(a, "format", None) and a.cmd == "file" and a.render:
+        a.files, a.render = [a.render] + a.files, None
+    if a.cmd in ("run", "diff", "file") and not (a.render or a.format):
+        ap.error(f"{a.cmd} needs a renderer or --format")
+    render = renderer(getattr(a, "render", None), getattr(a, "format", None))
     if a.cmd == "find":
         out = find(a.hvsc, a.out, a.sidid_cfg, a.player, a.jobs)
     elif a.cmd == "run":
@@ -1013,7 +1033,7 @@ def main(argv=None):
             a.hvsc,
             a.tunes,
             a.work,
-            load_render(a.render),
+            render,
             player=a.player,
             limit=a.limit,
             jobs=a.jobs,
@@ -1021,7 +1041,7 @@ def main(argv=None):
             timeout=a.timeout,
         )
     elif a.cmd == "diff":
-        out = diff(a.hvsc, a.tunes, a.key, a.work, load_render(a.render), a.context)
+        out = diff(a.hvsc, a.tunes, a.key, a.work, render, a.context)
     elif a.cmd == "explain":
         explain(
             a.hvsc,
@@ -1031,7 +1051,7 @@ def main(argv=None):
             frame=a.frame,
             reg=a.reg,
             watch=a.watch,
-            render=a.render and load_render(a.render),
+            render=render,
             depth=a.depth,
         )
     elif a.cmd == "leads":
@@ -1039,7 +1059,7 @@ def main(argv=None):
             a.hvsc,
             a.tunes,
             a.work,
-            a.render and load_render(a.render),
+            render,
             keys=a.keys,
             verdicts=("exact", "differs") if a.all else a.verdict,
             out=a.out,
@@ -1068,7 +1088,7 @@ def main(argv=None):
         )
     elif a.cmd == "file":
         out = file_cli(
-            a.render,
+            render if a.format else a.render,
             a.files,
             out=a.out,
             jobs=a.jobs,
