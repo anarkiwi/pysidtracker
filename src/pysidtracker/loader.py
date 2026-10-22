@@ -43,8 +43,7 @@ def is_rsid(data: bytes) -> bool:
 
 def is_ntsc(data: bytes) -> bool:
     """True when a v2+ header's clock bits (``flags`` bits 2-3) say NTSC."""
-    header = parse_sid_header(data)
-    return header.version >= 2 and (header.flags >> 2) & 3 == 2
+    return parse_sid_header(data).is_ntsc
 
 
 def psid_speed(data: bytes) -> int:

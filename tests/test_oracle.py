@@ -95,6 +95,18 @@ def test_boot_flat_setup_sees_init():
     assert stores == [(0xD400, 0x0A)] and subject[0xD400] == 0x0A and play == 0x1006
 
 
+@pytest.mark.parametrize("flags, video", [(0x00, 1), (0x04, 1), (0x08, 0), (0x0C, 1)])
+def test_boot_flat_sets_the_kernal_pal_flag_for_the_header_clock(flags, video):
+    init = bytes([0xAD, 0xA6, 0x02, 0x8D, 0x00, 0xD4, 0x60])  # LDA $02A6/STA $D400
+    tune = build_psid(init, load=0x1000, init=0x1000, play=0x1006, flags=flags)
+    assert register_grid(tune, 1)[0][0] == video
+
+
+def test_boot_flat_tune_bytes_over_the_pal_flag():
+    tune = build_psid(bytes([0x7E]), load=0x02A6, init=0x02A6, play=0x02A6)
+    assert boot_flat(SidImage.from_bytes(tune), max_cycles=0)[0][0x02A6] == 0x7E
+
+
 def test_register_grid_illegal_opcodes():
     image = _SIMPLE[:6] + _ILLEGAL_PLAY  # init then illegal play
     tune = build_psid(image, load=0x1000, init=0x1000, play=0x1006)

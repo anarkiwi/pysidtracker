@@ -108,6 +108,11 @@ class SidHeader:
         return self.magic == RSID_MAGIC
 
     @property
+    def is_ntsc(self) -> bool:
+        """True when a v2+ header's clock bits (``flags`` bits 2-3) say NTSC only."""
+        return self.version >= 2 and (self.flags >> 2) & 3 == 2
+
+    @property
     def is_multi_sid(self) -> bool:
         """True if the header advertises a 2nd/3rd/4th SID chip."""
         return self.version >= 3 and (self.second_sid != 0 or self.third_sid != 0)

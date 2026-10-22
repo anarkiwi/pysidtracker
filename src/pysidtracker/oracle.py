@@ -69,6 +69,8 @@ ENTRY_SOURCES = {f"{s}_entry": s for s in RAISE_SOURCES}
 # audible. Mirror that cold-start default when rendering a reference grid.
 SID_VOLUME = mm.SID_BASE + 0x18
 DRIVER_VOLUME = 0x0F
+# The KERNAL PAL/NTSC flag the PSID driver sets for the machine it plays on: 1 PAL.
+PAL_FLAG = 0x02A6
 
 
 class SidtraceUnavailable(SidError):
@@ -84,12 +86,15 @@ def boot_flat(
 ):
     """``(subject, mpu, mem, play)``: ``image`` booted on jennings, ``init`` run, ready to play.
 
-    Power-on RAM, ``$D418`` at the driver's maximum volume, ``init`` banked and run
-    with ``A = subtune``, then the play address's iomap, as the PSID driver does.
+    Power-on RAM, ``$D418`` at the driver's maximum volume, the KERNAL PAL/NTSC flag
+    (:data:`PAL_FLAG`) for the header's clock (NTSC only for an NTSC-only tune),
+    ``init`` banked and run with ``A = subtune``, then the play address's iomap, as
+    the PSID driver does.
     ``setup(mpu, subject)``, if given, runs before ``init`` (e.g. to install a
     :func:`~pysidtracker.emu.observe_data_access` observer that sees init too).
     """
     subject = power_on_ram()
+    subject[PAL_FLAG] = int(not image.header.is_ntsc)
     subject[image.load : image.load + len(image.image)] = image.image
     subject[SID_VOLUME] = DRIVER_VOLUME  # PSID driver cold-start: maximum volume
     init = image.header.init_address or image.header.real_load_address
