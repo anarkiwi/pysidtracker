@@ -33,7 +33,7 @@ from .oracle import (
 )
 from .player import MemPlayer
 from .reglog import RegWrite, register_writes_from_player
-from .poweron import PSID_DRIVER_CLEARED
+from .poweron import PSID_DRIVER_CLEARED, place_tune
 from .roms import poweron_writes
 
 _IRQ_I = 0x04
@@ -198,11 +198,7 @@ def _boot(
         + (_iomap(header, init), _iomap(header, header.play_address))
         + (video, clock, 0 if rsid else _IRQ_I)
     )
-    end = image.end
-    for addr, word in ((0x2D, end), (0x2F, end), (0x31, end), (0xAC, image.load)):
-        ram[addr : addr + 2] = (word & 0xFFFF).to_bytes(2, "little")
-    ram[0xAE:0xB0] = (end & 0xFFFF).to_bytes(2, "little")
-    ram[image.load : image.end] = image.mem[image.load : image.end]
+    place_tune(ram, image.load, image.mem[image.load : image.end])
     return machine.reset(labels["cold"])
 
 

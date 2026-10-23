@@ -374,6 +374,8 @@ def test_fetch_archive_member_extracts_and_verifies(monkeypatch, tmp_path, pack)
     assert named.read_bytes() == b"tune" and len(fetched) == 2
     assert fetch_archive_member(*args, cache_dir=tmp_path) == dest
     assert len(fetched) == 2
+    fetch_archive_member(*args, cache_dir=tmp_path, name="t-2.swm", archive_name="r.z")
+    assert (tmp_path / "r.z").read_bytes() == archive and len(fetched) == 3
     with pytest.raises(TuneFetchError, match="rel/b.swm: SHA-256"):
         fetch_archive_member(
             url, _sha(archive), "rel/b.swm", _sha(b"x"), cache_dir=tmp_path

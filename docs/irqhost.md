@@ -36,7 +36,8 @@ tune = TunePlayer(data)         # any PSID/RSID's own driver, play address 0 hos
   an RSID then gets libsidplayfp's `poweron.bin` image of a booted C64, fetched
   and SHA-256 verified like the ROMs (`roms.poweron_writes`, `docs/c64-roms.md`),
   falling back to the KERNAL's RAM vectors offline. The tune's start/end are
-  stored in `$2D`-`$32` and `$AC`-`$AF` as the BASIC loader leaves them.
+  stored in `$2D`-`$32` and `$AC`-`$AF` as the BASIC loader leaves them
+  (`poweron.place_tune`, which the flat paths load through too).
 - **Driver.** The PSID driver (`psiddrv.a65`) is assembled in its relocated page
   and run from reset: it acknowledges everything, sets `$D418`, the CIA #1
   KERNAL latch, `$D011`/`$D012`, arms the VIC (PSID speed bit 0) or CIA #1

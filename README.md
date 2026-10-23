@@ -92,9 +92,10 @@ API.
 - `poweron` — the libsidplayfp power-on C64 RAM a PSID boots onto: `ram_pattern`
   (the `SystemRAMBank::reset` image, vagrant-moses' `c64.poweron_ram` as a
   mutable copy) and `power_on_ram` (it with the PSID driver's `$0000-$03FE`
-  cleared, `PSID_DRIVER_CLEARED`). `MemPlayer`, the `oracle` `register_grid`,
-  and `irqhost` all start from it, so a tune reading uninitialised memory reads
-  the power-on byte, not zero.
+  cleared, `PSID_DRIVER_CLEARED`), and `place_tune` (the tune loaded with the
+  BASIC `LOAD` pointers in `$2D`-`$32`/`$AC`-`$AF`). `MemPlayer`, the `oracle`
+  `register_grid`, and `irqhost` all start from them, so a tune reading
+  uninitialised memory or its load bounds reads what sidplayfp leaves there.
 - `loader` — the flat PSID/RSID loader for hosts with their own 64 KiB memory:
   `load_psid` (`(mem, load, init, play)`, honouring the in-body load address),
   `psid_image` (load bounds), `psid_songs`, `is_ntsc`, `is_rsid`, `psid_speed`

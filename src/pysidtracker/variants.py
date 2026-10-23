@@ -179,14 +179,14 @@ def executed_offsets(
 def _executed_direct(image, subtune, ntsc, nframes, max_cycles) -> List[int]:
     """The executed offsets of a direct (init + per-frame play) tune."""
     from .emu import run_to_rts, set_iomap, wire_mpu
-    from .poweron import power_on_ram, psid_init_bank, psid_play_bank
+    from .poweron import place_tune, power_on_ram, psid_init_bank, psid_play_bank
     from .registers import sid_model_for_flags
 
     header = image.header
     init = header.init_address or image.load  # type: ignore[union-attr]
     play = header.play_address  # type: ignore[union-attr]
     subject = power_on_ram()
-    subject[image.load : image.end] = image.image
+    place_tune(subject, image.load, image.image)
     subject[0xD418] = 0x0F
     subject[1] = psid_init_bank(init)
     mpu, mem = wire_mpu(subject, sid_model=sid_model_for_flags(header.flags), ntsc=ntsc)

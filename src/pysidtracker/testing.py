@@ -289,12 +289,14 @@ def fetch_archive_member(
     *,
     cache_dir=None,
     name=None,
+    archive_name=None,
 ) -> Path:
     """``member`` of the zip or tar archive at ``url``, cached as ``cache_dir/name``.
 
     ``cache_dir`` defaults to ``default_cache("archives")`` and ``name`` to the
     member's file name. The archive is
-    :func:`fetch_verified` against ``sha256`` and the member against
+    :func:`fetch_verified` (as ``archive_name``, for a URL whose path does not name
+    the file) against ``sha256`` and the member against
     ``member_sha256``; a cached member that verifies is returned without the
     archive.
     """
@@ -302,7 +304,7 @@ def fetch_archive_member(
     dest = Path(cache_dir) / (name or PurePosixPath(member).name)
     if _sha256_file(dest) == member_sha256:
         return dest
-    archive = fetch_verified(url, sha256, cache_dir=cache_dir)
+    archive = fetch_verified(url, sha256, cache_dir=cache_dir, name=archive_name)
     if zipfile.is_zipfile(archive):
         with zipfile.ZipFile(archive) as zf:
             data = zf.read(member)

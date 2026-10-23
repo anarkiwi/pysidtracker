@@ -40,7 +40,7 @@ from .emu import run_to_rts, set_iomap, wire_mpu
 from .errors import SidError, SidParseError
 from .image import SidImage
 from .player import MemPlayer
-from .poweron import power_on_ram, psid_init_bank, psid_play_bank
+from .poweron import place_tune, power_on_ram, psid_init_bank, psid_play_bank
 
 # preframr-sidtrace ``.sidwr.bin`` record: (clock, addr, reg, val).
 _SIDWR_REC = struct.Struct("<qHBB")
@@ -86,7 +86,8 @@ def boot_flat(
 ):
     """``(subject, mpu, mem, play)``: ``image`` booted on jennings, ``init`` run, ready to play.
 
-    Power-on RAM, ``$D418`` at the driver's maximum volume, the KERNAL PAL/NTSC flag
+    Power-on RAM, the tune placed with the BASIC ``LOAD`` pointers
+    (:func:`~pysidtracker.poweron.place_tune`), ``$D418`` at the driver's maximum volume, the KERNAL PAL/NTSC flag
     (:data:`PAL_FLAG`) for the header's clock (NTSC only for an NTSC-only tune),
     ``init`` banked and run with ``A = subtune``, then the play address's iomap, as
     the PSID driver does.
@@ -95,7 +96,7 @@ def boot_flat(
     """
     subject = power_on_ram()
     subject[PAL_FLAG] = int(not image.header.is_ntsc)
-    subject[image.load : image.load + len(image.image)] = image.image
+    place_tune(subject, image.load, image.image)
     subject[SID_VOLUME] = DRIVER_VOLUME  # PSID driver cold-start: maximum volume
     init = image.header.init_address or image.header.real_load_address
     subject[1] = psid_init_bank(init)

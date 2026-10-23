@@ -141,6 +141,7 @@ from .oracle import (
 from .player import MemPlayer
 from .poweron import (
     PSID_DRIVER_CLEARED,
+    place_tune,
     power_on_ram,
     psid_init_bank,
     psid_play_bank,
@@ -245,7 +246,7 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.31.0"
+__version__ = "0.32.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -401,6 +402,7 @@ __all__ = [
     "parse_prg",
     "parse_sid_header",
     "playroutine_cadence",
+    "place_tune",
     "power_on_ram",
     "psid_image",
     "psid_init_bank",
