@@ -638,7 +638,9 @@ _FIELDS = ["kind", "key", "n_tunes", "score", "representative", "labels", "tunes
 
 
 def _brief(labels: Sequence[str]) -> str:
-    """A key's own label and its first partner's, with the other partners' count."""
+    """A key's own label and its first partner's, with the other partners' count
+    (``after:`` context labels left out)."""
+    labels = [t for t in labels if not t.startswith("after: ")]
     more = len(labels) - 2
     return " || ".join(labels[:2]) + (f" (+{more} partners)" if more > 0 else "")
 

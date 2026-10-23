@@ -409,6 +409,7 @@ def test_branch_bug_keys_on_the_first_parting(corpus, tmp_path):
     assert "BNE" in top.labels[0] and "or cnt == 6" in top.labels[1]
     assert top.labels[2].startswith("after: $") and "BCC" in top.labels[2]
     assert top.labels[3].startswith("after: ") and "if cnt >= " in top.labels[3]
+    assert "partners" not in pd.table(an.fixes, an.records)
     rec = an.records[top.representative]
     assert int(rec["onset"]) == 6 and (np.asarray(rec["rank"]) >= 0).any()
     fresh = pd.record(_tune(0, 3), 1, pd.CPU, spec, "lead", 10)
