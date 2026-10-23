@@ -1031,6 +1031,14 @@ def _resolve(obj, path):
     return obj
 
 
+def _reach(obj, path):
+    """:func:`_resolve`, or None where ``path`` does not exist on ``obj``."""
+    try:
+        return _resolve(obj, path)
+    except (AttributeError, LookupError, TypeError):
+        return None
+
+
 def _family(player, path) -> Optional[tuple]:
     """``(sibling paths, own index)`` over ``path``'s last list index, else None."""
     for at in range(len(path) - 1, -1, -1):
@@ -1082,10 +1090,7 @@ def _python_history(make_player, paths, frames: int) -> np.ndarray:
         player.play_frame()
         row = []
         for path in paths:
-            try:
-                value = _resolve(player, path)
-            except (AttributeError, LookupError, TypeError):
-                value = None
+            value = _reach(player, path)
             row.append(int(value) if isinstance(value, numbers.Integral) else _UNSET)
         rows.append(row)
     return np.asarray(rows, np.int64).reshape(frames, len(paths))
@@ -1215,7 +1220,7 @@ def python_side(
             at,
             0,
             label=label,
-            cell=lambda p, _: (_resolve(p, path[:-1]), path[-1][1]),
+            cell=lambda p, _: (_reach(p, path[:-1]), path[-1][1]),
             roots=roots,
             sources=sources,
             grid=column,

@@ -825,3 +825,25 @@ def _dyn(o, k):
     yield o
     yield delattr(o, k)
     yield o
+
+
+class Rowed(Toy):
+    """Holds ``row`` only from frame 2 on, so ``player.row.pattern`` is unreachable before."""
+
+    def _init(self, subtune):
+        super()._init(subtune)
+        self.row = None
+
+    def _frame(self):
+        if self.cnt >= 2:
+            self.row = SimpleNamespace(pattern=[self.cnt])
+            self.row.pattern[0] = self.cnt
+        super()._frame()
+
+
+def test_retrace_of_a_path_unreachable_at_that_frame_has_no_root():
+    side = whydiff.python_side(lambda: Rowed(b"", 0), 3, 0)
+    path = (("A", "row"), ("A", "pattern"), ("S", 0))
+    assert side.retrace(0, path, None).root is None
+    later = side.retrace(3, path, None)
+    assert later.events[later.root].text == "self.row.pattern[0] = self.cnt"
