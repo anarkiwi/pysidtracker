@@ -210,3 +210,13 @@ def test_variants_cli_writes_csv_and_prints(tmp_path, capsys):
 def test_signature_jaccard_reflexive():
     sig = build_signature(_players()["base"], nframes=4)
     assert sig.jaccard(sig) == 1.0
+
+
+def test_decode_lengths_and_zero_page_operands():
+    from pysidtracker.variants import _decode  # pylint: disable=import-outside-toplevel
+
+    mem = bytearray(0x10000)
+    mem[0x1000:0x1007] = bytes([0xB1, 0xFB, 0xA5, 0x02, 0xAD, 0x00, 0x10])
+    assert _decode(mem, 0x1000, 0x1000, 0x1000, 0x1100) == (2, "LDA", "indy", "zp")
+    assert _decode(mem, 0x1002, 0x1000, 0x1000, 0x1100) == (2, "LDA", "zp", "zp")
+    assert _decode(mem, 0x1004, 0x1000, 0x1000, 0x1100) == (3, "LDA", "abs", "rel:0")

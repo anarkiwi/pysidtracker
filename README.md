@@ -72,6 +72,16 @@ API.
   side's backward dataflow of the diverging value, and the state behind it chased to
   the frame it first parted (`python -m pysidtracker.whydiff`,
   [docs/whydiff.md](docs/whydiff.md)).
+- `paths` / `faultloc` / `pathdiff` — per-frame code paths of two players (6502,
+  a format's player or any `PySubject`, e.g. a lift) over a survey corpus, each
+  divergence keyed on the branch where the executions first part, the minimum set
+  of fixes, and strict xfail cases run with the `whydiff` explanation
+  (`python -m pysidtracker.pathdiff build|rank|xfails`,
+  [docs/pathdiff.md](docs/pathdiff.md)).
+- `pathfuzz` — coverage gaps against the static path universes, data-byte mutants
+  steered to unreached branch outcomes, and ddmin reproducers
+  (`python -m pysidtracker.pathfuzz gaps|exercise|minimise`,
+  [docs/pathfuzz.md](docs/pathfuzz.md)).
 - `survey` — whole-song HVSC survey and failure triage of any format's renderer
   against the `sidtrace` oracle, verdict moves against a baseline (`compare`),
   an oracle-free decompile scope check (`scope`),
