@@ -56,6 +56,14 @@ _HIDDEN += (types.MethodType, types.BuiltinMethodType)
 _FLAGS = "NV-BDIZC"
 _ORDERED = frozenset({"bytes", "bytearray", "list", "tuple"})
 _YIELD = dis.opmap["YIELD_VALUE"]
+_RESUME = dis.opmap["RESUME"]
+
+
+def _suspended(code: bytes, lasti: int) -> bool:
+    """Whether a ``return`` trace event at ``lasti`` is a yield: at its
+    ``YIELD_VALUE``, or (3.13) at the ``RESUME`` right after it."""
+    op = code[lasti]
+    return op == _YIELD or (op == _RESUME and lasti >= 2 and code[lasti - 2] == _YIELD)
 
 
 def _pure(node) -> bool:
@@ -650,7 +658,7 @@ class PyTrace:
             self._line(frame)
         elif event == "return":
             last = self._settle(frame)
-            yielded = frame.f_code.co_code[frame.f_lasti] == _YIELD
+            yielded = _suspended(frame.f_code.co_code, frame.f_lasti)
             deps = ([] if last is None else [last]) + (
                 self._drawn(frame) if yielded else []
             )
