@@ -534,26 +534,32 @@ class Analysis:
             return self.records[key]
         return _load(_tune_path(self.pair, key), _names(self.pair), True)
 
-    def context(self, fix: fl.Fix) -> Tuple[str, ...]:
-        """A ``first`` fix's representative's last agreed pair before the parting."""
+    def context(self, fix: fl.Fix) -> Tuple[Tuple[str, str], ...]:
+        """``(tag, name)`` of a ``first`` fix's representative: the departing side's
+        feature before it (``after``) and the other side's departure (``vs``)."""
         if fix.key[0] != "first" or not fix.representative:
             return ()
         fails = self.spec.tune[self.spec.fail_rows]
-        row = int(np.argmax(fails == self.spec.tunes.index(fix.representative)))
-        part = self.parts[row]
-        return tuple(n for n in part.after if n) if part is not None else ()
+        part = self.parts[
+            int(np.argmax(fails == self.spec.tunes.index(fix.representative)))
+        ]
+        if part is None:
+            return ()
+        s = 0 if fix.key[1] else 1
+        got = (("after", part.after[s]), ("vs", part[1 - s]))
+        return tuple((t, n) for t, n in got if n)
 
     def label_fixes(self) -> None:
         """Name each fix's features by its representative's texts, else by the first
-        tune that ran them; a ``first`` fix's labels end with ``after: `` its
-        representative's last agreed features."""
+        tune that ran them; a ``first`` fix's labels end with its :meth:`context`."""
         own = {}
         for fix in self.fixes:
             if fix.representative:
                 rep = self.tune(fix.representative, labels=True)
                 own[fix.representative] = dict(zip(rep["names"], rep["labels"]))
         text: Dict[str, str] = {}
-        want = {n for f in self.fixes for n in fl.key_names(f.key) + self.context(f)}
+        want = {n for f in self.fixes for n in fl.key_names(f.key)}
+        want |= {n for f in self.fixes for _, n in self.context(f)}
         want -= {n for f in self.fixes for n in own.get(f.representative, ())}
         for key, rec in self.records.items():
             if not want:
@@ -566,7 +572,7 @@ class Analysis:
             mine = own.get(fix.representative, {})
             fix.labels = tuple(
                 mine.get(n, text.get(n, n)) for n in fl.key_names(fix.key)
-            ) + tuple("after: " + mine.get(n, n) for n in self.context(fix))
+            ) + tuple(f"{t}: " + mine.get(n, n) for t, n in self.context(fix))
 
     def keys_of(self, rec: dict, key: str = "") -> set:
         """Candidate keys of a fresh :func:`record` under this corpus's correspondence."""
@@ -590,8 +596,7 @@ class Analysis:
             [1 + p.startswith(self.corr.prefixes[1]) for p in mini.names], np.int8
         )
         side[[not n.startswith(self.corr.prefixes) for n in mini.names]] = 0
-        classes = np.where(gid >= 0, self.corr.classes[np.maximum(gid, 0)], -1)
-        corr = fl.Correspondence(mini.names, side, adj, self.corr.prefixes, classes)
+        corr = fl.Correspondence(mini.names, side, adj, self.corr.prefixes)
         scores = np.where(gid >= 0, self.scores[np.maximum(gid, 0)], 0.0)
         return fl.candidates(mini, corr, [_pair(rec)], scores)[0]
 

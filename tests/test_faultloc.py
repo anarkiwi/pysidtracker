@@ -297,7 +297,7 @@ def _ordered_corpus(seed=0, ntunes=120, nbg=40):
     rng = np.random.default_rng(seed)
     arms = [f"root{b}_{arm}" for b in "AB" for arm in "tf"]
     shared = [f"e{i}" for i in range(nbg)] + arms + ["store:0:a", "symY", "symX"]
-    samples, bug_of = [], {}
+    samples, bug_of, parts = [], {}, []
     for t in range(ntunes):
         bug = "AB"[t % 2]
         onset = int(rng.integers(1, 3))
@@ -322,11 +322,13 @@ def _ordered_corpus(seed=0, ntunes=120, nbg=40):
                 rank[col] = k
         samples.append(_sample(f"t{t}", dense, names, onset) + (rank,))
         bug_of[f"t{t}"] = bug
-    return samples, bug_of
+        after = (f"6502:{left[len(bg) - 1]}", f"py:{right[len(bg) - 1]}")
+        parts.append(fl.Parting(f"6502:root{bug}_t", f"py:root{bug}_f", after))
+    return samples, bug_of, parts
 
 
 def test_first_parting_separates_roots_the_set_method_merges():
-    samples, bug_of = _ordered_corpus()
+    samples, bug_of, want = _ordered_corpus()
     spec = fl.build_spectrum(samples)
     corr = fl.correspond(spec)
     assert corr.partners(spec.index["6502:rootA_t"]).size
@@ -337,33 +339,17 @@ def test_first_parting_separates_roots_the_set_method_merges():
     (merged,) = fl.min_cover(by_set)
     assert merged[0] == "path" and "sym" in merged[1]
 
-    parts = fl.partings(spec, corr)
-    assert all(p.after[0][5:] == p.after[1][3:] for p in parts)
-    assert {p.after[0] for p in parts} - {""} <= {f"6502:e{i}" for i in range(40)}
+    assert fl.partings(spec, corr) == want
     cands = fl.candidates(spec, corr, scores=scores)
-    roots = {("first", f"6502:root{b}_t", f"py:root{b}_f") for b in "AB"}
-    assert all(len(c) == 1 for c in cands) and set().union(*cands) == roots
+    for c, p in zip(cands, want):
+        assert c == {("first", p.left, ""), ("first", "", p.right)}
     fixes = fl.rank_fixes(spec, cands, scores)
-    assert {f.key for f in fixes} == roots
+    assert len(fixes) == 2
     for f in fixes:
-        assert f.n_tunes == len(samples) // 2
-        assert {bug_of[t] for t in f.tunes} == {f.key[1][9]}
+        (root,) = fl.key_names(f.key)
+        assert f.n_tunes == len(samples) // 2 and "root" in root
+        assert {bug_of[t] for t in f.tunes} == {root.split("root")[1][0]}
     assert fl.key_names(("first", "6502:x", "")) == ("6502:x",)
-
-
-def test_part_walk_skips_interleavings_and_reports_ends():
-    def part(a, b):
-        a, b = np.array(a), np.array(b)
-        n = max(np.max(a, initial=-1), np.max(b, initial=-1)) + 1
-        ina, inb = (np.isin(np.arange(n), x) for x in (a, b))
-        return fl._part(a, b, ina, inb)  # pylint: disable=protected-access
-
-    assert part([0, 1, 2, 3], [1, 0, 2, 4]) == (3, 3, 2, 2)
-    assert part([0, 1, 2], [0, 2, 1]) is None
-    assert part([0, 1, 2, 5], [0, 2, 1]) == (3, 3, 0, 0)
-    assert part([0, 1], [0, 1, 6]) == (2, 2, 1, 1)
-    assert part([7, 0], [0]) == (0, 0, -1, -1)
-    assert part([], []) is None
 
 
 def test_spectrum_order_rows_follow_the_failing_rows():
@@ -379,7 +365,6 @@ def test_spectrum_order_rows_follow_the_failing_rows():
     assert spec.order.shape == (3, 2)
     assert spec.order.toarray().tolist() == [[1, 0], [0, 0], [2, 3]]
     corr = fl.correspond(spec)
-    assert corr.classes[0] == corr.classes[1] >= 0
     assert fl.partings(spec, corr) == [fl.Parting("6502:x", "", ("", "")), None, None]
     bare = fl.build_spectrum([])
     assert fl.partings(bare, fl.correspond(bare)) == []

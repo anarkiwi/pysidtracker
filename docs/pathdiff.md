@@ -91,7 +91,7 @@ Builds the spectrum (`faultloc.build_spectrum`, `results.csv` `info` fields as
 `info:key=value` features), pairs the sides' features by their passing frames
 (`correspond`), takes per failing tune its candidate causes (`candidates`):
 
-- `first`: where the two executions first part in the onset frame (`partings`);
+- `first`: where either side's onset-frame execution first departs (`partings`);
 - otherwise `path`: a feature active at the onset whose partners are all inactive
   (or an unpartnered one its own tune never ran before);
 - `value`: the sides ran partnered paths, so the diverging register's two last
@@ -99,7 +99,7 @@ Builds the spectrum (`faultloc.build_spectrum`, `results.csv` `info` fields as
 - `info`: a build option at least as suspicious;
 
 and ranks the minimum cover (`rank_fixes`, exact `milp`). A `first` key's labels end
-with `after:` its representative's last agreed pair. It writes `fixes.csv`
+with its representative's context (below). It writes `fixes.csv`
 (`rank`, `id`, `kind`, `key`, `n_tunes`, `score`, `representative`, `labels`,
 `tunes`) and prints the table and how many failing tunes the top 1/5/10 fixes are
 credited with. Labels are the representative's disassembly and source lines.
@@ -107,30 +107,27 @@ credited with. Labels are the representative's disassembly and source lines.
 top fix's representative for a 6502 pair, `explain_cell` of both `python_side`s
 otherwise.
 
-### The first parting
+### The first departure
 
 An onset frame is mostly the first or second play call, where the sides' feature
 sets differ almost everywhere: a set-based key then names the mismatch most tunes
 share, a symptom. Each side's trace also ranks its features by first execution
 in the call (`PathTrace.order`: the jennings step, or the Python event, that first
-ran it), and `partings` walks the two onset sequences together:
+ran it), and `partings` takes, per side, the first partnered non-`store:` feature
+of the onset frame none of whose partners the other side runs in that frame: where
+that side's execution left the other's. Shared features may run in any order on
+either side (voices taken in another order), and unpartnered ones (helper code the
+other side need not mirror) are skipped.
 
-1. keep the partnered features that are not `store:` sites (an unpartnered one is
-   helper code the other side need not mirror) and map them to their
-   correspondence class (`Correspondence.classes`, the components of the partner
-   graph);
-2. take both heads together while they are the same class or both are run
-   somewhere by the other side in that frame (voices taken in another order),
-   skipping later repeats of a taken class;
-3. stop at the first head the other side never runs in the frame: the key is
-   `("first", left head, right head)` (`""` for a side that has ended), with the
-   last equal pair as context.
-
-The key names features, not tunes or positions, so one root cause in any tune
-yields one key. A tune whose sequences never part, or a cache without `rank`,
-falls back to the set-based `path` and `value` keys. A parting whose two arms are
-each run elsewhere in the frame by the other side (another voice) is taken as an
-interleaving, and the walk continues to the next exclusive head.
+Each side's departure is a candidate, `("first", left, "")` and
+`("first", "", right)`, so one root cause yields one key in every tune even where
+the other side's code differs by build; the cover keeps whichever explains more
+tunes. Its labels end with `after:` the departing side's last feature with a
+running partner and `vs:` the other side's departure. A tune where every feature
+has a running partner, or a cache without `rank`, falls back to the set-based
+`path` and `value` keys. Partners are paired by passing frames, so a branch arm
+whose partner the other side also runs for another voice in the same frame is not
+a departure.
 
 ## `xfails`
 

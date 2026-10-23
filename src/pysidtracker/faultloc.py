@@ -23,7 +23,6 @@ from typing import (
 
 import numpy as np
 from scipy import sparse
-from scipy.sparse.csgraph import connected_components
 from scipy.optimize import Bounds, LinearConstraint, milp
 from tqdm import tqdm
 
@@ -193,22 +192,12 @@ def _column_keys(m: sparse.csc_matrix) -> np.ndarray:
 
 @dataclass
 class Correspondence:
-    """Partner columns across the two sides, as a directed adjacency.
-
-    ``classes`` (default: the connected components of ``adj``) numbers each partnered
-    column's class of mutually corresponding columns, -1 for an unpartnered one.
-    """
+    """Partner columns across the two sides, as a directed adjacency."""
 
     names: List[str]
     side: np.ndarray
     adj: sparse.csr_matrix
     prefixes: Tuple[str, str]
-    classes: Optional[np.ndarray] = None
-
-    def __post_init__(self):
-        if self.classes is None:
-            _, comp = connected_components(self.adj, directed=False)
-            self.classes = np.where(self.matched, comp, -1)
 
     def partners(self, col: int) -> np.ndarray:
         """The other side's columns paired with ``col``."""
@@ -326,9 +315,10 @@ def correspond(
 
 
 class Parting(NamedTuple):
-    """Where the two sides' onset-frame executions first part (feature names, "" none).
+    """Where each side's onset-frame execution first departs (feature names, "" none).
 
-    ``left``/``right`` run at the parting, ``after`` is the last agreed pair before it.
+    ``left``/``right`` are each side's first feature no partner of which runs on the
+    other side; ``after`` each side's last feature before it that one does.
     """
 
     left: str
@@ -336,45 +326,28 @@ class Parting(NamedTuple):
     after: Tuple[str, str]
 
 
-def _part(a: np.ndarray, b: np.ndarray, ina: np.ndarray, inb: np.ndarray):
-    """Positions ``(i, j, ci, cj)`` where class sequences ``a`` and ``b`` first part.
-
-    Heads that are equal, or both run somewhere by the other side (an interleaving),
-    are consumed together and later repeats of consumed classes skipped; the first
-    head the other side never runs parts them (``len`` when a side has ended).
-    ``(ci, cj)`` are the last equal heads (-1: none); None when nothing parts them.
-    """
-    done = np.zeros(len(ina), np.bool_)
-    i = j = 0
-    ci = cj = -1
-    while True:
-        while i < len(a) and done[a[i]]:
-            i += 1
-        while j < len(b) and done[b[j]]:
-            j += 1
-        if i == len(a) and j == len(b):
-            return None
-        if i == len(a) or j == len(b) or not (inb[a[i]] and ina[b[j]]):
-            return i, j, ci, cj
-        if a[i] == b[j]:
-            ci, cj = i, j
-        done[a[i]] = done[b[j]] = True
-        i += 1
-        j += 1
+def _first_per(group: np.ndarray, key: np.ndarray, pick: np.ndarray, ngroups: int):
+    """Per group, the ``pick`` entry of least ``key`` (-1: none)."""
+    out = np.full(ngroups, -1, np.int64)
+    at = np.flatnonzero(pick)
+    at = at[np.lexsort((key[at], group[at]))]
+    ug, first = np.unique(group[at], return_index=True)
+    out[ug] = at[first]
+    return out
 
 
 def partings(spec: Spectrum, corr: Correspondence) -> List[Optional[Parting]]:
     """Per failing row (aligned to :attr:`Spectrum.fail_rows`) its :class:`Parting`.
 
-    Each side's partnered non-``store:`` features of the onset frame, in their
-    first-occurrence order, are mapped to their correspondence classes and walked
-    together (:func:`_part`): an unpartnered feature is helper code the other side
-    need not mirror, and an interleaving (voices taken in another order) is not a
-    parting. None where the order is unknown or nothing parts the sides.
+    Over each side's partnered, non-``store:`` features of the onset frame, in their
+    first-occurrence order (:attr:`Spectrum.order`), the first one none of whose
+    partners the other side runs in that frame: where that side's execution left
+    the other's. Shared features may run in any order on either side (voices taken
+    in another order), and an unpartnered one is helper code the other side need not
+    mirror. None where the order is unknown or every feature has a running partner.
     """
     nf = len(spec.fail_rows)
-    order = spec.order
-    if order is None or not order.nnz:
+    if spec.order is None or not spec.order.nnz:
         return [None] * nf
     plen = np.array([len(p) for p in corr.prefixes])
     side = corr.side.astype(np.int64)
@@ -384,24 +357,25 @@ def partings(spec: Spectrum, corr: Correspondence) -> List[Optional[Parting]]:
             for n, s in zip(spec.names, side)
         ]
     )
-    use = (corr.classes >= 0) & ~store
-    out: List[Optional[Parting]] = []
-    for r in range(nf):
-        at = slice(order.indptr[r], order.indptr[r + 1])
-        col, rank = order.indices[at], order.data[at]
-        col = col[use[col]][np.argsort(rank[use[col]], kind="stable")]
-        seqs = [col[side[col] == s] for s in (1, 2)]
-        cls, local = np.unique(corr.classes[col], return_inverse=True)
-        runs = np.zeros((2, len(cls)), bool)
-        runs[side[col] - 1, local] = True
-        got = _part(*(local[side[col] == s] for s in (1, 2)), *runs)
-        if got is None:
-            out.append(None)
-            continue
-        names = [[spec.names[c] for c in seq] + [""] for seq in seqs]
-        i, j, ci, cj = got
-        out.append(Parting(names[0][i], names[1][j], (names[0][ci], names[1][cj])))
-    return out
+    o = spec.order.tocoo()
+    keep = (corr.matched & ~store)[o.col]
+    row, col, rank = o.row[keep], o.col[keep], o.data[keep]
+    ran = sparse.csr_matrix(
+        (np.ones(len(row)), (row, col)), shape=(nf, len(spec.names))
+    )
+    hit = np.asarray((ran @ corr.adj.T.astype(np.float64))[row, col]).ravel() > 0
+    group = row * 2 + side[col] - 1
+    first = _first_per(group, rank, ~hit, 2 * nf)
+    limit = np.where(first >= 0, rank[first], -1)
+    after = _first_per(group, -rank, hit & (rank < limit[group]), 2 * nf)
+    names = np.array(list(spec.names) + [""], object)
+    first, after = (
+        names[np.where(x >= 0, col[x], -1)].reshape(nf, 2) for x in (first, after)
+    )
+    return [
+        Parting(l, r, (al, ar)) if l or r else None
+        for (l, r), (al, ar) in zip(first, after)
+    ]
 
 
 def key_names(key: Hashable) -> Tuple[str, ...]:
@@ -429,11 +403,11 @@ def candidates(
 ) -> List[Set[Hashable]]:
     """Candidate cause keys per failing row (aligned to :attr:`Spectrum.fail_rows`).
 
-    ``("first", left, right)`` where the sides part (``parts``, default
-    :func:`partings`); else ``("path", name, partners)`` per side column active with
+    ``("first", left, "")`` and ``("first", "", right)`` for each side's departure
+    (``parts``, default :func:`partings`); else ``("path", name, partners)`` per side column active with
     all partners off (unpartnered: unseen in its tune's passing rows), else
-    ``("value", ..)``, else ``("unexplained",)``; plus ``("info", name)`` extras
-    scoring >= them.
+    ``("value", ..)``, else ``("unexplained",)``; plus, where no side departs,
+    ``("info", name)`` extras scoring >= them.
     """
     scores = ochiai(spec) if scores is None else scores
     fr = spec.fail_rows
@@ -464,13 +438,16 @@ def candidates(
     np.maximum.at(best, r[keep], scores[c[keep]])
     out: List[Set[Hashable]] = [set() for _ in range(nf)]
     for i in np.flatnonzero(parted):
-        key = ("first", parts[i].left, parts[i].right)
-        out[i].add(key)
-        best[i] = key_score(spec, scores, key)
+        part = parts[i]
+        out[i].update(
+            ("first",) + pair
+            for pair in ((part.left, ""), ("", part.right))
+            if any(pair)
+        )
     fallback = np.full(nf, -np.inf)
     np.maximum.at(fallback, r[onside], scores[c[onside]])
     thr = np.where(np.isfinite(best), best, fallback)
-    info = spec.extra[c] & (scores[c] >= thr[r])
+    info = spec.extra[c] & ~parted[r] & (scores[c] >= thr[r])
     keys: Dict[int, Tuple] = {}
     for i, col in zip(r[keep], c[keep]):
         if col not in keys:

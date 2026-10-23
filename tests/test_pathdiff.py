@@ -406,14 +406,16 @@ def test_branch_bug_keys_on_the_first_parting(corpus, tmp_path):
     an = pd.analyse(work, pd.CPU, spec, progress=False)
     (top,) = an.fixes
     assert top.key[0] == "first" and top.n_tunes == len(FAILING + EXACT)
-    assert "BNE" in top.labels[0] and "or cnt == 6" in top.labels[1]
-    assert top.labels[2].startswith("after: $") and "BCC" in top.labels[2]
-    assert top.labels[3].startswith("after: ") and "if cnt >= " in top.labels[3]
+    lab, after, vs = top.labels
+    assert top.key[2] == "" and "BNE" in lab
+    assert after.startswith("after: $") and "JMP" in after
+    assert vs.startswith("vs: players.py:") and "or cnt == 6" in vs
+    assert "|| vs: players.py" in pd.table(an.fixes, an.records)
     assert "partners" not in pd.table(an.fixes, an.records)
     rec = an.records[top.representative]
     assert int(rec["onset"]) == 6 and (np.asarray(rec["rank"]) >= 0).any()
     fresh = pd.record(_tune(0, 3), 1, pd.CPU, spec, "lead", 10)
-    assert an.keys_of(fresh, "k") == {top.key}
+    assert top.key in an.keys_of(fresh, "k")
 
     pair = pd.pair_dir(work, pd.CPU, spec)
     meta = json.loads((pair / "meta.json").read_text())
