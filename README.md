@@ -43,7 +43,8 @@ API.
   fields and `cadence_check` validates it against sidtrace interrupt rows.
 - `irqhost` — `InterruptHost` / `InterruptPlayer` boot and run a PSID or RSID as
   the sidtrace oracle's sidplayfp does, on vagrant-moses' cycle-exact `Machine`
-  with reSIDfp SID devices, its trace identical to the oracle's;
+  with reSIDfp SID devices, its trace identical to the oracle's; `TunePlayer`
+  plays any PSID/RSID's own driver (hosting play address 0);
   `host_cadence` measures its play cadence and `host_check` compares traces
   ([docs/irqhost.md](docs/irqhost.md)).
 - `native_decrunch` — native exomizer unpack (pydexomizer), an init-free

@@ -9,7 +9,7 @@ logs it; see ``docs/irqhost.md`` for what is modelled and how it is validated.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Dict, Iterator, List, Optional, Tuple, Union
+from typing import Dict, Iterator, List, Optional, Tuple, Type, Union
 
 from vagrant_moses import memmap as mm
 from vagrant_moses.machine import SOURCES, Machine, boot_cycle
@@ -17,11 +17,12 @@ from vagrant_moses.roms import KERNAL_VECTORS
 
 from . import registers as reg
 from .asm6502 import assemble
-from .cadence import Cadence, TriggerSource, _driver_base, _iomap
+from .cadence import Cadence, TriggerSource, _driver_base, _iomap, playroutine_cadence
 from .emu import SidReads
 from .errors import SidParseError
 from .image import SidImage
 from .oracle import (
+    EmuPlayer,
     SidtraceRow,
     _raise_frames,
     nested,
@@ -31,6 +32,7 @@ from .oracle import (
     sidtrace_grid,
 )
 from .player import MemPlayer
+from .reglog import RegWrite, register_writes_from_player
 from .poweron import PSID_DRIVER_CLEARED
 from .roms import poweron_writes
 
@@ -439,6 +441,97 @@ class InterruptPlayer(MemPlayer):
         return grid
 
 
+class TunePlayer(EmuPlayer):
+    """A PSID/RSID's own ``init``/``play``, one frame per play call, as the oracle plays it.
+
+    A tune with a play address runs as an :class:`~pysidtracker.oracle.EmuPlayer`
+    booted from its header (load, init, SID model, PAL/NTSC flag); play address 0
+    (the init installs its own interrupt) runs on an :class:`InterruptPlayer`,
+    framed at its play source's raises. ``cadence`` is the tune's
+    :func:`~pysidtracker.cadence.playroutine_cadence`, ``cycles_per_frame`` its
+    period. Errors are raised as ``error_class``, which a format package sets to its
+    own :class:`~pysidtracker.errors.SidParseError` subclass.
+    """
+
+    error_class: Type[SidParseError] = SidParseError
+
+    def __init__(
+        self,
+        data: Union[bytes, bytearray, SidImage],
+        subtune: int = 0,
+        *,
+        max_cycles: int = 8_000_000,
+    ):
+        image = data if isinstance(data, SidImage) else SidImage.from_bytes(bytes(data))
+        header = image.header
+        if header is None:
+            raise self.error_class("cannot play a bare .prg: image has no SID header")
+        init = header.init_address or header.real_load_address
+        self._sid = image.container + image.image
+        self._subtune = subtune
+        self._cadence: Optional[Cadence] = None
+        self._hosted = None if header.play_address else InterruptPlayer(image, subtune)
+        super().__init__(
+            image.image,
+            image.load,
+            init,
+            header.play_address or init,
+            subtune,
+            max_cycles=max_cycles,
+            sid_model=reg.sid_model_for_flags(header.flags),
+            ntsc=header.is_ntsc,
+        )
+
+    @property
+    def cadence(self) -> Cadence:
+        """The tune's play-routine :class:`~pysidtracker.cadence.Cadence` (cached)."""
+        if self._cadence is None:
+            self._cadence = playroutine_cadence(self._sid, subtune=self._subtune)
+        return self._cadence
+
+    @property
+    def cycles_per_frame(self) -> int:
+        """CPU cycles between play calls (the period a WAV render spaces frames by)."""
+        return self.cadence.cycles_per_call
+
+    def _init(self, subtune: int) -> None:
+        if self._hosted is None:
+            super()._init(subtune)
+
+    def _frame(self) -> None:
+        if self._hosted is None:
+            super()._frame()
+        else:
+            self._hosted.play_frame()
+
+    def snapshot(self) -> List[int]:
+        if self._hosted is None:
+            return super().snapshot()
+        return self._hosted.snapshot()
+
+    def render_grid(self, nframes: int) -> List[List[int]]:
+        """``nframes`` rows; a hosted tune's are framed at its play source's raises.
+
+        A hosted tune whose CPU never entered an interrupt vector (an ``*_entry``
+        row) is not playing: it raises ``error_class``.
+        """
+        if self._hosted is None:
+            return super().render_grid(nframes)
+        try:
+            grid = self._hosted.render_grid(nframes)
+        except SidParseError as exc:
+            raise self.error_class(str(exc)) from exc
+        if not any(
+            r[1] is None and r[3].endswith("_entry") for r in self._hosted.host.raw
+        ):
+            raise self.error_class("no interrupt was seen to play the tune")
+        return grid
+
+    def register_writes(self, nframes: int) -> Iterator[RegWrite]:
+        """The post-init baseline at clock 0, then ``nframes`` frames a period apart."""
+        return register_writes_from_player(self, nframes, self.cycles_per_frame)
+
+
 def host_cadence(
     image_or_bytes: Union[SidImage, bytes, bytearray],
     *,
@@ -479,6 +572,7 @@ __all__ = [
     "KERNAL_VECTORS",
     "InterruptHost",
     "InterruptPlayer",
+    "TunePlayer",
     "boot_cycle",
     "host_cadence",
     "to_rows",

@@ -107,6 +107,20 @@ def test_boot_flat_tune_bytes_over_the_pal_flag():
     assert boot_flat(SidImage.from_bytes(tune), max_cycles=0)[0][0x02A6] == 0x7E
 
 
+_PAL_READ = bytes([0xAD, 0xA6, 0x02, 0x8D, 0x00, 0xD4, 0x60])  # LDA $02A6/STA $D400
+
+
+@pytest.mark.parametrize("ntsc, video", [(False, 1), (True, 0)])
+def test_emuplayer_sets_the_kernal_pal_flag(ntsc, video):
+    player = EmuPlayer(_PAL_READ, load=0x1000, init=0x1000, play=0x1006, ntsc=ntsc)
+    assert player.regs[0] == video
+
+
+def test_emuplayer_tune_bytes_over_the_pal_flag():
+    player = EmuPlayer(b"\x7e" + _PAL_READ, load=0x02A6, init=0x02A7, play=0x02AD)
+    assert player.regs[0] == 0x7E
+
+
 def test_register_grid_illegal_opcodes():
     image = _SIMPLE[:6] + _ILLEGAL_PLAY  # init then illegal play
     tune = build_psid(image, load=0x1000, init=0x1000, play=0x1006)

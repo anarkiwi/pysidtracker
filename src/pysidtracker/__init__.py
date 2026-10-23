@@ -157,7 +157,7 @@ from .provenance import (
     trace_frames,
     watch_grid,
 )
-from .irqhost import InterruptHost, InterruptPlayer, host_cadence
+from .irqhost import InterruptHost, InterruptPlayer, TunePlayer, host_cadence
 from .registers import (
     NTSC_CLOCK_HZ,
     NTSC_CYCLES_PER_FRAME,
@@ -351,6 +351,7 @@ __all__ = [
     "host_cadence",
     "InterruptHost",
     "InterruptPlayer",
+    "TunePlayer",
     "check",
     "cycles_per_frame_for_flags",
     "decode_cstr",

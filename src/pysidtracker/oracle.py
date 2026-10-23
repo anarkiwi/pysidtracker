@@ -176,7 +176,9 @@ class EmuPlayer(MemPlayer):
     With ``cycles_per_frame`` each play call starts a period after the last, as
     the interrupt calls it, so raster and osc3/env3 reads see the real elapsed
     time, and an interrupt raised while the previous call still runs is lost;
-    ``sid_model`` is the chip those reads come from.
+    ``sid_model`` is the chip those reads come from. The KERNAL PAL/NTSC flag
+    (:data:`PAL_FLAG`) is set for ``ntsc`` unless the image covers it, as
+    :func:`boot_flat` sets it.
 
     ``snapshot`` masks the pulse-width-high registers to a nibble (the SID
     ignores their upper bits, see :data:`~pysidtracker.registers.PW_HI_REGS`), so
@@ -200,7 +202,9 @@ class EmuPlayer(MemPlayer):
         max_cycles: int = 8_000_000,
         sid_model: str = "6581",
         cycles_per_frame: Optional[int] = None,
+        ntsc: bool = False,
     ):
+        self._pal_flag = None if load <= PAL_FLAG < load + len(image) else int(not ntsc)
         self._init_addr = init & 0xFFFF
         self._play_addr = play & 0xFFFF
         self._illegal = illegal_opcodes
@@ -213,6 +217,8 @@ class EmuPlayer(MemPlayer):
         super().__init__(image, load, subtune)
 
     def _init(self, subtune: int) -> None:
+        if self._pal_flag is not None:
+            self._mem[PAL_FLAG] = self._pal_flag
         # The driver banks the init's ROM space before calling it (KERNAL/BASIC in).
         self._mem[1] = psid_init_bank(self._init_addr)
         self._mpu, self._obs = wire_mpu(self._mem, self._illegal, self._sid_model)

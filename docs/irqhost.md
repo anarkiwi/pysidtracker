@@ -9,7 +9,7 @@ interrupt structure (an NMI digi beside a music IRQ, a main-loop sample player
 under badlines) byte-exact.
 
 ```python
-from pysidtracker.irqhost import InterruptHost, InterruptPlayer, host_cadence
+from pysidtracker.irqhost import InterruptHost, InterruptPlayer, TunePlayer, host_cadence
 
 host = InterruptHost(open("tune.sid", "rb").read(), subtune=0)
 grid = host.grid(500)          # 25-register rows, framed as the oracle grid is
@@ -17,6 +17,7 @@ rows = host.rows()             # SidtraceRow list: writes, raises, entries, rtis
 
 player = InterruptPlayer(data)  # a MemPlayer: render_grid / play_frame
 cadence = host_cadence(data)    # the measured play Cadence
+tune = TunePlayer(data)         # any PSID/RSID's own driver, play address 0 hosted
 ```
 
 ## What sidplayfp does, and the host mirrors
@@ -93,6 +94,15 @@ are compared with the oracle's with `host_check` (below).
 until the play source's raises cover `n` frames. `frames()` yields rows one
 frame at a time with the source and frame length the oracle would pick over a
 probe window; `InterruptPlayer` is the `MemPlayer` over both.
+
+`TunePlayer` plays any PSID/RSID with its own driver, as a format package whose
+replay is the tune's code does: an `oracle.EmuPlayer` booted from the header
+(load, init, SID model, PAL/NTSC flag) when there is a play address, else an
+`InterruptPlayer`. A hosted tune whose CPU never entered an interrupt vector
+is not playing and raises `error_class` (a package sets its own
+`SidParseError` subclass). `cadence` is its `playroutine_cadence`,
+`cycles_per_frame` the period `audio.render_player_wav` spaces frames by, and
+`register_writes(n)` its reglog.
 
 ## Not modelled
 
