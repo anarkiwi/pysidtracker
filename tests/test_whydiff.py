@@ -126,7 +126,7 @@ def test_assert_oracle_match(tmp_path, monkeypatch):
         testing.assert_oracle_match(
             "A/toy.sid", _toy, hvsc_cache=tmp_path, oracle_cache=tmp_path, frames=8
         )
-    assert seen["song"] == 1 and seen["seconds"] == 2
+    assert seen["song"] == 1 and seen["seconds"] is None and seen["frames"] == 8
     monkeypatch.setattr(testing, "resolve_tune", lambda rel, **kw: None)
     with pytest.raises(testing.TuneFetchError):
         testing.assert_oracle_match(

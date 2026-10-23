@@ -29,7 +29,13 @@ from . import faultloc as fl
 from .formats import find_format
 from .gridcmp import GATE_COLS, LEAD, NREGS, verdict_lead, verdict_onset
 from .jobs import deadline, imap
-from .oracle import cached_sidtrace, register_grid
+from .oracle import (
+    ShortTrace,
+    cached_sidtrace,
+    play_seconds,
+    register_grid,
+    render_seconds,
+)
 from .paths import PathTrace, PySubject, cpu_paths, py_paths
 from .player import MemPlayer
 from .registers import PW_HI_REGS
@@ -210,7 +216,10 @@ def _host(ocsv, cpu: PathTrace, cut: Cut, right: bool) -> Optional[int]:
     """Aligned frames before jennings first parts from the cached sidtrace oracle."""
     if ocsv is None or not Path(ocsv).exists() or len(cpu.grid) <= LEAD:
         return None
-    _, ora = oracle_frames(ocsv, nframes=len(cpu.grid))
+    try:
+        _, ora = oracle_frames(ocsv, nframes=len(cpu.grid))
+    except ShortTrace:
+        return None
     v = verdict_lead(ora, cpu.grid, max_lead=LEAD)
     if v.ok:
         return None
@@ -771,7 +780,9 @@ def oracle_reference(oracle_cache=None) -> Callable:
     """``reference(path, song, frames)``: the sidtrace oracle's grid of 1-based ``song``,
     its trace cached as ``<stem>_<song>.csv.zst`` in ``oracle_cache`` (default
     ``default_cache("csv")``) and framed as the survey and ``build`` frame it
-    (:func:`~pysidtracker.survey.oracle_frames`)."""
+    (:func:`~pysidtracker.survey.oracle_frames`). The render spans ``frames`` play
+    calls at the tune's :func:`~pysidtracker.cadence.playroutine_cadence`, and a
+    cached trace covering fewer is re-rendered."""
     cache = Path(default_cache("csv") if oracle_cache is None else oracle_cache)
 
     def reference(path, song, frames):
@@ -779,7 +790,8 @@ def oracle_reference(oracle_cache=None) -> Callable:
         rows = cached_sidtrace(
             path,
             cache / f"{path.stem}_{song}.csv.zst",
-            seconds=frames // 50 + 2,
+            calls=frames,
+            seconds=render_seconds(play_seconds(path, frames, song)),
             song=song,
         )
         return oracle_frames(rows, nframes=frames)[1]

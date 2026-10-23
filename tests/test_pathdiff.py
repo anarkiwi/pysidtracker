@@ -9,14 +9,23 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from pysidtracker import oracle
 from pysidtracker import pathdiff as pd
 from pysidtracker import survey
 from pysidtracker.asm6502 import assemble
 from pysidtracker.gridcmp import LEAD
-from pysidtracker.oracle import SidtraceRow, register_grid, sidtrace_grid
+from pysidtracker.oracle import (
+    ShortTrace,
+    SidtraceRow,
+    play_seconds,
+    register_grid,
+    render_seconds,
+    sidtrace_grid,
+)
+from pysidtracker.registers import PAL_CYCLES_PER_FRAME
 from pysidtracker.paths import PySubject
 
-from .helpers import DATA_OFFSET, build_psid
+from .helpers import DATA_OFFSET, build_psid, fake_sidtrace
 
 TUNE = (
     "mode:\n  .byte {mode}\ntrig:\n  .byte {trig}\ncnt:\n  .byte 0\n"
@@ -323,6 +332,12 @@ def test_host_mismatch_drops_rows_from_the_oracle_split(corpus, tmp_path, monkey
     assert rec["host"] and not rec["fail"] and rec["onset"] == -1
     assert int(np.sum(rec["count"])) == 1
     clean = pd.record(data, 1, pd.CPU, spec, "lead", 20, str(tmp_path / "none"))
+
+    def short(_path, nframes):
+        raise ShortTrace(f"covers 0 of {nframes}")
+
+    monkeypatch.setattr(pd, "oracle_frames", short)
+    assert not pd.record(data, 1, pd.CPU, spec, "lead", 20, str(ocsv))["host"]
     assert clean["fail"] and clean["onset"] == 3 and not clean["host"]
     assert clean["left"].startswith("6502:store:0:")
     assert sum(clean["count"]) == 4
@@ -443,7 +458,7 @@ def test_branch_bug_keys_on_the_first_parting(corpus, tmp_path):
 def test_oracle_reference_frames_like_the_survey(monkeypatch, tmp_path):
     """A CIA play call skipped once: cadence framing leaves a gap call that one frame
     per raise would drop, shifting every later frame by one call."""
-    raises = [0, 2457, 4914, 9828, 12285]
+    raises = [0, 2457, 4914, 9828, 12285, 14742]
     rows = []
     for i, at in enumerate(raises):
         rows.append(SidtraceRow(at, None, None, 0, None, None, "cia_irq"))
@@ -454,11 +469,59 @@ def test_oracle_reference_frames_like_the_survey(monkeypatch, tmp_path):
         calls.append((path, csv_path, kw))
         return rows
 
+    tune = tmp_path / "t.sid"
+    tune.write_bytes(build_psid(bytes([0x60]), 0x1000, songs=2))
     monkeypatch.setattr(pd, "cached_sidtrace", cached)
-    grid = pd.oracle_reference(tmp_path)(tmp_path / "t.sid", 2, 6)
+    grid = pd.oracle_reference(tmp_path)(tune, 2, 6)
     assert np.array_equal(grid, survey.oracle_frames(rows, nframes=6)[1])
     assert grid[:, 0].tolist() == [1, 2, 3, 3, 4, 5]
     assert sidtrace_grid(rows)[3][0] == 4
-    assert calls == [
-        (tmp_path / "t.sid", tmp_path / "t_2.csv.zst", dict(seconds=2, song=2))
-    ]
+    assert calls == [(tune, tmp_path / "t_2.csv.zst", dict(calls=6, seconds=2, song=2))]
+
+
+HALF = 2 * PAL_CYCLES_PER_FRAME
+
+
+def _half_speed(tmp_path):
+    """A PSID whose init arms CIA 1 timer A for one play call every two PAL frames."""
+    init = bytes((0xA9, (HALF - 1) & 0xFF, 0x8D, 0x04, 0xDC))
+    init += bytes((0xA9, (HALF - 1) >> 8, 0x8D, 0x05, 0xDC, 0x60))
+    play = bytes((0xEE, 0x00, 0xD4, 0x60))
+    tune = tmp_path / "half.sid"
+    data = build_psid(init + play, 0x1000, 0x1000, 0x1000 + len(init), speed=1)
+    tune.write_bytes(data)
+    return tune
+
+
+def test_oracle_reference_covers_a_half_speed_cia_tune(monkeypatch, tmp_path):
+    tune, frames, renders = _half_speed(tmp_path), 300, []
+    monkeypatch.setattr(oracle, "run_sidtrace", fake_sidtrace(HALF, renders))
+    grid = pd.oracle_reference(tmp_path / "csv")(tune, 1, frames)
+    assert grid[:, 0].tolist() == [k & 0xFF for k in range(frames)]
+    assert renders == [render_seconds(play_seconds(tune, frames, 1))]
+    with pytest.raises(ShortTrace, match=f"of {frames} play calls"):
+        oracle.cached_sidtrace(
+            tune, tmp_path / "old.csv.zst", calls=frames, seconds=frames // 50 + 2
+        )
+
+
+def test_oracle_reference_rerenders_a_short_cached_trace(monkeypatch, tmp_path):
+    tune, renders = _half_speed(tmp_path), []
+    monkeypatch.setattr(oracle, "run_sidtrace", fake_sidtrace(HALF, renders))
+    reference = pd.oracle_reference(tmp_path / "csv")
+    reference(tune, 1, 50)
+    grid = reference(tune, 1, 300)
+    assert grid[:, 0].tolist() == [k & 0xFF for k in range(300)]
+    reference(tune, 1, 200)
+    assert renders == [render_seconds(play_seconds(tune, n, 1)) for n in (50, 300)]
+
+
+def test_oracle_reference_never_pads_a_short_render(monkeypatch, tmp_path):
+    tune, renders = _half_speed(tmp_path), []
+    monkeypatch.setattr(oracle, "run_sidtrace", fake_sidtrace(HALF, renders, cap=4))
+    reference = pd.oracle_reference(tmp_path / "csv")
+    with pytest.raises(ShortTrace, match="covers 100 of 300"):
+        reference(tune, 1, 300)
+    assert len(reference(tune, 1, 100)) == 100
+    with pytest.raises(ShortTrace, match="covers 100 of 101"):
+        survey.oracle_frames(tmp_path / "csv" / "half_1.csv.zst", nframes=101)

@@ -50,6 +50,14 @@ source. `cached_sidtrace` and `oracle_grid` reuse such a cached trace rather tha
 re-rendering it (which cannot add an `rti`); staleness across sidtrace upgrades
 is decided by the caller's `oracle/STAMP` (the sidtrace image id).
 
+A trace covers the play calls before the last raise of its timing source
+(`sidtrace_calls`). `cached_sidtrace(..., calls=n)` re-renders a cached trace that
+covers fewer than `n` calls and raises `ShortTrace` if a fresh render still falls
+short; `oracle_grid` and `survey.oracle_frames` repeat the last write through the
+calls after it but raise `ShortTrace` rather than pad past the end of the trace.
+Renders that need `n` calls are sized by `render_seconds(play_seconds(tune, n,
+song))`: the calls at the tune's `playroutine_cadence`, rounded up, plus a second.
+
 ## Using it in a format package
 
 ```python

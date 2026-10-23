@@ -23,6 +23,7 @@ from __future__ import annotations
 import bisect
 import csv
 import io
+import math
 import os
 import shutil
 import statistics
@@ -36,6 +37,7 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple, 
 from vagrant_moses import memmap as mm
 
 from . import registers as reg
+from .cadence import playroutine_cadence
 from .emu import run_to_rts, set_iomap, wire_mpu
 from .errors import SidError, SidParseError
 from .image import SidImage
@@ -71,6 +73,10 @@ SID_VOLUME = mm.SID_BASE + 0x18
 DRIVER_VOLUME = 0x0F
 # The KERNAL PAL/NTSC flag the PSID driver sets for the machine it plays on: 1 PAL.
 PAL_FLAG = 0x02A6
+
+
+class ShortTrace(ValueError):
+    """A sidtrace trace covers fewer play calls than its reference needs."""
 
 
 class SidtraceUnavailable(SidError):
@@ -516,10 +522,63 @@ def sidtrace_image_id(image: str = SIDTRACE_IMAGE, docker: str = "docker"):
     return None
 
 
-def cached_sidtrace(tune_path, csv_path, *, force: bool = False, **kw):
+def sidtrace_calls(
+    rows: Sequence[SidtraceRow],
+    *,
+    chip: int = 0,
+    cycles_per_frame: Optional[int] = None,
+) -> int:
+    """The play calls ``rows`` covers: the :func:`sidtrace_grid` frames before the
+    last raise of its timing source, whose handler the render may have cut short.
+
+    ``cycles_per_frame`` counts gap calls as :func:`sidtrace_grid` frames them;
+    ``None`` counts one per raise. A trace without interrupt rows covers none.
+    """
+    try:
+        raises = _raises(rows, chip)
+    except ValueError:
+        return 0
+    if cycles_per_frame:
+        return _raise_frames(raises, cycles_per_frame)[raises[-1]]
+    return len(raises) - 1
+
+
+def _trace_calls(rows: Sequence[SidtraceRow]) -> int:
+    """:func:`sidtrace_calls` framed at the trace's own cadence."""
+    try:
+        cpf = sidtrace_cadence(rows)
+    except ValueError:
+        return 0
+    return sidtrace_calls(rows, cycles_per_frame=cpf)
+
+
+def render_seconds(seconds: float) -> int:
+    """Whole sidtrace ``-t`` seconds covering ``seconds`` of play: rounded up, plus
+    one for the tune's init and the last call the time limit cuts short."""
+    return math.ceil(seconds) + 1
+
+
+def play_seconds(tune, calls: int, song: Optional[int] = None) -> float:
+    """Seconds ``calls`` play calls of 1-based ``song`` (default the header's start
+    song) of ``tune`` (a path or bytes) span at its :func:`playroutine_cadence`."""
+    data = (
+        bytes(tune) if isinstance(tune, (bytes, bytearray)) else Path(tune).read_bytes()
+    )
+    image = SidImage.from_bytes(data)
+    if song is None:
+        song = image.header.start_song if image.header is not None else 1
+    cadence = playroutine_cadence(image, subtune=max(song, 1) - 1)
+    return calls / cadence.calls_per_second
+
+
+def cached_sidtrace(
+    tune_path, csv_path, *, calls: int = 0, force: bool = False, **kw
+) -> List[SidtraceRow]:
     """The rows of the trace cached at ``csv_path``, rendered when it is missing.
 
-    :func:`run_sidtrace` (``kw``) renders it only when missing or ``force``d.
+    :func:`run_sidtrace` (``kw``) renders it when missing, ``force``d, or covering
+    fewer than ``calls`` play calls (:func:`sidtrace_calls` at the trace's own
+    cadence); :class:`ShortTrace` if a fresh render still falls short.
     Whether a cached trace is still current is decided by the caller's oracle
     cache stamp (the sidtrace image id, see ``survey.oracle_cache``), which
     wipes traces rendered by an older sidtrace. A valid trace without ``rti``
@@ -527,9 +586,20 @@ def cached_sidtrace(tune_path, csv_path, *, force: bool = False, **kw):
     cannot add one.
     """
     csv_path = Path(csv_path)
-    if force or not csv_path.exists():
+    fresh = force or not csv_path.exists()
+    if fresh:
         run_sidtrace(tune_path, csv_path, **kw)
-    return read_sidtrace(csv_path)
+    rows = read_sidtrace(csv_path)
+    if calls and _trace_calls(rows) < calls and not fresh:
+        run_sidtrace(tune_path, csv_path, **kw)
+        rows = read_sidtrace(csv_path)
+    have = _trace_calls(rows) if calls else calls
+    if have < calls:
+        raise ShortTrace(
+            f"{Path(tune_path).name}: a fresh sidtrace render covers {have} "
+            f"of {calls} play calls"
+        )
+    return rows
 
 
 def run_sidtrace(

@@ -1,10 +1,13 @@
 """Synthetic PSID/RSID/PRG builders for the tests (no copyrighted fixtures)."""
 
 import struct
+from pathlib import Path
 
+import zstandard
 from vagrant_moses.media import GEOMETRIES
 
 from pysidtracker.oracle import SidtraceRow
+from pysidtracker.registers import PAL_CLOCK_HZ
 
 DATA_OFFSET = 0x7C
 
@@ -148,3 +151,30 @@ def build_t64(files):
         head[entry + 16 : entry + 32] = name.encode("latin-1").ljust(16, b" ")
         body += prg[2:]
     return bytes(head + body)
+
+
+def paced_trace(seconds, cycles_per_call, *, init=1000, source="cia_irq"):
+    """The sidtrace rows of ``seconds`` of a PAL tune called every
+    ``cycles_per_call`` cycles from ``init``; call ``k`` writes ``k & 0xFF`` to reg 0.
+    """
+    calls = range(init, int(seconds * PAL_CLOCK_HZ), cycles_per_call)
+    return [
+        row
+        for k, at in enumerate(calls)
+        for row in handled(source, at, [(at + 40, 0, k & 0xFF)])
+    ]
+
+
+def fake_sidtrace(cycles_per_call, renders, *, cap=None):
+    """A ``run_sidtrace`` stand-in writing :func:`paced_trace` of each render's
+    ``seconds`` (at most ``cap``), which it appends to ``renders``."""
+
+    def run(_tune_path, out_path, *, seconds=60, **_kw):
+        renders.append(seconds)
+        rows = paced_trace(min(seconds, cap or seconds), cycles_per_call)
+        text = trace_csv(rows).encode()
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(zstandard.ZstdCompressor().compress(text))
+        return Path(out_path)
+
+    return run

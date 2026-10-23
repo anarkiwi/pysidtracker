@@ -115,7 +115,7 @@ def test_compare_oracle_lead_and_gating():
 def _trace_csv():
     """A video-IRQ sidtrace CSV: reg 0 = frame, voice-1 gate on from frame 2."""
     lines = [",".join(SIDTRACE_COLUMNS), "100,,,,0,24,15"]
-    for k in range(NFRAMES - 5):
+    for k in range(NFRAMES + 1):
         at = 1000 + k * CPF + 40
         lines.append(f"{at - 40},,0,,,,video_irq")
         lines.append(f"{at - 33},,7,,,,video_irq_entry")
@@ -130,7 +130,7 @@ def _never_returns_csv():
     """A never-returning main loop: each call raises and the tune writes, but the
     I flag is set so the raised IRQ is never taken -- no entry, no ``rti``."""
     rows = [SidtraceRow(100, None, None, None, 0, 24, 15)]
-    for k in range(NFRAMES - 5):
+    for k in range(NFRAMES + 1):
         at = 1000 + k * CPF + 40
         rows.append(event(at - 40, "cia_irq"))
         rows.append(SidtraceRow(at, None, None, None, 0, 0, k))
@@ -138,7 +138,7 @@ def _never_returns_csv():
 
 
 def _expected(nframes):
-    k = np.minimum(np.arange(nframes), NFRAMES - 6)
+    k = np.minimum(np.arange(nframes), NFRAMES)
     grid = np.zeros((nframes, 25), np.int16)
     grid[:, 0], grid[:, 4], grid[:, 24] = k, np.where(k >= 2, 65, 0), 15
     return grid
@@ -198,7 +198,7 @@ def _survey_tree(tmp_path):
     (hvsc / "MUSICIANS").mkdir(parents=True)
     (hvsc / "MUSICIANS" / "t.sid").write_bytes(sid)
     tune = dict(path="MUSICIANS/t.sid", md5=md5, player="GoatTracker_V2.x")
-    tune.update(songs="2", clock="PAL", lengths=f"5 {SECONDS!r}")
+    tune.update(songs="2", clock="PAL", lengths=f"{SECONDS!r} {SECONDS!r}")
     tunes = tmp_path / "tunes.csv"
     with open(tunes, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, survey.TUNE_FIELDS)
