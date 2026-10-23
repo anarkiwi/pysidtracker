@@ -188,10 +188,33 @@ class Correspondence:
         }
 
 
-def _best_jaccard(qw, q, mass, src, dst, min_jaccard):
-    """``(src, dst)`` class pairs: each ``src`` class's best weighted-Jaccard ``dst``."""
+def _shared_mass(per_tune: sparse.csr_matrix, a: np.ndarray, b: np.ndarray):
+    """Per pair ``(a, b)``: both rows' summed ``per_tune`` mass over the tunes both have."""
+    small = np.where(np.diff(per_tune.indptr)[a] <= np.diff(per_tune.indptr)[b], a, b)
+    big = a + b - small
+    lens = np.diff(per_tune.indptr)[small]
+    pair = np.repeat(np.arange(len(a)), lens)
+    at = np.arange(lens.sum()) - np.repeat(np.cumsum(lens) - lens, lens)
+    at += per_tune.indptr[small][pair]
+    ntunes = per_tune.shape[1]
+    keys = np.repeat(np.arange(per_tune.shape[0]), np.diff(per_tune.indptr))
+    keys = keys * ntunes + per_tune.indices
+    want = big[pair] * ntunes + per_tune.indices[at]
+    pos = np.minimum(np.searchsorted(keys, want), max(len(keys) - 1, 0))
+    hit = keys[pos] == want
+    return np.bincount(
+        pair[hit],
+        weights=per_tune.data[at[hit]] + per_tune.data[pos[hit]],
+        minlength=len(a),
+    )
+
+
+def _best_jaccard(qw, q, per_tune, src, dst, min_jaccard):
+    """``(src, dst)`` class pairs: each ``src`` class's best ``dst`` by weighted Jaccard
+    over the tunes both classes run in."""
     m = (qw[:, src].T @ q[:, dst]).tocoo()
-    jac = m.data / (mass[src][m.row] + mass[dst][m.col] - m.data)
+    union = _shared_mass(per_tune, src[m.row], dst[m.col]) - m.data
+    jac = m.data / union
     best = np.full(len(src), -np.inf)
     np.maximum.at(best, m.row, jac)
     keep = (jac >= min_jaccard) & (jac == best[m.row])
@@ -204,8 +227,9 @@ def correspond(
     """Pair ``left`` and ``right`` columns by their passing-row indicators.
 
     Identical indicators are exact partners; a column with none takes the best
-    weighted-Jaccard partners when ``>= min_jaccard``. Columns never active in
-    a passing row have no partner.
+    weighted-Jaccard partners when ``>= min_jaccard``, over the passing rows of the
+    tunes both run in (one side's code may differ by tune, e.g. a player's builds).
+    Columns never active in a passing row have no partner.
     """
     n = len(spec.names)
     side = np.zeros(n, np.int8)
@@ -228,13 +252,21 @@ def correspond(
         rep[cls] = np.arange(len(live))
         q = sub[:, rep].astype(np.float64).tocsc()
         qw = (sparse.diags(w) @ q).tocsc()
-        mass = np.asarray(qw.sum(0)).ravel()
+        tunes = spec.tune[passing]
+        per_tune = (
+            qw.T
+            @ sparse.csr_matrix(
+                (np.ones(len(tunes)), (np.arange(len(tunes)), tunes)),
+                shape=(len(tunes), len(spec.tunes)),
+            )
+        ).tocsr()
+        per_tune.sort_indices()
         exact = np.flatnonzero(has[:, 1] & has[:, 2])
         pairs = [(exact, exact)] + [
             _best_jaccard(
                 qw,
                 q,
-                mass,
+                per_tune,
                 np.flatnonzero(has[:, a] & ~has[:, b]),
                 np.flatnonzero(has[:, b]),
                 min_jaccard,
@@ -282,6 +314,8 @@ def candidates(
     """
     scores = ochiai(spec) if scores is None else scores
     fr = spec.fail_rows
+    if not len(fr):
+        return []
     f = spec.x[fr].astype(np.float64).tocsr()
     pt = np.flatnonzero(~spec.fail)
     seen = (

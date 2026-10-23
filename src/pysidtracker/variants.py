@@ -30,8 +30,8 @@ _LENS = {
     "absx": 3,
     "absy": 3,
     "ind": 3,
-    "indx": 3,
-    "indy": 3,
+    "indx": 2,
+    "indy": 2,
 }
 
 _TERMINATORS = frozenset("BPL BMI BVC BVS BCC BCS BNE BEQ JSR JMP RTS RTI BRK".split())
@@ -104,6 +104,8 @@ def _decode(mem, pc: int, base: int, lo: int, hi: int) -> Tuple[int, str, str, s
         operand = str(raw - 0x100 if raw & 0x80 else raw)
     elif mode in ("impl", "acc"):
         operand = ""
+    elif length == 2:
+        operand = "zp"
     else:
         addr = (mem[pc + 1] & 0xFF) | ((mem[pc + 2] & 0xFF) << 8)
         operand = _op_class(addr, base, lo, hi)

@@ -49,6 +49,7 @@ class PathTrace:
       reads: per play call, the sorted unique data addresses it read.
       roots: the files a Python side traced (for :func:`py_universe`).
       sources: the exec'd code a Python side traced (for :func:`py_universe`).
+      starts: each voice's first-note frame (None: not begun), when the side gives them.
     """
 
     side: str
@@ -60,6 +61,7 @@ class PathTrace:
     reads: List[np.ndarray]
     roots: List[str] = field(default_factory=list)
     sources: Dict[str, str] = field(default_factory=dict)
+    starts: Optional[tuple] = None
 
     def matrix(self, upto: Optional[int] = None):
         """``(frames[:upto], len(names))`` boolean CSR matrix of executed features."""
@@ -100,11 +102,14 @@ class _Code:
 
     Descent follows fall-through, both branch arms, ``JMP abs`` and ``JSR`` (and its
     return site); an ``RTS`` returns to its routine's callers, or out for an entry.
+    ``smc`` holds the span's addresses the program wrote: an operand among them is data,
+    as is an immediate.
     """
 
-    def __init__(self, mem: bytes, lo: int, hi: int, labels: Dict[str, int]):
+    def __init__(self, mem: bytes, lo: int, hi: int, labels: Dict[str, int], smc=()):
         self.mem, self.lo, self.hi = mem, lo, hi
         self._labels = labels
+        self.smc = set(smc)
         self._insn: Dict[int, Tuple[str, str, int, tuple]] = {}
         self.pred: Dict[int, int] = {}
         self.seen: set = set()
@@ -122,6 +127,8 @@ class _Code:
             length, mn, mode, operand = _decode(self.mem, pc, self.lo, self.lo, self.hi)
             if operand.startswith("rel:"):
                 operand = "span"
+            if mode == "imm" or self.smc.intersection(range(pc + 1, pc + length)):
+                operand = "data"
             got = self._insn[pc] = (mn, mode, length, (mn, mode, operand))
         return got
 
@@ -271,15 +278,22 @@ def _store_names(code: _Code, store_sites) -> List[str]:
 
 def _booted(data, subtune: int, max_cycles: int):
     from .disasm import entry_labels
+    from .emu import observe_data_access
     from .errors import SidParseError
     from .oracle import boot_flat
 
     image = data if isinstance(data, SidImage) else SidImage.from_bytes(bytes(data))
     if image.header is None:
         raise SidParseError("cannot trace paths: image has no SID header")
-    subject, mpu, mem, play = boot_flat(image, subtune, max_cycles)
+    lo, hi = image.load, image.end
+    smc: set = set()
+
+    def setup(mpu, _subject):
+        observe_data_access(mpu, on_write=lambda a, _v: lo <= a < hi and smc.add(a))
+
+    subject, mpu, mem, play = boot_flat(image, subtune, max_cycles, setup=setup)
     init = image.header.init_address or image.header.real_load_address
-    code = _Code(bytes(subject), image.load, image.end, entry_labels(image))
+    code = _Code(bytes(subject), lo, hi, entry_labels(image), smc)
     return subject, mpu, mem, play, code, (init, play)
 
 
@@ -288,7 +302,8 @@ def cpu_universe(data, *, subtune: int = 0, max_cycles: int = 8_000_000) -> List
 
     Decoded from memory as ``init`` left it and keyed as :func:`cpu_paths` keys them;
     edges of indirect jumps, ``RTI``/``BRK`` and code reached only through them are
-    absent, as is a ``#k`` repeat rank that a site found only dynamically would shift.
+    absent, as is a ``#k`` repeat rank that a site found only dynamically would shift;
+    an operand only ``play`` rewrites keeps its value.
     """
     *_, code, entries = _booted(data, subtune, max_cycles)
     code.explore(entries, entries)
@@ -312,7 +327,9 @@ def cpu_paths(
       through, with an end in the loaded span; an end outside it is ``out``. Its name
       digests the normalised block ending at its source and the block starting at its
       destination, decoded from memory as ``init`` left it, absolute in-span operands
-      folded to ``span`` so code inserted elsewhere leaves it unchanged. Repeats of a
+      folded to ``span`` so code inserted elsewhere leaves it unchanged; immediates and
+      operands ``init`` or a play call wrote (self-modifying code) are folded to ``data``,
+      as a packer or the tune patches its own values into them. Repeats of a
       name (voice-duplicated code) take ``#k`` by offset. A store site is keyed by
       its register and the normalised block up to the store.
     """
@@ -335,6 +352,8 @@ def cpu_paths(
         if _SID <= addr < _SID + _NREG:
             wsteps.append(len(pcs) - 1)
             waddrs.append(addr - _SID)
+        elif code.lo <= addr < code.hi:
+            code.smc.add(addr)
 
     observe_data_access(mpu, on_read=reads.append, on_write=on_write)
     step = mpu.step
@@ -553,6 +572,8 @@ class PySubject:
       roots: files, packages or pseudo-filenames to trace (default the player's own
         packages, :func:`~pysidtracker.whydiff.player_roots`, and ``sources``).
       label: the trace's ``side``.
+      starts: ``player`` to its voices' first-note frames after the frames played,
+        for :func:`~pysidtracker.gridcmp.verdict_onset` (None: not given).
     """
 
     make: Callable[[], object]
@@ -560,6 +581,7 @@ class PySubject:
     sources: Optional[Dict[str, str]] = None
     roots: Optional[Sequence[str]] = None
     label: str = "python"
+    starts: Optional[Callable[[object], Sequence]] = None
 
 
 class _Recorder:
@@ -756,8 +778,8 @@ def py_paths(
 ) -> PathTrace:
     """The line arcs and register store sites of each of ``nframes`` Python frames.
 
-    ``subject`` is a :class:`PySubject` or a bare ``make``; ``grid`` reads ``cell`` after
-    each frame, stopping at one whose ``play_frame`` returns None (a non-MemPlayer).
+    ``subject`` is a :class:`PySubject` or a bare ``make``; ``grid`` is a ``MemPlayer``'s
+    ``regs`` (its ``snapshot``), else reads ``cell``, after each frame, stopping at one whose ``play_frame`` returns None (a non-MemPlayer).
 
     Notes:
       Functions under the roots are traced (not lambdas, comprehensions or
@@ -791,7 +813,8 @@ def py_paths(
             if player.play_frame() is None and not isinstance(player, MemPlayer):
                 break
             cells = [subject.cell(player, r) for r in range(_NREG)]
-            rows.append([held[i] for held, i in cells])
+            mem = isinstance(player, MemPlayer)
+            rows.append(list(player.regs) if mem else [held[i] for held, i in cells])
             last = _last_stores(recorder.log)
             stores.append(
                 {
@@ -804,7 +827,10 @@ def py_paths(
             frame_reads.append(np.unique(np.asarray(reads, np.int64)).astype(np.uint16))
             recorder.arcs, recorder.log = set(), []
             reads.clear()
-    return _py_trace(subject.label, rows, arcs, stores, frame_reads, roots, sources)
+    trace = _py_trace(subject.label, rows, arcs, stores, frame_reads, roots, sources)
+    if subject.starts is not None:
+        trace.starts = tuple(subject.starts(player))
+    return trace
 
 
 def _py_trace(side, rows, arcs, stores, frame_reads, roots, sources) -> PathTrace:

@@ -393,11 +393,16 @@ def player_tunes(path, player=None):
 @functools.lru_cache(maxsize=None)
 def load_render(spec):
     """The callable named by ``module:function`` or ``path.py[:function]``
-    (default ``render``)."""
+    (default ``render``); a ``path.py`` is imported as its stem's module, its directory
+    joining ``sys.path`` for its own imports."""
     target, _, name = spec.partition(":")
     if target.endswith(".py"):
+        home = str(Path(target).resolve().parent)
+        if home not in sys.path:
+            sys.path.insert(0, home)
         loader = importlib.util.spec_from_file_location(Path(target).stem, target)
         module = importlib.util.module_from_spec(loader)
+        sys.modules[loader.name] = module
         loader.loader.exec_module(module)
     else:
         module = importlib.import_module(target)

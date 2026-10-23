@@ -256,3 +256,30 @@ def test_candidates_fall_back_to_value_unexplained_and_info():
     assert fl.key_score(spec, scores, ("value", "6502:s", "py:s")) == 0.0
     unhit = fl.rank_fixes(spec, cands, scores, cover=[("nothing",)])
     assert unhit[0].representative == "" and unhit[0].n_tunes == 0
+
+
+def test_candidates_without_failures_are_empty():
+    spec = fl.build_spectrum([_sample("a", [[1, 0], [0, 1]], ["6502:a", "py:a"], None)])
+    assert fl.candidates(spec, fl.correspond(spec)) == []
+    assert fl.rank_fixes(spec, [], fl.ochiai(spec)) == []
+
+
+def test_correspond_pairs_per_build_code_over_shared_tunes():
+    rng = np.random.default_rng(5)
+    samples = []
+    for t in range(6):
+        run = rng.random((30, 1)) < 0.5
+        noise = rng.random((30, 1)) < 0.5
+        names = [f"6502:build{t % 2}", "6502:noise", "py:shared"]
+        samples.append(_sample(f"t{t}", np.hstack([run, noise, run]), names, None))
+    spec = fl.build_spectrum(samples)
+    corr = fl.correspond(spec)
+    partners = sorted(spec.names[p] for p in corr.partners(spec.index["py:shared"]))
+    assert partners == ["6502:build0", "6502:build1"]
+    assert corr.partners(spec.index["6502:noise"]).size == 0
+    assert (
+        fl._shared_mass(
+            sparse.csr_matrix((0, 3)), np.zeros(0, int), np.zeros(0, int)
+        ).size
+        == 0
+    )

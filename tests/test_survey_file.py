@@ -274,6 +274,11 @@ def test_file_cli_songs(prg, tmp_path, monkeypatch):
 def test_load_render_specs(tmp_path):
     assert survey.load_render(str(_hook(tmp_path))) is render_exact
     assert survey.load_render(f"{__name__}:render_glitch") is render_glitch
+    (tmp_path / "hook_sibling.py").write_text("VALUE = 7\n", "utf-8")
+    (tmp_path / "hook_main.py").write_text(
+        "from hook_sibling import VALUE\n\n\ndef render():\n    return VALUE\n", "utf-8"
+    )
+    assert survey.load_render(f"{tmp_path / 'hook_main.py'}:render")() == 7
 
 
 class _GridPlayer:

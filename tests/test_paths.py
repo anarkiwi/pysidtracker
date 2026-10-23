@@ -106,7 +106,7 @@ def test_cpu_repeats_rank_and_out_of_span_calls():
     data = build_psid(code, 0x1000, init=lab["init"], play=lab["play"])
     trace = paths.cpu_paths(data, 1)
     ranked = {n.split("#")[0]: n for n in trace.names if n.endswith("#1")}
-    assert len(ranked) == 1 and set(ranked) <= set(trace.names)
+    assert len(ranked) == 2 and set(ranked) <= set(trace.names)
     out = f"${lab['play'] + 10:04X} JSR $0400 -> out"
     back = f"out -> ${lab['play'] + 13:04X}"
     assert {out, back} <= set(trace.labels)
@@ -300,6 +300,9 @@ class Ending(Aliased):
 def test_py_ending_player_stops_its_grid():
     trace = paths.py_paths(paths.PySubject(Ending, cell=_regs), 6)
     assert trace.grid.shape == (3, 25) and len(trace.frames) == len(trace.reads) == 3
+    assert trace.starts is None
+    started = paths.PySubject(Ending, cell=_regs, starts=lambda p: (p.tick, None))
+    assert paths.py_paths(started, 6).starts == (3, None)
     assert trace.sites.shape == (3, 25)
     assert np.array_equal(trace.grid, np.asarray(Ending().render_grid(6)))
 
@@ -340,3 +343,42 @@ def test_real_goattracker_tune():
     assert {n for n in py.names if n.startswith("edge:")} <= set(
         paths.py_universe(py.roots)
     )
+
+
+SMC = (
+    "init:\n  LDA #{v}\n  STA ${patch:04X}\n  RTS\n"
+    "play:\npatch:\n  LDA #0\n  BEQ off\n  STA $D400\noff:\n"
+    "  INC ${bump:04X}\nbump:\n  LDA #{v}\n  STA $D401\n  RTS\n"
+)
+
+
+def test_cpu_self_modified_operands_key_alike():
+    def trace(v):
+        lab = assemble(SMC.format(v=v, patch=0x1000, bump=0x1000), 0x1000)[1]
+        src = SMC.format(v=v, patch=lab["patch"] + 1, bump=lab["bump"] + 1)
+        code, lab = assemble(src, 0x1000)
+        data = build_psid(code, 0x1000, init=lab["init"], play=lab["play"])
+        return paths.cpu_paths(data, 3)
+
+    one, two, off = trace(1), trace(2), trace(0)
+    assert one.names == two.names
+    assert set(off.names) != set(one.names)
+    assert one.grid[:, 1].tolist() == [2, 3, 4]
+
+
+class Masked(ToyMem):
+    """A MemPlayer whose register file masks pulse-width highs it stores whole."""
+
+    def _volume(self):
+        self._wr(0xD403, 0x47)
+
+    def snapshot(self):
+        regs = super().snapshot()
+        regs[3] &= 0x0F
+        return regs
+
+
+def test_py_memplayer_grid_is_its_register_file():
+    trace = paths.py_paths(lambda: Masked(b"\x0f", 0x1000), 2)
+    assert trace.grid[:, 3].tolist() == [7, 7]
+    assert trace.labels[trace.sites[0, 3]].endswith("-> v1_pw_hi")
