@@ -228,7 +228,9 @@ def test_gather_tune_relpaths_from_ast(tmp_path):
         'TUNES = {"x": "A/x.sid"}\nOTHER = ["B/y.sid", "notme.txt"]\nZ = "C/z.sid"\n',
         encoding="utf-8",
     )
-    (tmp_path / "t_b.py").write_text('S = "A/x.sid"  # dup\n', encoding="utf-8")
+    (tmp_path / "t_b.py").write_text(
+        'S = "A/x.sid"  # dup\nF = f"{S}.sid"\nB = "bare.sid"\n', encoding="utf-8"
+    )
     assert gather_tune_relpaths([tmp_path]) == ["A/x.sid", "B/y.sid", "C/z.sid"]
 
 

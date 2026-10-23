@@ -34,10 +34,10 @@ runs:
       uses: actions/cache@v6
       with:
         path: |
-          .tunecache
+          .tunecache/*
           !.tunecache/csv
-        key: pysid-cache-${{ inputs.key }}
-        restore-keys: pysid-cache-
+        key: pysidtracker-cache-${{ inputs.key }}
+        restore-keys: pysidtracker-cache-
     - name: Pull sidtrace oracle image
       id: image
       if: inputs.sidtrace == 'true'
@@ -51,8 +51,8 @@ runs:
       uses: actions/cache@v6
       with:
         path: .tunecache/csv
-        key: pysid-csv-${{ steps.image.outputs.digest }}-${{ inputs.key }}
-        restore-keys: pysid-csv-${{ steps.image.outputs.digest }}-
+        key: pysidtracker-csv-${{ steps.image.outputs.digest }}-${{ inputs.key }}
+        restore-keys: pysidtracker-csv-${{ steps.image.outputs.digest }}-
     - name: Pre-fetch HVSC tunes
       if: inputs.tunes != ''
       shell: bash

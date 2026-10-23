@@ -91,11 +91,16 @@ def default_cache(kind: str = "", root=None) -> Path:
     return default_tune_cache(root) / kind
 
 
+def _is_relpath(text: str) -> bool:
+    return text.endswith(".sid") and "/" in text.strip("/")
+
+
 def gather_tune_relpaths(paths: Iterable) -> List[str]:
     """Every ``*.sid`` relpath named by the files under ``paths``.
 
-    A Python file is parsed with :mod:`ast` (no import, no side effects) for
-    every string constant ending in ``.sid`` -- so a suite declares the tunes it
+    A relpath has a directory (HVSC tunes all do), so a bare ``".sid"``
+    f-string fragment is not one. A Python file is parsed with :mod:`ast` (no
+    import, no side effects) for every such string constant -- so a suite declares the tunes it
     needs as plain relpath literals (in dicts/lists/constants) and the fetch CLI
     pre-caches exactly those. Any other file given directly is a manifest: its
     whitespace-separated words ending in ``.sid``.
@@ -108,12 +113,12 @@ def gather_tune_relpaths(paths: Iterable) -> List[str]:
     for file in files:
         text = file.read_text(encoding="utf-8")
         if file.suffix != ".py":
-            rels.update(word for word in text.split() if word.endswith(".sid"))
+            rels.update(word for word in text.split() if _is_relpath(word))
             continue
         tree = ast.parse(text, filename=str(file))
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if node.value.endswith(".sid"):
+                if _is_relpath(node.value):
                     rels.add(node.value)
     return sorted(rels)
 
