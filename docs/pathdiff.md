@@ -144,8 +144,9 @@ to the `.sid` before running (a minimised or mutated input).
 
 `--verify` (default) keeps a new case only when `check_case` fails it and a fresh
 record of it has the case's key among its candidates; `--prune` drops existing
-cases `check_case` now passes. `--hvsc-cache` and `--oracle-cache` (default
-`<pair>/oracle`) are `check_case`'s.
+cases `check_case` now passes. Tunes come from the pair's HVSC root; the oracle
+traces are cached in `--oracle-cache` (default `default_cache("csv")`, see
+[caching.md](caching.md)).
 
 ### In a package's tests
 
@@ -155,7 +156,7 @@ from pysidtracker.pathdiff import check_case, xfail_params
 
 @pytest.mark.parametrize("case", xfail_params("tests/pathdiff.json"))
 def test_pathdiff(case):
-    check_case(case, hvsc_cache=".hvsc-cache", oracle_cache=".oracle-cache")
+    check_case(case)
 ```
 
 Each case is `xfail(strict=True, raises=AssertionError)`: it fails with the
@@ -165,5 +166,7 @@ the sidtrace oracle grid (`testing.oracle_grid`, the patched tune written to a
 temporary file) under the lead criterion; a Python pair compares both sides under
 the case's `compare`. `check_case(..., reference=fn)` replaces the oracle with
 `fn(path, song, frames)`, and `resolve=` the HVSC lookup (`testing.resolve_tune`).
+Tunes (`hvsc_cache`) and oracle traces (`oracle_cache`) default to the shared
+cache (`testing.default_cache`, [caching.md](caching.md)).
 Side specs are resolved as `build` resolves them, so a package's manifest names
 importable `module:fn` sides.

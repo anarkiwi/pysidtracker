@@ -34,7 +34,13 @@ from .paths import PathTrace, PySubject, cpu_paths, py_paths
 from .player import MemPlayer
 from .registers import PW_HI_REGS
 from .survey import load_render, load_tunes, oracle_frames, read_results
-from .testing import ChecksumMismatch, TuneFetchError, oracle_grid, resolve_tune
+from .testing import (
+    ChecksumMismatch,
+    TuneFetchError,
+    default_cache,
+    oracle_grid,
+    resolve_tune,
+)
 from .whydiff import Divergence, explain_cell, explain_divergence, python_side
 
 CPU = "6502"
@@ -761,7 +767,10 @@ def check_case(
     """Run a manifest case; raise :class:`AssertionError` with whydiff's text on divergence.
 
     A 6502 pair compares the other side with ``reference(path, song, frames)``
-    (default the sidtrace oracle, cached in ``oracle_cache``); a Python pair compares
+    (default the sidtrace oracle, cached in ``oracle_cache``, default
+    ``default_cache("csv")``); the tune comes from ``resolve`` (default
+    :func:`~pysidtracker.testing.resolve_tune`, cached in ``hvsc_cache``, default
+    the tune cache root); a Python pair compares
     both under the entry's ``compare``. ``patch`` bytes are applied first (the
     patched tune written beside a temporary copy for the oracle).
     """
@@ -950,8 +959,7 @@ def main(argv=None) -> int:
     p.add_argument("--top", type=int, default=10)
     p.add_argument("--prune", action="store_true")
     p.add_argument("--verify", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--hvsc-cache", type=Path, default=Path(".hvsc-cache"))
-    p.add_argument("--oracle-cache", type=Path)
+    p.add_argument("--oracle-cache", type=Path, help="default: default_cache('csv')")
     args = ap.parse_args(argv)
     if args.command == "build":
         tally = build(
@@ -985,13 +993,12 @@ def main(argv=None) -> int:
     hvsc = Path(an.meta["hvsc"])
     check = None
     if args.verify or args.prune:
-        oracle = args.oracle_cache or an.pair / "oracle"
+        oracle = args.oracle_cache or default_cache("csv")
         Path(oracle).mkdir(parents=True, exist_ok=True)
 
         def check(entry):
             check_case(
                 entry,
-                hvsc_cache=args.hvsc_cache,
                 oracle_cache=oracle,
                 resolve=lambda rel, cache_dir: hvsc / rel,
             )
