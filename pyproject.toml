@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.35.0"
+version = "0.36.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -32,6 +32,7 @@ classifiers = [
 # banked bus, ROMs, the cycle-exact machine the interrupt host runs on, the KERNAL
 # host and release-media readers; its cpu extra is the jennings-backed flat host.
 # numpy: sample buffers and the image anchor scan. tqdm: the whydiff CLI's progress.
+# networkx: post-dominators for pathdiff's control dependence (relevance).
 dependencies = [
   "jennings>=0.2.0",
   "pydexomizer>=0.1",
@@ -39,6 +40,7 @@ dependencies = [
   "vagrant-moses[cpu]>=0.4.0",
   "numpy>=1.23",
   "scipy>=1.10",
+  "networkx>=3",
   "coverage>=7.4",
   "tqdm>=4",
 ]

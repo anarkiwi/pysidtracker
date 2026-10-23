@@ -81,8 +81,8 @@ mode, HVSC root, prefixes), `vocab.txt` (the pair's feature names, line `i` nami
 id `i`) and `tunes/<key>.npz` per subtune: its distinct frames as CSR over feature
 ids with their frame counts (the onset row last), the features' texts in this tune,
 each feature's first-occurrence `rank` on its side in the onset frame (-1: not run
-there), the onset, lead and first diverging register, each side's last store to it,
-and `host`. A failed subtune's file holds its error. A cache of another `format`
+there), the `relevant` features (below), the onset,
+lead and first diverging register, each side's last store to it, and `host`. A failed subtune's file holds its error. A cache of another `format`
 is refused by `build` and `rank` until rebuilt with `--force`.
 
 ## `rank`
@@ -119,6 +119,33 @@ that side's execution left the other's. Shared features may run in any order on
 either side (voices taken in another order), and unpartnered ones (helper code the
 other side need not mirror) are skipped.
 
+### Relevant departures
+
+The earliest departure is often in code that does not feed the diverging register
+(a filter routine running first each frame while a voice frequency diverges), and
+code that runs every frame has different partners in different builds of one
+player, splitting one cause into several keys. So `build` also records, per failing
+tune, the features the diverging register depends on (`pysidtracker.relevance`):
+
+- each side's onset frame is sliced back from its last store to the register (or
+  from `last_change`'s frame when it stored none), as whydiff does: jennings'
+  `cpu_slice` over the `cpu_history` dataflow, `PyTrace`'s slice on a Python side;
+- each slice step also keeps its dynamic control parent: the innermost branch whose
+  region, up to its immediate post-dominator in the same call, it ran in.
+  Post-dominators (`networkx.immediate_dominators` on the reversed graph) are over
+  the static CFG (`StaticCode.cfg` and both arms of each branch; coverage.py's line
+  arcs of each traced file, `sources` for exec'd code) and the executed edges, a call
+  continuing at its return site and a return leaving to the exit. A kept branch
+  keeps its condition's inputs, so the slice closes over data and control dependence;
+- a frame that hands its register file over in one bulk store
+  (`mem[a:b] = bytes(f(v) for v in regs)`) is followed per item: the store's item i
+  is the generator's yield i, which depends on the list item its iterator drew;
+- the edge each kept step took, keyed as `paths` keys it, is a relevant feature.
+
+Where some departure of a tune, on either side, is relevant, `partings` takes the
+earliest relevant one per side (`Parting.relevant`), and a side with none gives no
+`first` key; otherwise every departure counts.
+
 Each side's departure is a candidate, `("first", left, "")` and
 `("first", "", right)`, so one root cause yields one key in every tune even where
 the other side's code differs by build; the cover keeps whichever explains more
@@ -129,6 +156,10 @@ has a running partner, or a cache without `rank`, falls back to the set-based
 whose partner the other side also runs for another voice in the same frame is not
 a departure.
 
+The slice covers one frame: a register a play call copies from a buffer an earlier
+call computed (a ghost register file) depends on that copy alone, and if no
+departure is in it the tune falls back to every departure.
+
 ## `xfails`
 
 Merges one case per top fix (its representative) into a JSON manifest, sorted by
@@ -138,6 +169,10 @@ only what is new. Fields: `id` (a digest of the fix key), `key`, `kind`,
 onset verdict), `left`, `right`, `compare`, `reason` (the fix's labels and
 whydiff's headline) and an optional `patch`, `[file_offset, byte]` pairs applied
 to the `.sid` before running (a minimised or mutated input).
+
+`--as-left`/`--as-right` set the side specs written into each case (and so the
+specs `check_case` resolves), e.g. an importable `module:fn` for a script path the
+pair was built with; `--verify` and `--prune` still run the pair's own specs.
 
 `--verify` (default) keeps a new case only when `check_case` fails it and a fresh
 record of it has the case's key among its candidates; `--prune` drops existing
@@ -159,8 +194,9 @@ def test_pathdiff(case):
 Each case is `xfail(strict=True, raises=AssertionError)`: it fails with the
 whydiff explanation until the fix lands, then passes and the strict xfail turns
 the run red until the case is pruned. A 6502 pair compares the other side with
-the sidtrace oracle grid (`testing.oracle_grid`, the patched tune written to a
-temporary file) under the lead criterion; a Python pair compares both sides under
+the sidtrace oracle grid (`oracle_reference`: the trace framed by
+`survey.oracle_frames` at its play cadence, as the survey and `build` frame it; the
+patched tune written to a temporary file) under the lead criterion; a Python pair compares both sides under
 the case's `compare`. `check_case(..., reference=fn)` replaces the oracle with
 `fn(path, song, frames)`, and `resolve=` the HVSC lookup (`testing.resolve_tune`).
 Tunes (`hvsc_cache`) and oracle traces (`oracle_cache`) default to the shared

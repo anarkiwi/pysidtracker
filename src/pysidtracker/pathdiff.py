@@ -29,26 +29,26 @@ from . import faultloc as fl
 from .formats import find_format
 from .gridcmp import GATE_COLS, LEAD, NREGS, verdict_lead, verdict_onset
 from .jobs import deadline, imap
-from .oracle import register_grid
+from .oracle import cached_sidtrace, register_grid
 from .paths import PathTrace, PySubject, cpu_paths, py_paths
 from .player import MemPlayer
 from .registers import PW_HI_REGS
+from .relevance import cpu_relevant, py_relevant
 from .survey import load_render, load_tunes, oracle_frames, read_results
 from .testing import (
     ChecksumMismatch,
     TuneFetchError,
     default_cache,
-    oracle_grid,
     resolve_tune,
 )
 from .whydiff import Divergence, explain_cell, explain_divergence, python_side
 
 CPU = "6502"
-FORMAT = 2
+FORMAT = 3
 VERDICTS = ("differs", "exact")
 COMPARE = ("lead", "onset")
 _ROW_KEYS = ("indptr", "indices", "count", "fail", "onset", "lead", "register")
-_ROW_KEYS += ("host", "frames", "rank")
+_ROW_KEYS += ("host", "frames", "rank", "relevant")
 _PW_MASK = np.full(NREGS, 0xFF, np.int16)
 _PW_MASK[list(PW_HI_REGS)] = 0x0F
 
@@ -87,6 +87,15 @@ def trace(spec: str, data: bytes, song: int, nframes: int) -> PathTrace:
     if subj is None:
         return cpu_paths(data, nframes, subtune=song - 1)
     return py_paths(subj, nframes)
+
+
+def relevant(spec: str, tr: PathTrace, data: bytes, song: int, frame: int, register):
+    """``tr``'s feature ids that side ``spec``'s ``register`` at ``frame`` depends on
+    (:mod:`~pysidtracker.relevance`)."""
+    subj = subject(spec, data, song)
+    if subj is None:
+        return cpu_relevant(tr, data, frame, register, song - 1)
+    return py_relevant(tr, subj, frame, register)
 
 
 def grid(spec: str, data: bytes, song: int, nframes: int):
@@ -230,7 +239,8 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
     the distinct rows over them (the failing onset row last when ``fail``), ``count``
     each row's frames. ``onset``/``lead``/``register`` place the divergence (``onset``
     -1: none), ``left``/``right`` are each side's last store to it; ``rank`` is each
-    name's first-occurrence rank on its side in the onset frame (-1: not run there);
+    name's first-occurrence rank on its side in the onset frame (-1: not run there),
+    ``relevant`` the indices of the names its register depends on (``relevance``);
     ``host`` marks a jennings side parting from the ``ocsv`` sidtrace oracle first,
     its rows dropped from there.
     """
@@ -254,6 +264,7 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
     labels = tl.labels + tr.labels
     sites = ["", ""]
     rank = np.full(len(used), -1, np.int32)
+    rel = np.zeros(0, np.int64)
     if cut.frame is not None:
         sites = [
             _site(t, cut.at(r), cut.register, p)
@@ -265,6 +276,13 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
             rank[np.searchsorted(used, cols)] = np.concatenate(
                 [t.order[f] for t, f, _ in at]
             )
+        rel = np.concatenate(
+            [
+                relevant(s, t, data, song, f, cut.register) + off
+                for s, (t, f, off) in zip((left, right), at)
+            ]
+        )
+        rel = np.searchsorted(used, rel[np.isin(rel, used)])
     return dict(
         names=[names[i] for i in used],
         labels=[labels[i] for i in used],
@@ -276,6 +294,7 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
         lead=cut.lead,
         register=-1 if cut.register is None else cut.register,
         rank=rank,
+        relevant=rel.astype(np.int32),
         left=sites[0],
         right=sites[1],
         host=dropped,
@@ -488,7 +507,7 @@ def _sample(key: str, rec: dict, extra=()) -> tuple:
     rank = rec.get("rank")
     if rank is not None:
         rank = np.append(rank, np.full(len(rec["names"]) - len(rank), -1))
-    return key, mat, rec["names"], onset, extra, rank
+    return key, mat, rec["names"], onset, extra, rank, rec.get("relevant")
 
 
 def info_extras(work) -> Dict[str, Tuple[str, ...]]:
@@ -748,15 +767,22 @@ def case_frames(rec: dict, mode: str) -> int:
     return int(rec["onset"]) + 1 + (LEAD if mode == "lead" else 0)
 
 
-def _oracle_reference(oracle_cache) -> Callable:
+def oracle_reference(oracle_cache=None) -> Callable:
+    """``reference(path, song, frames)``: the sidtrace oracle's grid of 1-based ``song``,
+    its trace cached as ``<stem>_<song>.csv.zst`` in ``oracle_cache`` (default
+    ``default_cache("csv")``) and framed as the survey and ``build`` frame it
+    (:func:`~pysidtracker.survey.oracle_frames`)."""
+    cache = Path(default_cache("csv") if oracle_cache is None else oracle_cache)
+
     def reference(path, song, frames):
-        return oracle_grid(
+        path = Path(path)
+        rows = cached_sidtrace(
             path,
-            oracle_cache=oracle_cache,
-            frames=frames,
-            song=song,
+            cache / f"{path.stem}_{song}.csv.zst",
             seconds=frames // 50 + 2,
+            song=song,
         )
+        return oracle_frames(rows, nframes=frames)[1]
 
     return reference
 
@@ -789,7 +815,7 @@ def check_case(
     song, frames = int(entry["song"]), int(entry["frames"])
     ref = None
     if CPU in (entry["left"], entry["right"]):
-        reference = reference or _oracle_reference(oracle_cache)
+        reference = reference or oracle_reference(oracle_cache)
         with tempfile.TemporaryDirectory() as tmp:
             tune = Path(path)
             if entry.get("patch"):
@@ -841,8 +867,11 @@ def save_manifest(path, cases: Sequence[dict]) -> None:
     Path(path).write_text(json.dumps(out, indent=1, sort_keys=True) + "\n", "utf-8")
 
 
-def make_case(an: Analysis, fix: fl.Fix) -> Optional[dict]:
-    """The manifest case of a fix's representative, its reason from whydiff's headline."""
+def make_case(
+    an: Analysis, fix: fl.Fix, as_left: str = "", as_right: str = ""
+) -> Optional[dict]:
+    """The manifest case of a fix's representative, its reason from whydiff's headline;
+    its sides are written as ``as_left``/``as_right`` (default the pair's specs)."""
     rec = an.tune(fix.representative)
     meta = an.meta
     data = (Path(meta["hvsc"]) / rec["path"]).read_bytes()
@@ -854,15 +883,15 @@ def make_case(an: Analysis, fix: fl.Fix) -> Optional[dict]:
         md5=hashlib.md5(data).hexdigest(),
         song=int(rec["song"]),
         frames=case_frames(rec, meta["compare"]),
-        left=meta["left"],
-        right=meta["right"],
+        left=as_left or meta["left"],
+        right=as_right or meta["right"],
         compare=meta["compare"],
     )
     why = diverge(
         data,
         entry["song"],
-        entry["left"],
-        entry["right"],
+        meta["left"],
+        meta["right"],
         entry["compare"],
         entry["frames"],
         name=rec["path"],
@@ -903,17 +932,28 @@ def xfails(
     top: int = 10,
     prune: bool = False,
     check: Optional[Callable[[dict], None]] = None,
+    as_left: str = "",
+    as_right: str = "",
 ) -> List[dict]:
     """Merge the top fixes' cases into ``manifest``; existing ids are kept as they are.
 
     With ``check`` (a :func:`check_case` partial) a new case is kept only when
-    :func:`verify_case` holds; ``prune`` drops existing cases ``check`` passes.
+    :func:`verify_case` holds; ``prune`` drops existing cases ``check`` passes. Cases
+    name their sides ``as_left``/``as_right`` (default the pair's specs) and are
+    checked with the pair's own.
     """
+    meta = an.meta
+
+    def real(case):
+        alias = {as_left: meta["left"], as_right: meta["right"]}
+        alias.pop("", None)
+        return dict(case, **{s: alias.get(case[s], case[s]) for s in ("left", "right")})
+
     cases = {c["id"]: c for c in load_manifest(manifest)}
     if prune and check is not None:
         for cid, case in tqdm(list(cases.items()), desc="prune", unit="case"):
             try:
-                check(case)
+                check(real(case))
                 del cases[cid]
             except AssertionError:
                 pass
@@ -921,8 +961,8 @@ def xfails(
         f for f in an.fixes[:top] if f.representative and fix_id(f.key) not in cases
     ]
     for fix in tqdm(fresh, desc="cases", unit="case"):
-        entry = make_case(an, fix)
-        if entry is not None and (check is None or verify_case(an, entry, check)):
+        entry = make_case(an, fix, as_left, as_right)
+        if entry is not None and (check is None or verify_case(an, real(entry), check)):
             cases[entry["id"]] = entry
     out = list(cases.values())
     save_manifest(manifest, out)
@@ -965,6 +1005,10 @@ def main(argv=None) -> int:
     p.add_argument("--prune", action="store_true")
     p.add_argument("--verify", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--oracle-cache", type=Path, help="default: default_cache('csv')")
+    p.add_argument("--as-left", default="", help="the left spec cases are written with")
+    p.add_argument(
+        "--as-right", default="", help="the right spec cases are written with"
+    )
     args = ap.parse_args(argv)
     if args.command == "build":
         tally = build(
@@ -1008,7 +1052,15 @@ def main(argv=None) -> int:
                 resolve=lambda rel, cache_dir: hvsc / rel,
             )
 
-    cases = xfails(an, args.manifest, top=args.top, prune=args.prune, check=check)
+    cases = xfails(
+        an,
+        args.manifest,
+        top=args.top,
+        prune=args.prune,
+        check=check,
+        as_left=args.as_left,
+        as_right=args.as_right,
+    )
     print(f"{len(cases)} cases in {args.manifest}")
     return 0
 

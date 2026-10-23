@@ -32,6 +32,7 @@ import fcntl
 import hashlib
 import http.client
 import io
+import json
 import os
 import sys
 import tarfile
@@ -98,28 +99,38 @@ def _is_relpath(text: str) -> bool:
 def gather_tune_relpaths(paths: Iterable) -> List[str]:
     """Every ``*.sid`` relpath named by the files under ``paths``.
 
-    A relpath has a directory (HVSC tunes all do), so a bare ``".sid"``
-    f-string fragment is not one. A Python file is parsed with :mod:`ast` (no
-    import, no side effects) for every such string constant -- so a suite declares the tunes it
-    needs as plain relpath literals (in dicts/lists/constants) and the fetch CLI
-    pre-caches exactly those. Any other file given directly is a manifest: its
-    whitespace-separated words ending in ``.sid``.
+    A relpath has a directory (HVSC tunes all do), so a bare ``".sid"`` f-string
+    fragment is not one. A Python file is parsed with :mod:`ast` (no import) for every
+    such string constant; a ``.json`` file (a pathdiff manifest) for its cases'
+    ``relpath`` fields. Any other file given directly is a manifest of words.
     """
     files: List[Path] = []
     for entry in paths:
         path = Path(entry)
-        files.extend(sorted(path.rglob("*.py")) if path.is_dir() else [path])
+        found = [f for g in ("*.py", "*.json") for f in path.rglob(g)]
+        files.extend(sorted(found) if path.is_dir() else [path])
     rels = set()
     for file in files:
         text = file.read_text(encoding="utf-8")
-        if file.suffix != ".py":
+        if file.suffix == ".json":
+            cases = json.loads(text)
+            cases = cases if isinstance(cases, list) else [cases]
+            rels.update(
+                c["relpath"]
+                for c in cases
+                if isinstance(c, dict) and _is_relpath(str(c.get("relpath", "")))
+            )
+        elif file.suffix != ".py":
             rels.update(word for word in text.split() if _is_relpath(word))
-            continue
-        tree = ast.parse(text, filename=str(file))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if _is_relpath(node.value):
-                    rels.add(node.value)
+        else:
+            tree = ast.parse(text, filename=str(file))
+            rels.update(
+                node.value
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and _is_relpath(node.value)
+            )
     return sorted(rels)
 
 
@@ -497,8 +508,6 @@ def assert_matches(
     dataflow of the first diverging cell, the state it read chased to where it parted,
     and full traced histories; saved to ``report_dir/<name>.txt``/``.json`` when given.
     """
-    import json
-
     from .whydiff import explain_divergence
 
     name = name or "tune"
