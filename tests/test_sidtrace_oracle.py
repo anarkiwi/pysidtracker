@@ -19,7 +19,7 @@ from pysidtracker import (
 from pysidtracker import oracle, registers
 from pysidtracker.testing import make_oracle_fixtures, oracle_grid
 
-from .helpers import build_psid, event, handled
+from .helpers import build_psid, event, fake_sidtrace, handled, paced_trace, trace_csv
 
 _HEADER = ",".join(oracle.SIDTRACE_COLUMNS)
 
@@ -428,3 +428,66 @@ def test_cached_sidtrace_force_rerenders(tmp_path, monkeypatch):
     tune.write_bytes(b"PSID" + b"\x00" * 60)
     assert oracle.cached_sidtrace(tune, cache)[0].value == 14
     assert oracle.cached_sidtrace(tune, cache, force=True)[0].value == 15
+
+
+def test_sidtrace_calls_counts_complete_calls(tmp_path):
+    (tmp_path / "t.csv").write_text(_CSV)
+    rows = read_sidtrace(tmp_path / "t.csv")
+    assert oracle.sidtrace_calls(rows) == 2
+    assert oracle.sidtrace_calls(rows, cycles_per_frame=19656 // 2) == 4
+    assert oracle.sidtrace_calls([r for r in rows if r.chip is not None]) == 0
+
+
+def test_play_seconds_at_the_tune_cadence():
+    data = build_psid(bytes([0x60, 0x60]), 0x1000, 0x1000, 0x1001, songs=2)
+    pal = registers.PAL_CYCLES_PER_FRAME / registers.PAL_CLOCK_HZ
+    assert oracle.play_seconds(data, 50) == pytest.approx(50 * pal)
+    assert oracle.play_seconds(bytearray(data), 50, 2) == pytest.approx(50 * pal)
+    assert oracle.render_seconds(50 * pal) == 2
+
+
+def test_oracle_grid_repeats_the_last_write_but_never_pads_the_trace(
+    tmp_path, monkeypatch
+):
+    frame = registers.PAL_CYCLES_PER_FRAME
+    rows = [r for r in paced_trace(1, frame) if r.chip is None or r.cycle < 5 * frame]
+    cache = tmp_path / "csv"
+    cache.mkdir()
+    (cache / "song.csv.zst").write_bytes(_zst(trace_csv(rows)))
+    tune = tmp_path / "song.sid"
+    tune.write_bytes(build_psid(bytes([0x60]), 0x1000))
+    calls = oracle.sidtrace_calls(rows)
+    grid = oracle_grid(tune, oracle_cache=cache, frames=calls)
+    assert [g[0] for g in grid] == [0, 1, 2, 3, 4] + [4] * (calls - 5)
+    renders = []
+    monkeypatch.setattr(oracle, "run_sidtrace", fake_sidtrace(frame, renders, cap=1))
+    with pytest.raises(oracle.ShortTrace, match=f"covers {calls} of {calls + 1}"):
+        oracle_grid(tune, oracle_cache=cache, frames=calls + 1)
+    assert renders == [oracle.render_seconds(oracle.play_seconds(tune, calls + 1))]
+
+
+def test_oracle_grid_frames_a_skipped_call_only_at_a_fixed_cadence(tmp_path):
+    frame = registers.PAL_CYCLES_PER_FRAME
+    rows = paced_trace(1, frame)
+    skipped = rows[40:44]
+    rows = [r for r in rows if r not in skipped]
+    cache = tmp_path / "csv"
+    cache.mkdir()
+    (cache / "song.csv.zst").write_bytes(_zst(trace_csv(rows)))
+    tune = tmp_path / "song.sid"
+    tune.write_bytes(build_psid(bytes([0x60]), 0x1000))
+    calls = oracle.sidtrace_calls(rows, cycles_per_frame=frame)
+    grid = oracle_grid(tune, oracle_cache=cache, frames=calls, cycles_per_frame=frame)
+    assert [g[0] for g in grid[9:12]] == [9, 9, 11]
+    with pytest.raises(oracle.ShortTrace, match=f"covers {calls - 1} of {calls}"):
+        oracle_grid(tune, oracle_cache=cache, frames=calls)
+
+
+def test_cached_sidtrace_without_interrupt_rows_covers_no_calls(tmp_path, monkeypatch):
+    head, *body = _CSV.splitlines()
+    writes = "\n".join([head] + [l for l in body if l[-1].isdigit()]) + "\n"
+    monkeypatch.setattr(oracle.subprocess, "run", _fake_docker(writes))
+    tune = tmp_path / "song.sid"
+    tune.write_bytes(b"PSID" + b"\x00" * 60)
+    with pytest.raises(oracle.ShortTrace, match="covers 0 of 1"):
+        oracle.cached_sidtrace(tune, tmp_path / "song.csv.zst", calls=1)

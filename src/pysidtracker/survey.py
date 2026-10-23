@@ -15,7 +15,6 @@ import hashlib
 import importlib
 import importlib.util
 import json
-import math
 import multiprocessing
 import os
 import re
@@ -30,7 +29,6 @@ from tqdm import tqdm
 
 from vagrant_moses import memmap as mm
 
-from .cadence import playroutine_cadence
 from .disasm import entry_labels
 from .errors import SidParseError
 from .formats import render as format_render
@@ -60,10 +58,14 @@ from .header import PSID_MAGIC, RSID_MAGIC, parse_sid_header, write_psid
 from .image import SidImage
 from .irqhost import TunePlayer
 from .oracle import (
+    ShortTrace,
     SidtraceUnavailable,
     cached_sidtrace,
+    play_seconds,
     read_sidtrace,
     sidtrace_cadence,
+    render_seconds,
+    sidtrace_calls,
     sidtrace_grid,
     sidtrace_image_id,
 )
@@ -179,12 +181,17 @@ def find(hvsc, out_csv, cfg=None, player_regex=None, jobs=None):
 def oracle_frames(ocsv, seconds=0.0, clock="PAL", nframes=None):
     """``(nframes, grid)`` of a sidtrace CSV (or its rows) over ``seconds`` at ``clock``.
 
-    ``nframes`` overrides the frame count derived from ``seconds``.
+    ``nframes`` overrides the frame count derived from ``seconds``. Frames past the
+    last write repeat it; :class:`~pysidtracker.oracle.ShortTrace` if the trace
+    covers fewer than ``nframes`` play calls (:func:`~pysidtracker.oracle.sidtrace_calls`).
     """
     rows = read_sidtrace(ocsv) if isinstance(ocsv, (str, Path)) else ocsv
     cpf = sidtrace_cadence(rows) or mm.PAL.cycles_per_frame
     hz = mm.video(clock == "NTSC").clock_hz
     nframes = int(seconds * hz / cpf) if nframes is None else nframes
+    have = sidtrace_calls(rows, cycles_per_frame=cpf)
+    if have < nframes:
+        raise ShortTrace(f"trace covers {have} of {nframes} play calls")
     grid = np.asarray(sidtrace_grid(rows, cycles_per_frame=cpf), np.int16)
     grid = grid.reshape(-1, NREGS) if grid.size else np.zeros((1, NREGS), np.int16)
     return nframes, grid[np.minimum(np.arange(nframes), len(grid) - 1)]
@@ -215,12 +222,14 @@ def oracle_cache(work):
     return cache
 
 
-def oracle_rows(sid_path, ocsv, seconds, song):
-    """The sidtrace rows of one subtune, cached at ``ocsv``."""
+def oracle_rows(sid_path, ocsv, seconds, song, calls=0):
+    """The sidtrace rows of one subtune over ``seconds``, cached at ``ocsv`` and
+    re-rendered while covering fewer than ``calls`` play calls."""
     return cached_sidtrace(
         sid_path,
         ocsv,
-        seconds=math.ceil(seconds) + 1,
+        calls=calls,
+        seconds=render_seconds(seconds),
         song=song,
         user=f"{os.getuid()}:{os.getgid()}",
         extra_args=ORACLE_ARGS,
@@ -332,11 +341,10 @@ def file_oracle(sid, song, nframes, work=None, sid_path=None):
             sid_path = Path(work) / "sid" / f"{md5}.sid"
             sid_path.parent.mkdir(parents=True, exist_ok=True)
             sid_path.write_bytes(sid)
-        cad = playroutine_cadence(sid, subtune=song - 1)
-        seconds = nframes * cad.cycles_per_call / cad.clock_hz
+        seconds = play_seconds(sid, nframes, song)
         ocsv = oracle_cache(work) / f"{md5}_{song}.csv.zst"
         try:
-            rows = oracle_rows(sid_path, ocsv, seconds, song)
+            rows = oracle_rows(sid_path, ocsv, seconds, song, nframes)
             return seconds, oracle_frames(rows, nframes=nframes)[1], "sidtrace"
         except SidtraceUnavailable:
             pass

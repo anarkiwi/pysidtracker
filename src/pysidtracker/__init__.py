@@ -123,19 +123,23 @@ from .notefreq import (
 from .oracle import (
     SIDTRACE_IMAGE,
     EmuPlayer,
+    ShortTrace,
     SidtraceRow,
     SidtraceUnavailable,
     aligned_match,
     cached_sidtrace,
     grid_from_writes,
     handler_sources,
+    play_seconds,
     play_source,
     raise_cycles,
     read_sidtrace,
     read_sidwr,
     register_grid,
+    render_seconds,
     run_sidtrace,
     sidtrace_cadence,
+    sidtrace_calls,
     sidtrace_grid,
 )
 from .player import MemPlayer
@@ -246,7 +250,7 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.36.0"
+__version__ = "0.37.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -327,6 +331,7 @@ __all__ = [
     "SidParseError",
     "SidWriteCapturingMemory",
     "SidtraceRow",
+    "ShortTrace",
     "SidtraceUnavailable",
     "Source",
     "TriggerSource",
@@ -416,6 +421,9 @@ __all__ = [
     "read_reglog",
     "read_sidtrace",
     "cached_sidtrace",
+    "play_seconds",
+    "render_seconds",
+    "sidtrace_calls",
     "handler_sources",
     "play_source",
     "raise_cycles",

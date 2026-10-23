@@ -50,8 +50,12 @@ from .errors import SidError
 from .oracle import (
     SIDTRACE_IMAGE,
     aligned_match,
+    ShortTrace,
     cached_sidtrace,
+    play_seconds,
     register_grid,
+    render_seconds,
+    sidtrace_calls,
     sidtrace_grid,
 )
 
@@ -459,7 +463,7 @@ def oracle_grid(
     tune_path,
     *,
     oracle_cache=None,
-    seconds: int = 60,
+    seconds: Optional[float] = None,
     frames=None,
     image: str = SIDTRACE_IMAGE,
     chip: int = 0,
@@ -473,15 +477,29 @@ def oracle_grid(
     ``song`` is 1-based; ``None`` plays the header's start song. The CSV is
     cached at ``oracle_cache/<stem>.csv.zst`` (default ``default_cache("csv")``) (``<stem>_<song>`` for a given
     ``song``) while present (``force`` re-renders). ``cycles_per_frame`` fixes
-    the cadence. Returns the first ``frames`` rows (all when ``None``).
+    the cadence. Returns the first ``frames`` rows (all when ``None``), the last
+    write repeated through the play calls after it. ``seconds`` defaults to the
+    ``frames`` play calls at the tune's :func:`~pysidtracker.cadence.playroutine_cadence`
+    (60 without ``frames``); a cached trace covering fewer calls is re-rendered and
+    :class:`~pysidtracker.oracle.ShortTrace` raised if it still falls short.
     """
     tune_path = Path(tune_path)
     stem = tune_path.stem if song is None else f"{tune_path.stem}_{song}"
     extra = {} if song is None else {"song": song}
     oracle_cache = oracle_cache if oracle_cache is not None else default_cache("csv")
     csv_path = Path(oracle_cache) / f"{stem}.csv.zst"
+    if seconds is None:
+        seconds = (
+            render_seconds(play_seconds(tune_path, frames, song)) if frames else 60
+        )
     rows = cached_sidtrace(
-        tune_path, csv_path, force=force, seconds=seconds, image=image, **extra
+        tune_path,
+        csv_path,
+        calls=frames or 0,
+        force=force,
+        seconds=seconds,
+        image=image,
+        **extra,
     )
     grid = sidtrace_grid(
         rows,
@@ -489,7 +507,14 @@ def oracle_grid(
         reg_count=reg_count,
         cycles_per_frame=cycles_per_frame,
     )
-    return grid[:frames] if frames else grid
+    if not frames:
+        return grid
+    have = sidtrace_calls(rows, chip=chip, cycles_per_frame=cycles_per_frame)
+    if have < frames:
+        raise ShortTrace(
+            f"{tune_path.name}: trace covers {have} of {frames} play calls"
+        )
+    return grid[:frames] + [grid[-1][:] for _ in range(frames - len(grid))]
 
 
 def assert_matches(
@@ -556,7 +581,7 @@ def assert_oracle_match(
     expected = oracle_grid(
         path,
         oracle_cache=oracle_cache,
-        seconds=seconds if seconds is not None else frames // 50 + 2,
+        seconds=seconds,
         frames=frames,
         song=song,
     )
@@ -610,11 +635,10 @@ def make_oracle_fixtures(
     :class:`TuneFetchError` and a missing/failed oracle raises
     :class:`~pysidtracker.oracle.SidtraceUnavailable`, so a broken download or
     oracle fails the test rather than hiding a regression. ``seconds`` defaults
-    to ``frames`` at 50 Hz plus a two-second margin.
+    to ``frames`` play calls at the tune's cadence (see :func:`oracle_grid`).
     """
     import pytest  # lazy: pytest is only a dev dependency
 
-    secs = seconds if seconds is not None else frames // 50 + 2
     ids = list(tunes)
 
     @pytest.fixture(params=ids)
@@ -629,7 +653,7 @@ def make_oracle_fixtures(
         expected = oracle_grid(
             path,
             oracle_cache=oracle_cache,
-            seconds=secs,
+            seconds=seconds,
             frames=frames,
             image=image,
             chip=chip,

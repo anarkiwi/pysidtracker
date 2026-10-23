@@ -109,15 +109,14 @@ class SidtraceOracle:
 
         ``cycles_per_frame`` frames at a fixed cadence (e.g. PAL) instead of the
         sidtrace auto-cadence. The CSV is cached; ``seconds`` defaults to
-        ``frames`` at 50 Hz plus a two-second margin.
+        ``frames`` play calls at the tune's cadence (see ``oracle_grid``).
         """
         from pysidtracker.testing import oracle_grid
 
-        secs = seconds if seconds is not None else frames // 50 + 2
         return oracle_grid(
             tune_path,
             oracle_cache=self._csv,
-            seconds=secs,
+            seconds=seconds,
             frames=frames,
             cycles_per_frame=cycles_per_frame,
             reg_count=reg_count,
