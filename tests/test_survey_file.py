@@ -10,11 +10,12 @@ import numpy as np
 import pytest
 import zstandard
 
-from pysidtracker import formats, oracle, registers, survey
+from pysidtracker import formats, irqhost, oracle, registers, survey
 from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidFormatError, SidParseError
-from pysidtracker.header import parse_sid_header
+from pysidtracker.header import parse_sid_header, write_psid
 
+from . import irqhost_tunes
 from .helpers import build_prg, handled, trace_csv
 
 LOAD = 0x1000
@@ -174,6 +175,17 @@ def test_compare_file_sidtrace_fallback(prg, tmp_path, monkeypatch):
     assert seen == [sid_path]
 
 
+def test_compare_file_fallback_hosts_play_address_zero(monkeypatch):
+    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
+    data = irqhost_tunes.build("raster_kernal")
+
+    def render(sid, song, nframes):
+        return irqhost.InterruptPlayer(sid, song - 1).render_grid(nframes), {}
+
+    row = survey.compare_file(data, render, frames=8)
+    assert (row["oracle"], row["verdict"]) == ("jennings", "exact")
+
+
 def _no_docker(*_, **__):
     raise oracle.SidtraceUnavailable("no docker")
 
@@ -220,6 +232,43 @@ def test_file_cli_pool(prg, tmp_path):
     )
     assert tally == {"exact": 3}
     assert {r["lead"] for r in survey.load_tunes(out)} == {"3"}
+
+
+def render_by_song(_data, song, nframes):
+    """The grid of a player whose count starts at the 0-based subtune."""
+    return expected(nframes, 1 - song), {}
+
+
+@pytest.mark.parametrize(
+    "spec, count, songs",
+    [("all", 3, [1, 2, 3]), ("2-3,1", 9, [2, 3, 1]), (2, 1, [2]), ("4", 1, [4])],
+)
+def test_song_list(spec, count, songs):
+    assert survey.song_list(spec, count) == songs
+
+
+def test_file_cli_songs(prg, tmp_path, monkeypatch):
+    monkeypatch.setattr(survey, "sidtrace_image_id", lambda: None)
+    monkeypatch.setattr(oracle, "run_sidtrace", _no_docker)
+    code = assemble(PLAYER.replace("init: lda #0", "init: nop"), LOAD)[0]
+    sid, bare = tmp_path / "s.sid", tmp_path / "b.prg"
+    sid.write_bytes(
+        write_psid(load=LOAD, init=LOAD, play=LOAD + 3, image=code, songs=3)
+    )
+    bare.write_bytes(prg)
+    out = tmp_path / "out.csv"
+    for files, spec, picks in (
+        ([sid, bare], "all", [(sid, 1), (sid, 2), (sid, 3), (bare, 1)]),
+        ([sid], "3,1-2", [(sid, 3), (sid, 1), (sid, 2)]),
+    ):
+        tally = survey.file_cli(
+            f"{__name__}:render_by_song", files, song=spec, out=out, frames=8
+        )
+        rows = survey.load_tunes(out)
+        assert sorted((r["path"], r["song"]) for r in rows) == sorted(
+            (str(f), str(n)) for f, n in picks
+        )
+        assert tally == {"exact": len(picks)}
 
 
 def test_load_render_specs(tmp_path):

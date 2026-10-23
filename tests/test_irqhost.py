@@ -13,11 +13,12 @@ from pysidtracker.errors import SidParseError
 from pysidtracker.irqhost import (
     InterruptHost,
     InterruptPlayer,
+    TunePlayer,
     boot_cycle,
     host_cadence,
 )
 from pysidtracker.oracle import SidtraceRow, read_sidtrace, sidtrace_cadence
-from pysidtracker.oracle import sidtrace_grid
+from pysidtracker.oracle import register_grid, sidtrace_grid
 
 from . import irqhost_tunes as tunes
 from .helpers import build_psid, build_psid_embedded_load
@@ -529,3 +530,65 @@ def test_a_psid_without_a_free_page_header_still_boots():
     host = InterruptHost(data)
     host.run(PAL_FRAME * 4)
     assert len(_writes(host.rows(), 0)) >= 3
+
+
+CIA_MASKED = QUIET + """
+  LDA #$C7
+  STA $DC04
+  LDA #$4C
+  STA $DC05
+  LDA #$81
+  STA $DC0D
+  LDA #$11
+  STA $DC0E
+loop: JMP loop
+"""
+
+
+class _TuneError(SidParseError):
+    pass
+
+
+class _Tune(TunePlayer):
+    error_class = _TuneError
+
+
+def test_tune_player_runs_a_play_address_on_jennings():
+    data = build_psid(
+        bytes.fromhex("a90a8d00d460a9058d01d460"), load=0x1000, play=0x1006
+    )
+    player = TunePlayer(data)
+    assert player.render_grid(3) == register_grid(data, 3)
+    assert player.cycles_per_frame == player.cadence.cycles_per_call == PAL_FRAME
+    writes = list(TunePlayer(data).register_writes(2))
+    assert writes[0].clock == 0 and writes[-1].clock >= PAL_FRAME
+
+
+@pytest.mark.parametrize("flags, video", [(0x04, 1), (0x08, 0)])
+def test_tune_player_sets_the_header_clock_flag(flags, video):
+    data = build_psid(
+        bytes.fromhex("ada6028d00d460"), load=0x1000, play=0x1006, flags=flags
+    )
+    assert TunePlayer(data).regs[0] == video
+
+
+@pytest.mark.parametrize("name", ["raster_kernal", "nmi_digi_oneshot"])
+def test_tune_player_hosts_play_address_zero(name):
+    data = tunes.build(name)
+    player = TunePlayer(data)
+    grid = player.render_grid(5) + player.render_grid(3)
+    assert grid == InterruptPlayer(data).render_grid(8)
+    fresh = TunePlayer(data)
+    assert fresh.play_frame()[0] == (0, grid[0][0])
+    assert fresh.snapshot() == grid[0]
+
+
+@pytest.mark.parametrize("src", [CIA_MASKED, QUIET + "loop: JMP loop\n"])
+def test_tune_player_without_an_entered_interrupt_is_unplayable(src):
+    with pytest.raises(_TuneError, match="no interrupt"):
+        _Tune(_rsid(src)).render_grid(3)
+
+
+def test_tune_player_rejects_a_bare_prg():
+    with pytest.raises(_TuneError, match="bare .prg"):
+        _Tune(b"\x00\x10\x60")

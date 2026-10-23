@@ -58,11 +58,11 @@ from .gridcmp import (  # pylint: disable=unused-import
 )
 from .header import PSID_MAGIC, RSID_MAGIC, parse_sid_header, write_psid
 from .image import SidImage
+from .irqhost import TunePlayer
 from .oracle import (
     SidtraceUnavailable,
     cached_sidtrace,
     read_sidtrace,
-    register_grid,
     sidtrace_cadence,
     sidtrace_grid,
     sidtrace_image_id,
@@ -323,8 +323,8 @@ def file_oracle(sid, song, nframes, work=None, sid_path=None):
     over the :func:`~pysidtracker.cadence.playroutine_cadence` duration of
     ``nframes`` play calls from ``sid_path``, or a copy of ``sid`` under
     ``work/sid``) is framed by its interrupt rows; without ``work``, or when
-    sidtrace is unavailable, jennings'
-    :func:`~pysidtracker.oracle.register_grid` runs the player instead.
+    sidtrace is unavailable, :class:`~pysidtracker.irqhost.TunePlayer` runs the
+    player instead (jennings, or the interrupt host for play address 0).
     """
     if work is not None:
         md5 = hashlib.md5(sid).hexdigest()
@@ -340,7 +340,7 @@ def file_oracle(sid, song, nframes, work=None, sid_path=None):
             return seconds, oracle_frames(rows, nframes=nframes)[1], "sidtrace"
         except SidtraceUnavailable:
             pass
-    grid = np.asarray(register_grid(sid, nframes, subtune=song - 1), np.int16)
+    grid = np.asarray(TunePlayer(sid, song - 1).render_grid(nframes), np.int16)
     return "", grid, "jennings"
 
 
@@ -412,6 +412,25 @@ def renderer(render=None, fmt=None):
     return render and load_render(render)
 
 
+def song_list(spec, count=1):
+    """The 1-based subtunes ``spec`` names: ``all`` (``1..count``), or comma-joined
+    ``N`` / ``N-M`` items."""
+    spec = str(spec)
+    if spec == "all":
+        return list(range(1, count + 1))
+    songs = []
+    for part in spec.split(","):
+        lo, _, hi = part.partition("-")
+        songs.extend(range(int(lo), int(hi or lo) + 1))
+    return songs
+
+
+def file_songs(path):
+    """The subtune count of a PSID/RSID file (1 for a bare PRG)."""
+    raw = Path(path).read_bytes()
+    return parse_sid_header(raw).songs if raw[:4] in (PSID_MAGIC, RSID_MAGIC) else 1
+
+
 def _file_row(job):
     spec, path, kw = job
     return compare_file(
@@ -421,16 +440,18 @@ def _file_row(job):
 
 def _failed_file(job, error):
     """The row of a :func:`_file_row` job whose worker raised or died."""
-    return dict(path=str(job[1]), verdict="library_error", error=_err(error))
+    song = job[2].get("song", 1)
+    return dict(path=str(job[1]), song=song, verdict="library_error", error=_err(error))
 
 
-def file_cli(render, files, *, out=None, jobs=None, **kw):
+def file_cli(render, files, *, song=1, out=None, jobs=None, **kw):
     """Compare a renderer with each native file's own player (bare PRGs wrapped).
 
     ``render`` is a ``load_render`` spec, e.g. a library's ``oracle_hvsc.py``,
-    or a picklable renderer (:func:`renderer`);
-    ``kw`` goes to :func:`compare_file`. Writes ``run``'s ``results.csv``
-    columns plus ``oracle`` to ``out`` (default stdout); returns verdict tallies.
+    or a picklable renderer (:func:`renderer`); ``song`` picks each file's
+    subtunes (:func:`song_list`); ``kw`` goes to :func:`compare_file`. Writes
+    ``run``'s ``results.csv`` columns plus ``oracle`` to ``out`` (default
+    stdout), one row per subtune; returns verdict tallies.
     """
     if kw.get("work") is not None:
         oracle_cache(kw["work"])
@@ -440,13 +461,17 @@ def file_cli(render, files, *, out=None, jobs=None, **kw):
     ) as f:
         w = csv.DictWriter(f, FILE_FIELDS)
         w.writeheader()
-        jobs_ = [(render, p, kw) for p in files]
+        jobs_ = [
+            (render, p, dict(kw, song=n))
+            for p in files
+            for n in song_list(song, file_songs(p) if str(song) == "all" else 1)
+        ]
         rows = (
             map(_file_row, jobs_)
             if jobs == 1
             else results(_file_row, jobs_, jobs, _failed_file)
         )
-        bar = tqdm(rows, total=len(files), unit="file")
+        bar = tqdm(rows, total=len(jobs_), unit="song")
         for row in bar:
             w.writerow(row)
             tally[row["verdict"]] += 1
@@ -1111,7 +1136,9 @@ def main(argv=None):
     p.add_argument("files", nargs="+", help=".sid or bare .prg native files")
     p.add_argument("--format", help="an installed format's renderer, or auto")
     p.add_argument("--frames", type=int, required=True, help="oracle frames")
-    p.add_argument("--song", type=int, default=1, help="1-based subtune")
+    p.add_argument(
+        "--song", default="1", help="1-based subtunes: N, N-M, comma lists, or all"
+    )
     p.add_argument("--init", type=_hex_addr, help="bare PRG init (default: load)")
     p.add_argument("--play", type=_hex_addr, help="bare PRG play (default: init+3)")
     p.add_argument("--lead", type=int, default=LEAD, help="largest frame lead")

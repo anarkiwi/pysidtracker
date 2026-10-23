@@ -224,14 +224,16 @@ The renderer is the library's `oracle_hvsc.py` (its `render`, or
 `path.py:function`) or a `module:function`, called as for `run`. A PSID/RSID
 file is used as is. A bare PRG is wrapped with `header.write_psid`
 (`survey.as_sid`): `--init` defaults to its load address and `--play` to
-init+3. The oracle gives `--frames` play calls of `--song` (default 1):
+init+3. The oracle gives `--frames` play calls of each `--song`: `N`, `N-M`,
+a comma list of those, or `all` of the header's songs (default 1), one CSV
+row per subtune:
 
 - With `--work` (a directory the Docker daemon can bind, e.g. under `/scratch`),
   the sidtrace trace is cached as `oracle/<md5>_<song>.csv.zst`, as in `run`.
   It is rendered over the `playroutine_cadence` duration of those calls and
   framed by its interrupt rows.
-- Without `--work`, or when sidtrace is unavailable, jennings'
-  `oracle.register_grid` runs the player instead.
+- Without `--work`, or when sidtrace is unavailable, `irqhost.TunePlayer`
+  runs the player instead (jennings, or the interrupt host for play address 0).
 
 The CSV (stdout unless `--out`) has the `run` columns plus `oracle`
 (`sidtrace` or `jennings`); `seconds` is empty for jennings. `--lead`
