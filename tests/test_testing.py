@@ -226,21 +226,29 @@ def test_host_slot_spaces_requests_to_a_throttled_host(monkeypatch, tmp_path):
 
 def test_gather_tune_relpaths_from_ast(tmp_path):
     (tmp_path / "t_a.py").write_text(
-        'TUNES = {"x": "A/x.sid"}\nOTHER = ["B/y.sid", "notme.txt"]\nZ = "C/z.sid"\n',
+        'TUNES = {"x": "DEMOS/x.sid"}\nOTHER = ["GAMES/y.sid", "notme.txt"]\n'
+        'Z = "MUSICIANS/z.sid"\n',
         encoding="utf-8",
     )
     (tmp_path / "t_b.py").write_text(
-        'S = "A/x.sid"  # dup\nF = f"{S}.sid"\nB = "bare.sid"\n', encoding="utf-8"
+        'S = "DEMOS/x.sid"  # dup\nF = f"{S}.sid"\nB = "bare.sid"\nT = "x/y.sid"\n',
+        encoding="utf-8",
     )
-    assert gather_tune_relpaths([tmp_path]) == ["A/x.sid", "B/y.sid", "C/z.sid"]
+    assert gather_tune_relpaths([tmp_path]) == [
+        "DEMOS/x.sid",
+        "GAMES/y.sid",
+        "MUSICIANS/z.sid",
+    ]
 
 
 def test_gather_tune_relpaths_from_a_manifest(tmp_path):
-    (tmp_path / "t.py").write_text('T = "A/x.sid"\n', encoding="utf-8")
+    (tmp_path / "t.py").write_text('T = "DEMOS/x.sid"\n', encoding="utf-8")
     manifest = tmp_path / "tunes.txt"
-    manifest.write_text("B/y.sid\n\n  C/z.sid notes.txt\n", encoding="utf-8")
-    assert gather_tune_relpaths([manifest]) == ["B/y.sid", "C/z.sid"]
-    assert gather_tune_relpaths([tmp_path]) == ["A/x.sid"]
+    manifest.write_text(
+        "GAMES/y.sid\n\n  /MUSICIANS/z.sid a/b.sid notes.txt\n", encoding="utf-8"
+    )
+    assert gather_tune_relpaths([manifest]) == ["/MUSICIANS/z.sid", "GAMES/y.sid"]
+    assert gather_tune_relpaths([tmp_path]) == ["DEMOS/x.sid"]
 
 
 def test_gather_tune_relpaths_from_a_pathdiff_manifest(tmp_path):
@@ -251,8 +259,8 @@ def test_gather_tune_relpaths_from_a_pathdiff_manifest(tmp_path):
         "D/neither.sid",
     ]
     (tmp_path / "pathdiff.json").write_text(json.dumps(cases), encoding="utf-8")
-    (tmp_path / "one.json").write_text('{"relpath": "E/z.sid"}', encoding="utf-8")
-    want = ["E/z.sid", "GAMES/y.sid", "MUSICIANS/X/x.sid"]
+    (tmp_path / "one.json").write_text('{"relpath": "DEMOS/z.sid"}', encoding="utf-8")
+    want = ["DEMOS/z.sid", "GAMES/y.sid", "MUSICIANS/X/x.sid"]
     assert gather_tune_relpaths([tmp_path]) == want
     assert gather_tune_relpaths([tmp_path / "pathdiff.json"]) == want[1:]
 
@@ -267,12 +275,12 @@ def test_fetch_main_caches_reachable_reports_missing(monkeypatch, tmp_path, caps
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
     (tests_dir / "t.py").write_text(
-        'T = ["A/good.sid", "A/bad.sid"]\n', encoding="utf-8"
+        'T = ["GAMES/good.sid", "GAMES/bad.sid"]\n', encoding="utf-8"
     )
     cache = tmp_path / "cache"
     assert fetch_main(["--cache", str(cache), "--tests", str(tests_dir)]) == 0
-    assert (cache / "A" / "good.sid").read_bytes() == _SID
-    assert "A/bad.sid" in capsys.readouterr().err
+    assert (cache / "GAMES" / "good.sid").read_bytes() == _SID
+    assert "GAMES/bad.sid" in capsys.readouterr().err
 
 
 def test_fetch_tune_retries_an_incomplete_read(monkeypatch, tmp_path):
