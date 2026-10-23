@@ -18,8 +18,8 @@ jennings (`paths.cpu_paths`).
 ## Patches
 
 A patch is a JSON list of `[file_offset, byte]` pairs over the `.sid` file bytes,
-shared with `pathdiff`. `apply_patch(data, patch)`, `make_patch(original, mutated)`
-and `addr_to_offset(data, addr)` (the file offset of a loaded C64 address, honouring
+shared with `pathdiff`. `pathdiff.apply_patch(data, patch)` (the last entry for an
+offset wins), `make_patch(original, mutated)` and `addr_to_offset(data, addr)` (the file offset of a loaded C64 address, honouring
 a load address embedded in the body; None outside the image) convert.
 
 ## Coverage
@@ -45,7 +45,7 @@ branch, the frames taking each reached outcome and its first frame.
 ## Candidate bytes
 
 Only data bytes are mutated: loaded from the file, never executed in `frames`
-(`variants`) and not statically decoded as code (`paths`' control flow).
+(`variants.executed_offsets`) and not statically decoded as code (`paths.static_code`).
 
 - **6502**: `branch_slice` takes the target frame's `whydiff.cpu_history` and
   backward-slices the branch's flags (`cpu_slice` over the steps' jennings `flow`, from

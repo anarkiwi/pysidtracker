@@ -252,10 +252,11 @@ class Regs:
 
 def test_right_grid_of_a_generic_subject():
     subject = paths.PySubject(Regs, cell=lambda p, r: (p.regs, r))
-    grid = pf.right_grid(subject, 5)
+    grid = pf.right_grid(lambda data, song: subject, SID, 1, 5)
     assert grid.shape == (2, 25) and grid[:, 0].tolist() == [1, 2]
-    assert pf.as_subject(subject) is subject
-    assert pf.right_grid(make_right(SID, 1), 2)[:, 0].tolist() == [0x11, 0x11]
+    assert pf.right_grid(make_right, SID, 1, 2)[:, 0].tolist() == [0x11, 0x11]
+    made = pf.as_subject(make_right, SID, 1)
+    assert made.make() is not made.make()
 
 
 def test_cli_gaps_exercise_minimise(tmp_path, capsys):

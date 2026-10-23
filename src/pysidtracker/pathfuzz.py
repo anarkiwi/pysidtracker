@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from collections import deque
 from operator import itemgetter
 from dataclasses import asdict, dataclass, field
@@ -22,32 +21,17 @@ from tqdm import tqdm
 from .faultloc import min_cover
 from .gridcmp import LEAD, REG_NAMES, verdict_lead
 from .image import SidImage
+from .mos6502 import OP_LEN
 from .oracle import register_grid
-from .paths import (
-    PathTrace,
-    PySubject,
-    _booted,
-    _edge_label,
-    _edge_names,
-    _source,
-    cpu_paths,
-    py_paths,
-)
-from .player import MemPlayer
+from .pathdiff import apply_patch, as_subject, play
+from .paths import PathTrace, cpu_paths, py_paths, py_sources, static_code
+from .variants import executed_offsets
 
 _CMP = frozenset(("CMP", "CPX", "CPY"))
 _MASK = frozenset(("AND", "ORA", "EOR"))
 SIDES = ("6502", "python")
 
 # --- patches ----------------------------------------------------------------
-
-
-def apply_patch(data: bytes, patch: Iterable[Sequence[int]]) -> bytes:
-    """``data`` with each ``[offset, byte]`` of ``patch`` written."""
-    out = bytearray(data)
-    for off, val in patch:
-        out[off] = val & 0xFF
-    return bytes(out)
 
 
 def make_patch(original: bytes, mutated: bytes) -> List[List[int]]:
@@ -95,44 +79,19 @@ def distil(traces_by_tune: Mapping) -> List:
 def py_arcs(roots: Sequence[str], sources: Optional[Dict[str, str]] = None):
     """Each static branch arc's :func:`~pysidtracker.paths.py_universe` key to its
     from-line's key."""
-    sources = sources or {}
-    files = []
-    for root in roots:
-        if root in sources:
-            files.append((root, sources[root], True))
-            continue
-        real = os.path.realpath(root)
-        walk = sorted(os.walk(real)) if os.path.isdir(real) else []
-        names = [os.path.join(d, n) for d, _, ns in walk for n in sorted(ns)]
-        for path in [n for n in names if n.endswith(".py")] if walk else [real]:
-            with open(path, encoding="utf-8") as fh:
-                files.append((path, fh.read(), False))
-    out = {}
-    for name, text, generated in files:
-        src = _source(name, text, generated)
-        for a, b in src.arcs if src is not None else ():
-            out[src.arc_key(a, max(b, 0))] = src.where(a)
-    return out
+    return {
+        src.arc_key(a, max(b, 0)): src.where(a)
+        for src in py_sources(roots, sources)
+        for a, b in src.arcs
+    }
 
 
 # --- both sides -------------------------------------------------------------
 
 
-def as_subject(made) -> PySubject:
-    """``make_right(data, song)``'s result as a :class:`PySubject`."""
-    return made if isinstance(made, PySubject) else PySubject(lambda: made)
-
-
-def right_grid(made, nframes: int) -> np.ndarray:
-    """``(n, 25)`` registers of a player or :class:`PySubject`, untraced."""
-    if not isinstance(made, PySubject):
-        return np.asarray(made.render_grid(nframes), np.int16)
-    player, rows = made.make(), []
-    for _ in range(nframes):
-        if player.play_frame() is None and not isinstance(player, MemPlayer):
-            break
-        rows.append([h[i] for h, i in (made.cell(player, r) for r in range(25))])
-    return np.array(rows, np.int16).reshape(len(rows), 25)
+def right_grid(make_right: Callable, data: bytes, song: int, nframes: int):
+    """``(n, 25)`` registers of ``make_right(data, song)``, untraced."""
+    return play(as_subject(make_right, data, song), nframes)[0]
 
 
 def _verdict(left: np.ndarray, right: np.ndarray, max_lead: int) -> dict:
@@ -162,7 +121,7 @@ def run_both(
     """:func:`cpu_paths` and :func:`py_paths` of ``nframes`` frames, and their verdict."""
     cpu = cpu_paths(data, nframes, subtune=song - 1)
     try:
-        py = py_paths(as_subject(make_right(data, song)), nframes)
+        py = py_paths(as_subject(make_right, data, song), nframes)
     except Exception as exc:  # the right side may reject mutated data
         return Run(cpu, None, None, f"{type(exc).__name__}: {exc}")
     return Run(cpu, py, _verdict(cpu.grid, py.grid, max_lead))
@@ -228,7 +187,7 @@ class Baseline:
         fid = {n: i for i, n in enumerate(trace.names)}
         if side == "6502":
             rows = [
-                (n, e[0], _edge_label(self.code, *e), e[0])
+                (n, e[0], self.code.edge_label(*e), e[0])
                 for e, n in self.edges.items()
                 if e[0] >= 0 and self.code.insn(e[0])[1] == "rel"
             ]
@@ -246,22 +205,12 @@ class Baseline:
         return sorted((t for t in out if t), key=lambda t: (t.frame, t.name))
 
 
-def static_code(data: bytes, subtune: int):
-    """The tune's static 6502 control flow from ``init`` and ``play`` (``paths``)."""
-    *_, code, entries = _booted(data, subtune, 8_000_000)
-    code.explore(entries, entries)
-    return code
-
-
 def data_mask(data: bytes, subtune: int, nframes: int, code=None) -> np.ndarray:
     """Per C64 address: loaded from the file, and neither executed in ``nframes``
     nor statically decoded as code."""
-    from .mos6502 import OP_LEN
-    from .variants import _executed_offsets
-
     image = SidImage.from_bytes(bytes(data))
     code = code or static_code(data, subtune)
-    offs = _executed_offsets(image, subtune=subtune, nframes=nframes)
+    offs = executed_offsets(image, subtune=subtune, nframes=nframes)
     starts = np.union1d(image.load + np.asarray(offs, int), sorted(code.seen))
     lens = np.asarray(OP_LEN, int)[np.frombuffer(bytes(image.mem), np.uint8)[starts]]
     spans = starts[:, None] + np.arange(3)
@@ -280,7 +229,7 @@ def baseline(
     code = static_code(data, song - 1)
     arcs = py_arcs(run.py.roots, run.py.sources) if run.py is not None else {}
     mask = data_mask(data, song - 1, frames, code)
-    return Baseline(data, song, frames, run, _edge_names(code, ()), code, arcs, mask)
+    return Baseline(data, song, frames, run, code.edge_names(), code, arcs, mask)
 
 
 # --- candidate bytes and values ---------------------------------------------
@@ -572,7 +521,7 @@ def same_onset_predicate(
     def predicate(data: bytes, frames: int) -> bool:
         try:
             left = register_grid(data, frames, subtune=song - 1)
-            right = right_grid(make_right(data, song), frames + max_lead)
+            right = right_grid(make_right, data, song, frames + max_lead)
             v = verdict_lead(left, right, max_lead=max_lead)
         except Exception:  # the right side may reject reduced data
             return False
@@ -653,7 +602,7 @@ def _minimise_cli(args, data, make_right) -> dict:
     if register is None:
         start = apply_patch(data, patch or [])
         left = register_grid(start, args.frames, subtune=args.song - 1)
-        right = right_grid(make_right(start, args.song), args.frames + LEAD)
+        right = right_grid(make_right, start, args.song, args.frames + LEAD)
         register = _verdict(left, right, LEAD)["first_reg"]
         if register is None:
             raise SystemExit("the starting input does not diverge")

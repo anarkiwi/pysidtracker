@@ -62,7 +62,12 @@ def subject(spec: str, data: bytes, song: int) -> Optional[PySubject]:
     if spec.startswith("format:"):
         fmt = find_format(data, spec.partition(":")[2])
         return PySubject(lambda: fmt.play(data, song - 1), label=fmt.name)
-    fn = load_render(spec)
+    return as_subject(load_render(spec), data, song)
+
+
+def as_subject(fn: Callable, data: bytes, song: int) -> PySubject:
+    """``fn(data, song)`` as a :class:`~pysidtracker.paths.PySubject`: its own, else
+    one making that player first and fresh ones after."""
     got = fn(data, song)
     if isinstance(got, PySubject):
         return got
@@ -86,6 +91,12 @@ def grid(spec: str, data: bytes, song: int, nframes: int):
             np.asarray(register_grid(data, nframes, subtune=song - 1), np.int16),
             None,
         )
+    return play(subj, nframes)
+
+
+def play(subj: PySubject, nframes: int):
+    """``(grid, starts)`` of a fresh ``subj`` player over ``nframes`` (fewer where it
+    ends), untraced: a ``MemPlayer``'s register file, else its ``cell``s."""
     player, rows = subj.make(), []
     for _ in range(nframes):
         if player.play_frame() is None and not isinstance(player, MemPlayer):
@@ -120,12 +131,14 @@ def pair_dir(work, left: str, right: str) -> Path:
 
 
 def apply_patch(data: bytes, patch: Optional[Sequence] = None) -> bytes:
-    """``data`` with each ``[file_offset, byte]`` of ``patch`` applied."""
+    """``data`` with each ``[file_offset, byte]`` of ``patch`` written (the byte's low
+    8 bits; the last entry for an offset wins)."""
     if not patch:
         return bytes(data)
     out = np.frombuffer(bytes(data), np.uint8).copy()
-    at = np.asarray(patch, np.int64).reshape(-1, 2)
-    out[at[:, 0]] = at[:, 1]
+    at = np.asarray(patch, np.int64).reshape(-1, 2)[::-1]
+    _, last = np.unique(at[:, 0], return_index=True)
+    out[at[last, 0]] = at[last, 1] & 0xFF
     return out.tobytes()
 
 

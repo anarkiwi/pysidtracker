@@ -149,7 +149,7 @@ class _Tracer:
         self._step()
 
 
-def _executed_offsets(
+def executed_offsets(
     image: SidImage,
     *,
     subtune: int = 0,
@@ -327,7 +327,7 @@ def build_signature(
     """
     image = data if isinstance(data, SidImage) else SidImage.from_bytes(bytes(data))
     base, hi = image.load, image.end
-    ordered = _executed_offsets(
+    ordered = executed_offsets(
         image, subtune=subtune, clock=clock, nframes=nframes, max_cycles=max_cycles
     )
     if not ordered:
@@ -621,6 +621,7 @@ __all__ = [
     "build_signature",
     "cluster",
     "diff_signatures",
+    "executed_offsets",
     "format_diff",
     "nearest_ref",
     "variants",

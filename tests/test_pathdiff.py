@@ -292,6 +292,7 @@ def test_patch_turns_an_exact_tune_into_a_case(corpus):
         pd.check_case(entry, resolve=lambda rel, cache_dir: None)
     assert pd.apply_patch(b"abc", [[1, 0x5A]]) == b"aZc"
     assert pd.apply_patch(b"abc") == b"abc"
+    assert pd.apply_patch(b"abc", [[1, 1], [2, 0x163], [1, 0x15A]]) == b"aZc"
 
 
 def test_host_mismatch_drops_rows_from_the_oracle_split(corpus, tmp_path, monkeypatch):

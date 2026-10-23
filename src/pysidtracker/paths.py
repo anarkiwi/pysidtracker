@@ -128,7 +128,7 @@ def _opcf() -> np.ndarray:
     return np.array([OPCODES[op][0] in _CF_MNEMONICS for op in range(256)])
 
 
-class _Code:
+class StaticCode:
     """The static control flow of a post-init memory snapshot's span ``[lo, hi)``.
 
     Descent follows fall-through, both branch arms, ``JMP abs`` and ``JSR`` (and its
@@ -274,6 +274,21 @@ class _Code:
             )
         return f"${pc:04X} {self._dis.instruction_at(pc)[1]}"
 
+    def edge_names(self, edges=()) -> Dict[tuple, str]:
+        """Each static edge and each of ``edges`` (``(src, dst)``, -1: out) to its
+        :func:`cpu_paths` name."""
+        return _ranked(
+            {
+                (s, d): "edge:" + self.edge_digest(s, d)
+                for s, d in self.edges | set(edges)
+            }
+        )
+
+    def edge_label(self, src: int, dst: int) -> str:
+        """``$SRC disassembly -> $DST`` (``out`` for an end outside the span)."""
+        left = self.text(src) if src != _OUT else "out"
+        return f"{left} -> " + (f"${dst:04X}" if dst != _OUT else "out")
+
 
 def _ranked(keys: Dict[tuple, str]) -> Dict[tuple, str]:
     """Each site's key, ``#k`` appended to the k-th (by site order) repeat of a key."""
@@ -286,18 +301,7 @@ def _ranked(keys: Dict[tuple, str]) -> Dict[tuple, str]:
     return out
 
 
-def _edge_names(code: _Code, edges) -> Dict[tuple, str]:
-    return _ranked(
-        {(s, d): "edge:" + code.edge_digest(s, d) for s, d in code.edges | set(edges)}
-    )
-
-
-def _edge_label(code: _Code, src: int, dst: int) -> str:
-    left = code.text(src) if src != _OUT else "out"
-    return f"{left} -> " + (f"${dst:04X}" if dst != _OUT else "out")
-
-
-def _store_names(code: _Code, store_sites) -> List[str]:
+def _store_names(code: StaticCode, store_sites) -> List[str]:
     keys = {
         (r, pc): f"store:{r}:"
         + (_digest(["store", code.prefix(pc)]) if code.inspan(pc) else "out")
@@ -324,7 +328,7 @@ def _booted(data, subtune: int, max_cycles: int):
 
     subject, mpu, mem, play = boot_flat(image, subtune, max_cycles, setup=setup)
     init = image.header.init_address or image.header.real_load_address
-    code = _Code(bytes(subject), lo, hi, entry_labels(image), smc)
+    code = StaticCode(bytes(subject), lo, hi, entry_labels(image), smc)
     return subject, mpu, mem, play, code, (init, play)
 
 
@@ -336,9 +340,15 @@ def cpu_universe(data, *, subtune: int = 0, max_cycles: int = 8_000_000) -> List
     absent, as is a ``#k`` repeat rank that a site found only dynamically would shift;
     an operand only ``play`` rewrites keeps its value.
     """
+    return sorted(set(static_code(data, subtune, max_cycles).edge_names().values()))
+
+
+def static_code(data, subtune: int = 0, max_cycles: int = 8_000_000) -> StaticCode:
+    """The tune's :class:`StaticCode`, explored from ``init`` and ``play`` as ``init``
+    left memory."""
     *_, code, entries = _booted(data, subtune, max_cycles)
     code.explore(entries, entries)
-    return sorted(set(_edge_names(code, ()).values()))
+    return code
 
 
 def cpu_paths(
@@ -424,9 +434,9 @@ def cpu_paths(
 
     code.explore(entries, entries)
     code.explore({d for _, d in edges if d != _OUT}, entries)
-    names_of = _edge_names(code, edges)
+    names_of = code.edge_names(edges)
     names = [names_of[e] for e in edges] + _store_names(code, store_sites)
-    labels = [_edge_label(code, *e) for e in edges] + [
+    labels = [code.edge_label(*e) for e in edges] + [
         (code.text(pc) if code.inspan(pc) else f"${pc:04X}") + f" -> {REG_NAMES[r]}"
         for pc, r in store_sites
     ]
@@ -930,44 +940,51 @@ def _py_trace(side, rows, arcs, stores, frame_reads, roots, sources) -> PathTrac
     )
 
 
+def py_sources(roots: Sequence[str], sources: Optional[Dict[str, str]] = None):
+    """The parsed files under ``roots`` (a root named in ``sources`` is that exec'd
+    text), skipping any coverage.py cannot parse; each has ``arcs`` (its static branch
+    arcs), ``arc_key(src, dst)`` and ``where(line)`` as :func:`py_paths` keys them."""
+    sources = sources or {}
+    for root in roots:
+        if root in sources:
+            files = [(root, sources[root], True)]
+        else:
+            real = os.path.realpath(root)
+            walk = sorted(os.walk(real)) if os.path.isdir(real) else []
+            names = [os.path.join(d, n) for d, _, ns in walk for n in sorted(ns)]
+            paths = [n for n in names if n.endswith(".py")] if walk else [real]
+            files = []
+            for path in paths:
+                with open(path, encoding="utf-8") as fh:
+                    files.append((path, fh.read(), False))
+        for name, text, generated in files:
+            src = _source(name, text, generated)
+            if src is not None:
+                yield src
+
+
 def py_universe(
     roots: Sequence[str], sources: Optional[Dict[str, str]] = None
 ) -> List[str]:
     """Names of every static branch arc in the files under ``roots``, keyed as
     :func:`py_paths` keys them; a root named in ``sources`` is that exec'd text."""
-    sources = sources or {}
-    files: List[Tuple[str, str, bool]] = []
-    for root in roots:
-        if root in sources:
-            files.append((root, sources[root], True))
-            continue
-        real = os.path.realpath(root)
-        paths = (
-            [
-                os.path.join(d, n)
-                for d, _, names in sorted(os.walk(real))
-                for n in sorted(names)
-                if n.endswith(".py")
-            ]
-            if os.path.isdir(real)
-            else [real]
-        )
-        for path in paths:
-            with open(path, encoding="utf-8") as fh:
-                files.append((path, fh.read(), False))
-    out = set()
-    for name, text, generated in files:
-        src = _source(name, text, generated)
-        if src is not None:
-            out.update(src.arc_key(a, b if b > 0 else _EXIT) for a, b in src.arcs)
-    return sorted(out)
+    return sorted(
+        {
+            src.arc_key(a, b if b > 0 else _EXIT)
+            for src in py_sources(roots, sources)
+            for a, b in src.arcs
+        }
+    )
 
 
 __all__ = [
     "PathTrace",
     "PySubject",
+    "StaticCode",
     "cpu_paths",
     "cpu_universe",
     "py_paths",
+    "py_sources",
     "py_universe",
+    "static_code",
 ]

@@ -14,6 +14,16 @@ python -m pysidtracker.pathdiff xfails --work .hvsc-survey \
     --right scripts/oracle_hvsc.py:player --manifest tests/pathdiff.json --top 10
 ```
 
+Inputs the corpus lacks (a branch outcome no tune reaches, a smaller reproducer
+of a case) come from `pathfuzz` ([pathfuzz.md](pathfuzz.md)), on one tune with the
+same `--right` specs; its patches are `xfails`' `patch` field:
+
+```bash
+python -m pysidtracker.pathfuzz gaps     tune.sid --right SPEC [--song N] [--frames N]
+python -m pysidtracker.pathfuzz exercise tune.sid --right SPEC [--side 6502|python] [--budget N]
+python -m pysidtracker.pathfuzz minimise tune.sid --right SPEC [--patch mutants.json#k]
+```
+
 ## Sides
 
 `--left` (default `6502`) is the reference, `--right` the player under test.
