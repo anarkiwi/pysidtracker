@@ -24,6 +24,7 @@ fetch-don't-commit contract the HVSC `.sid` and C64 ROM fixtures use.
 .tunecache/native/
   html/rel_<release>.html          scraped release page (resume cache)
   dl/<release>/<did>_<file>        every downloaded file
+  media/<release>/<did>_<file>/... a pinned file found inside release media
   SHA256SUMS.txt                   "sha256  dl/<release>/<file>  <source-url>"
 ```
 
@@ -34,6 +35,11 @@ fetch-don't-commit contract the HVSC `.sid` and C64 ROM fixtures use.
   `dl/<release>/<did>_<file>`, and append its `sha256  path  url` to
   `SHA256SUMS.txt`. Cached pages/files are reused unless `force`; a missing file
   is reported and skipped, not fatal. Returns one `SumEntry` per file.
+- `index_media(entries, wanted, cache_dir)` — walk those downloads through any
+  zip/gzip, d64/d71/d81, t64 and p00 nesting (`iter_prgs`) and pin each file whose
+  SHA-256 is in `wanted` under `media/`, indexed with its download's URL, so a
+  manifest can name an editor file that ships on a release disk.
+  `fixtures fetch` does this for every manifest hash the downloads lack.
 - `fixture(sha256, cache_dir)` — the cached file for a SHA-256 (re-digested for
   integrity), or `None` when absent.
 - `make_native_fixtures(natives, cache_dir)` — a pytest factory: parametrizes

@@ -229,3 +229,7 @@ __marimo__/
 
 # feature-branch worktrees (never committed)
 .worktrees/
+
+# process core dumps
+core.[0-9]*
+/core

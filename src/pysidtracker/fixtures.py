@@ -19,6 +19,7 @@ import urllib.request
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 
+from .d64 import iter_prgs
 from .errors import SidError
 from .testing import _atomic_write, default_tune_cache
 
@@ -127,11 +128,6 @@ def fetch_csdb(
         mirror: CSDB base URL; retries: transient-failure attempts; force: refetch.
     """
     cache_dir = Path(cache_dir)
-    sums = cache_dir / SUMS_NAME
-    known = (
-        set(sums.read_text(encoding="utf-8").splitlines()) if sums.exists() else set()
-    )
-    new_lines: List[str] = []
     entries: List[SumEntry] = []
     for rid in release_ids:
         rid = str(rid)
@@ -160,17 +156,52 @@ def fetch_csdb(
                 _atomic_write(target, data)
                 print(f"  {rid}/{target.name}")
             sha = _hex(target.read_bytes())
-            rel = f"dl/{rid}/{target.name}"
-            line = f"{sha}  {rel}  {url}"
-            if line not in known:
-                known.add(line)
-                new_lines.append(line)
-            entries.append(SumEntry(sha, rel, url))
-    if new_lines:
+            entries.append(SumEntry(sha, f"dl/{rid}/{target.name}", url))
+    _append_sums(cache_dir, entries)
+    return entries
+
+
+def _append_sums(cache_dir, entries) -> None:
+    """Append the ``entries`` not yet in the cache's ``SHA256SUMS.txt``."""
+    sums = sums_path(cache_dir)
+    known = (
+        set(sums.read_text(encoding="utf-8").splitlines()) if sums.exists() else set()
+    )
+    lines = dict.fromkeys(f"{e.sha256}  {e.relpath}  {e.url}" for e in entries)
+    fresh = [line for line in lines if line not in known]
+    if fresh:
         sums.parent.mkdir(parents=True, exist_ok=True)
         with sums.open("a", encoding="utf-8") as fh:
-            fh.write("\n".join(new_lines) + "\n")
-    return entries
+            fh.write("\n".join(fresh) + "\n")
+
+
+def index_media(entries, wanted, cache_dir) -> List[SumEntry]:
+    """Pin the files inside downloaded release media whose SHA-256 is ``wanted``.
+
+    Each ``entries`` download (:func:`fetch_csdb`) is walked through any nesting of
+    zip/gzip, d64/d71/d81, t64 and p00 (:func:`~pysidtracker.d64.iter_prgs`, an
+    unreadable member skipped); a wanted file is written to
+    ``media/<release>/<download>/<member path>`` and indexed under its download's
+    URL, so a manifest can pin an editor file that ships on a release disk.
+    """
+    cache_dir, wanted = Path(cache_dir), set(wanted)
+    found: List[SumEntry] = []
+    for entry in entries:
+        path = cache_dir / entry.relpath
+        if not wanted or not path.is_file():
+            continue
+        release = entry.relpath.split("/")[1]
+        for leaf, data in iter_prgs(path.name, path.read_bytes(), lambda *_: None):
+            sha = _hex(data)
+            if sha not in wanted:
+                continue
+            safe = "/".join(re.sub(r"[^\w.+-]+", "_", p) for p in leaf.split("/"))
+            rel = f"media/{release}/{safe}"
+            _atomic_write(cache_dir / rel, data)
+            found.append(SumEntry(sha, rel, entry.url))
+            wanted.discard(sha)
+    _append_sums(cache_dir, found)
+    return found
 
 
 _SUMS_LINE = re.compile(
@@ -255,7 +286,8 @@ def manifest_from_cache(cache_dir, descriptions=None) -> List[NativeFixture]:
     """Build committed-manifest rows from a warm cache's ``SHA256SUMS.txt``.
 
     The release id and file name are recovered from each ``dl/<rid>/<file>`` path
-    (the ``<did>_`` prefix stripped); ``descriptions`` maps a hash to a description.
+    (the ``<did>_`` prefix stripped) or ``media/<rid>/.../<file>`` member path;
+    ``descriptions`` maps a hash to a description.
     """
     descriptions = descriptions or {}
     out: List[NativeFixture] = []
@@ -263,6 +295,8 @@ def manifest_from_cache(cache_dir, descriptions=None) -> List[NativeFixture]:
         parts = rel.split("/")
         if len(parts) >= 3 and parts[0] == "dl":
             release_id, name = parts[1], re.sub(r"^\d+_", "", parts[-1])
+        elif len(parts) >= 3 and parts[0] == "media":
+            release_id, name = parts[1], parts[-1]
         else:
             release_id, name = "", parts[-1] if parts else rel
         out.append(NativeFixture(release_id, name, sha, descriptions.get(sha, "")))
@@ -366,7 +400,12 @@ def _cmd_fetch(args) -> int:
     if not release_ids:
         print(f"{args.manifest} declares no release ids; nothing to fetch")
         return 0
-    fetch_csdb(release_ids, cache, force=args.force)
+    downloads = fetch_csdb(release_ids, cache, force=args.force)
+    index_media(
+        downloads,
+        {e.sha256 for e in entries if fixture(e.sha256, cache) is None},
+        cache,
+    )
     return _report(entries, cache)
 
 
@@ -390,6 +429,7 @@ __all__ = [
     "default_native_cache",
     "fetch_csdb",
     "fixture",
+    "index_media",
     "load_manifest",
     "make_native_fixtures",
     "main",
