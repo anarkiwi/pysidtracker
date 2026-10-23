@@ -13,7 +13,7 @@ from pysidtracker import pathdiff as pd
 from pysidtracker import survey
 from pysidtracker.asm6502 import assemble
 from pysidtracker.gridcmp import LEAD
-from pysidtracker.oracle import register_grid
+from pysidtracker.oracle import SidtraceRow, register_grid, sidtrace_grid
 from pysidtracker.paths import PySubject
 
 from .helpers import DATA_OFFSET, build_psid
@@ -438,3 +438,27 @@ def test_branch_bug_keys_on_the_first_parting(corpus, tmp_path):
         pd.build(hvsc, work / "tunes.csv", work, pd.CPU, spec, jobs=1)
     assert pd.build(hvsc, work / "tunes.csv", work, pd.CPU, spec, limit=1, force=True)
     assert json.loads((pair / "meta.json").read_text())["format"] == pd.FORMAT
+
+
+def test_oracle_reference_frames_like_the_survey(monkeypatch, tmp_path):
+    """A CIA play call skipped once: cadence framing leaves a gap call that one frame
+    per raise would drop, shifting every later frame by one call."""
+    raises = [0, 2457, 4914, 9828, 12285]
+    rows = []
+    for i, at in enumerate(raises):
+        rows.append(SidtraceRow(at, None, None, 0, None, None, "cia_irq"))
+        rows.append(SidtraceRow(at + 10, None, None, 10, 0, 0, i + 1))
+    calls = []
+
+    def cached(path, csv_path, **kw):
+        calls.append((path, csv_path, kw))
+        return rows
+
+    monkeypatch.setattr(pd, "cached_sidtrace", cached)
+    grid = pd.oracle_reference(tmp_path)(tmp_path / "t.sid", 2, 6)
+    assert np.array_equal(grid, survey.oracle_frames(rows, nframes=6)[1])
+    assert grid[:, 0].tolist() == [1, 2, 3, 3, 4, 5]
+    assert sidtrace_grid(rows)[3][0] == 4
+    assert calls == [
+        (tmp_path / "t.sid", tmp_path / "t_2.csv.zst", dict(seconds=2, song=2))
+    ]

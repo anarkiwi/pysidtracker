@@ -29,7 +29,7 @@ from . import faultloc as fl
 from .formats import find_format
 from .gridcmp import GATE_COLS, LEAD, NREGS, verdict_lead, verdict_onset
 from .jobs import deadline, imap
-from .oracle import register_grid
+from .oracle import cached_sidtrace, register_grid
 from .paths import PathTrace, PySubject, cpu_paths, py_paths
 from .player import MemPlayer
 from .registers import PW_HI_REGS
@@ -39,7 +39,6 @@ from .testing import (
     ChecksumMismatch,
     TuneFetchError,
     default_cache,
-    oracle_grid,
     resolve_tune,
 )
 from .whydiff import Divergence, explain_cell, explain_divergence, python_side
@@ -768,15 +767,22 @@ def case_frames(rec: dict, mode: str) -> int:
     return int(rec["onset"]) + 1 + (LEAD if mode == "lead" else 0)
 
 
-def _oracle_reference(oracle_cache) -> Callable:
+def oracle_reference(oracle_cache=None) -> Callable:
+    """``reference(path, song, frames)``: the sidtrace oracle's grid of 1-based ``song``,
+    its trace cached as ``<stem>_<song>.csv.zst`` in ``oracle_cache`` (default
+    ``default_cache("csv")``) and framed as the survey and ``build`` frame it
+    (:func:`~pysidtracker.survey.oracle_frames`)."""
+    cache = Path(default_cache("csv") if oracle_cache is None else oracle_cache)
+
     def reference(path, song, frames):
-        return oracle_grid(
+        path = Path(path)
+        rows = cached_sidtrace(
             path,
-            oracle_cache=oracle_cache,
-            frames=frames,
-            song=song,
+            cache / f"{path.stem}_{song}.csv.zst",
             seconds=frames // 50 + 2,
+            song=song,
         )
+        return oracle_frames(rows, nframes=frames)[1]
 
     return reference
 
@@ -809,7 +815,7 @@ def check_case(
     song, frames = int(entry["song"]), int(entry["frames"])
     ref = None
     if CPU in (entry["left"], entry["right"]):
-        reference = reference or _oracle_reference(oracle_cache)
+        reference = reference or oracle_reference(oracle_cache)
         with tempfile.TemporaryDirectory() as tmp:
             tune = Path(path)
             if entry.get("patch"):

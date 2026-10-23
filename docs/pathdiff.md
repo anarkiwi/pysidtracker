@@ -196,8 +196,9 @@ def test_pathdiff(case):
 Each case is `xfail(strict=True, raises=AssertionError)`: it fails with the
 whydiff explanation until the fix lands, then passes and the strict xfail turns
 the run red until the case is pruned. A 6502 pair compares the other side with
-the sidtrace oracle grid (`testing.oracle_grid`, the patched tune written to a
-temporary file) under the lead criterion; a Python pair compares both sides under
+the sidtrace oracle grid (`oracle_reference`: the trace framed by
+`survey.oracle_frames` at its play cadence, as the survey and `build` frame it; the
+patched tune written to a temporary file) under the lead criterion; a Python pair compares both sides under
 the case's `compare`. `check_case(..., reference=fn)` replaces the oracle with
 `fn(path, song, frames)`, and `resolve=` the HVSC lookup (`testing.resolve_tune`).
 Tunes (`hvsc_cache`) and oracle traces (`oracle_cache`) default to the shared
