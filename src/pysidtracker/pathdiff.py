@@ -415,7 +415,6 @@ def build(
     vocab = _Vocab(pair / "vocab.txt")
     rows = select(work, tunes_csv, verdicts, limit)
     todo = [r for r in rows if force or not _tune_path(pair, r["key"]).exists()]
-    ocache = Path(work) / "oracle"
     tasks = [
         (
             str(hvsc),
@@ -424,7 +423,7 @@ def build(
             right,
             mode,
             frames_for(r, max_frames),
-            str(ocache / f"{r['key']}.csv.zst"),
+            str(_survey_oracle(work, r["key"])),
             timeout,
         )
         for r in todo
@@ -448,6 +447,11 @@ def build(
 
 def _tune_path(pair: Path, key: str) -> Path:
     return pair / "tunes" / f"{key}.npz"
+
+
+def _survey_oracle(work, key: str) -> Path:
+    """The survey's cached sidtrace oracle trace of ``key``."""
+    return Path(work) / "oracle" / f"{key}.csv.zst"
 
 
 def _outcome(rec: dict) -> str:

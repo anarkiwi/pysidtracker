@@ -387,34 +387,20 @@ def partings(spec: Spectrum, corr: Correspondence) -> List[Optional[Parting]]:
     use = (corr.classes >= 0) & ~store
     out: List[Optional[Parting]] = []
     for r in range(nf):
-        lo, hi = order.indptr[r], order.indptr[r + 1]
-        col, rank = order.indices[lo:hi], order.data[lo:hi]
-        keep = use[col]
-        col, rank = col[keep], rank[keep]
+        at = slice(order.indptr[r], order.indptr[r + 1])
+        col, rank = order.indices[at], order.data[at]
+        col = col[use[col]][np.argsort(rank[use[col]], kind="stable")]
         seqs = [col[side[col] == s] for s in (1, 2)]
-        seqs = [
-            c[np.argsort(rank[side[col] == s], kind="stable")]
-            for c, s in zip(seqs, (1, 2))
-        ]
-        cls, local = np.unique(corr.classes[np.concatenate(seqs)], return_inverse=True)
-        a, b = local[: len(seqs[0])], local[len(seqs[0]) :]
-        ina, inb = (np.isin(np.arange(len(cls)), x) for x in (a, b))
-        got = _part(a, b, ina, inb) if len(col) else None
+        cls, local = np.unique(corr.classes[col], return_inverse=True)
+        runs = np.zeros((2, len(cls)), bool)
+        runs[side[col] - 1, local] = True
+        got = _part(*(local[side[col] == s] for s in (1, 2)), *runs)
         if got is None:
             out.append(None)
             continue
+        names = [[spec.names[c] for c in seq] + [""] for seq in seqs]
         i, j, ci, cj = got
-
-        def name(seq, k):
-            return spec.names[seq[k]] if 0 <= k < len(seq) else ""
-
-        out.append(
-            Parting(
-                name(seqs[0], i),
-                name(seqs[1], j),
-                (name(seqs[0], ci), name(seqs[1], cj)),
-            )
-        )
+        out.append(Parting(names[0][i], names[1][j], (names[0][ci], names[1][cj])))
     return out
 
 
