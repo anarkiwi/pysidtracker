@@ -14,7 +14,7 @@ import abc
 from typing import Iterator, List, Optional, Tuple
 
 from .poweron import place_tune, power_on_ram
-from .registers import SID_BASE, SID_REG_COUNT
+from .registers import PW_HI_REGS, SID_BASE, SID_REG_COUNT
 
 
 class MemPlayer(abc.ABC):
@@ -32,6 +32,10 @@ class MemPlayer(abc.ABC):
 
     SID_BASE = SID_BASE
     REG_COUNT = SID_REG_COUNT
+    # True: :meth:`snapshot` keeps only the low nibble of the pulse-width-high
+    # registers (:data:`~pysidtracker.registers.PW_HI_REGS`), the bits the SID
+    # uses and the reference-grid convention.
+    MASK_PW_HI = False
 
     def __init__(self, image: bytes, load: int, subtune: int = 0):
         self._mem = power_on_ram()
@@ -62,9 +66,16 @@ class MemPlayer(abc.ABC):
         """Advance one play call, writing this frame's SID registers to memory."""
 
     def snapshot(self) -> List[int]:
-        """The current SID register file (``$D400..$D400+REG_COUNT``)."""
+        """The current SID register file (``$D400..$D400+REG_COUNT``).
+
+        Pulse-width highs are nibble-masked when :attr:`MASK_PW_HI` is set.
+        """
         base = self.SID_BASE
-        return [self._mem[base + i] for i in range(self.REG_COUNT)]
+        regs = list(self._mem[base : base + self.REG_COUNT])
+        if self.MASK_PW_HI:
+            for register in PW_HI_REGS:
+                regs[register] &= 0x0F
+        return regs
 
     def play_frame(self) -> List[Tuple[int, int]]:
         """Run one frame; return its ``(reg, val)`` writes.

@@ -133,7 +133,9 @@ API.
 - `mos6502` — shared 6502 primitives: `OP_LEN`, opcode-class sets, `s8` / `adc`
   / `sbc`, `SidWriteCapturingMemory`, `walk_until`.
 - `MemPlayer` — per-frame register-diff player scaffold; subclasses implement
-  `_init` / `_frame`. `register_writes_from_player` drives it to a reglog.
+  `_init` / `_frame`; `MASK_PW_HI = True` nibble-masks the pulse-width-high
+  registers in `snapshot` (as `EmuPlayer` does) to match the oracle grid.
+  `register_writes_from_player` drives it to a reglog.
 - `notefreq` — `NoteFreqTable`, computed PAL/NTSC pitch tables, and
   `locate_note_freq` (find hi/lo tables from paired absolute-indexed reads).
 - `make_package_errors` — per-package error hierarchy factory whose `*ParseError`
