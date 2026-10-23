@@ -81,7 +81,7 @@ mode, HVSC root, prefixes), `vocab.txt` (the pair's feature names, line `i` nami
 id `i`) and `tunes/<key>.npz` per subtune: its distinct frames as CSR over feature
 ids with their frame counts (the onset row last), the features' texts in this tune,
 each feature's first-occurrence `rank` on its side in the onset frame (-1: not run
-there), its `relevant` features and each feature's `decision` (below), the onset,
+there), the `relevant` features (below), the onset,
 lead and first diverging register, each side's last store to it, and `host`. A failed subtune's file holds its error. A cache of another `format`
 is refused by `build` and `rank` until rebuilt with `--force`.
 
@@ -131,21 +131,20 @@ tune, the features the diverging register depends on (`pysidtracker.relevance`):
   from `last_change`'s frame when it stored none), as whydiff does: jennings'
   `cpu_slice` over the `cpu_history` dataflow, `PyTrace`'s slice on a Python side;
 - each slice step also keeps its dynamic control parent: the innermost branch whose
-  region, up to its immediate post-dominator in the same call, it ran in. Post-dominators
-  (`networkx.immediate_dominators` on the reversed graph) are over the static CFG
-  (`StaticCode.cfg` and both arms of each branch; coverage.py's line arcs of each
-  traced file, `sources` for exec'd code) and the executed edges, a call continuing at
-  its return site and a return leaving to the exit. A kept branch keeps its
-  condition's inputs, so the slice closes over data and control dependence;
-- the edge each kept step took is a relevant feature, keyed as `paths` keys it.
+  region, up to its immediate post-dominator in the same call, it ran in.
+  Post-dominators (`networkx.immediate_dominators` on the reversed graph) are over
+  the static CFG (`StaticCode.cfg` and both arms of each branch; coverage.py's line
+  arcs of each traced file, `sources` for exec'd code) and the executed edges, a call
+  continuing at its return site and a return leaving to the exit. A kept branch
+  keeps its condition's inputs, so the slice closes over data and control dependence;
+- a frame that hands its register file over in one bulk store
+  (`mem[a:b] = bytes(f(v) for v in regs)`) is followed per item: the store's item i
+  is the generator's yield i, which depends on the list item its iterator drew;
+- the edge each kept step took, keyed as `paths` keys it, is a relevant feature.
 
-Each edge feature also carries its `decision`, the branch it leaves (`dec:` and its
-source block or line). A departure is relevant when its decision is that of a
-relevant feature of either side, or of a partner of one: a side that never stored the
-register (silent) has no slice of its own, and the other side's slice names the
-decision through the correspondence. Where some departure of a tune is relevant,
-`partings` takes the earliest relevant one per side (`Parting.relevant`) and a side
-with none gives no `first` key; otherwise every departure counts.
+Where some departure of a tune, on either side, is relevant, `partings` takes the
+earliest relevant one per side (`Parting.relevant`), and a side with none gives no
+`first` key; otherwise every departure counts.
 
 Each side's departure is a candidate, `("first", left, "")` and
 `("first", "", right)`, so one root cause yields one key in every tune even where
@@ -157,10 +156,9 @@ has a running partner, or a cache without `rank`, falls back to the set-based
 whose partner the other side also runs for another voice in the same frame is not
 a departure.
 
-The slice covers the onset frame only: a register a play call copies from a buffer
-an earlier call computed (a ghost register file) depends on that copy alone, and its
-tune falls back to every departure. `PyTrace` follows scalars, so a frame that hands
-its register file to `_mem` in one bulk copy leaves only the other side's slice.
+The slice covers one frame: a register a play call copies from a buffer an earlier
+call computed (a ghost register file) depends on that copy alone, and if no
+departure is in it the tune falls back to every departure.
 
 ## `xfails`
 
