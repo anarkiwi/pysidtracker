@@ -92,15 +92,20 @@ def default_cache(kind: str = "", root=None) -> Path:
     return default_tune_cache(root) / kind
 
 
+# HVSC's top-level directories: every tune relpath starts with one.
+HVSC_ROOTS = ("DEMOS", "GAMES", "MUSICIANS")
+
+
 def _is_relpath(text: str) -> bool:
-    return text.endswith(".sid") and "/" in text.strip("/")
+    root, _, rest = text.lstrip("/").partition("/")
+    return root in HVSC_ROOTS and rest.endswith(".sid")
 
 
 def gather_tune_relpaths(paths: Iterable) -> List[str]:
     """Every ``*.sid`` relpath named by the files under ``paths``.
 
-    A relpath has a directory (HVSC tunes all do), so a bare ``".sid"`` f-string
-    fragment is not one. A Python file is parsed with :mod:`ast` (no import) for every
+    A relpath starts with one of :data:`HVSC_ROOTS`, so a bare ``".sid"`` f-string
+    fragment or a test's made-up path is not one. A Python file is parsed with :mod:`ast` (no import) for every
     such string constant; a ``.json`` file (a pathdiff manifest) for its cases'
     ``relpath`` fields. Any other file given directly is a manifest of words.
     """
