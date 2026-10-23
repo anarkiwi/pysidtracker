@@ -29,7 +29,6 @@ FAKE = {
 def _no_local(monkeypatch):
     monkeypatch.delenv("C64_ROMS", raising=False)
     monkeypatch.delenv("C64_ROM_MIRROR", raising=False)
-    monkeypatch.delenv("PYSID_ROMCACHE", raising=False)
 
 
 @pytest.fixture
@@ -56,15 +55,15 @@ def _offline(monkeypatch):
     monkeypatch.setattr(vm_roms, "_download", boom)
 
 
-def test_default_rom_cache_env_and_default(monkeypatch, tmp_path):
+def test_default_rom_cache_nests_under_the_tune_cache(monkeypatch, tmp_path):
     assert default_rom_cache(tmp_path) == tmp_path / ".tunecache" / "roms"
-    monkeypatch.setenv("PYSID_ROMCACHE", str(tmp_path / "r"))
-    assert default_rom_cache(tmp_path) == tmp_path / "r"
+    monkeypatch.setenv("PYSID_TUNECACHE", str(tmp_path / "t"))
+    assert default_rom_cache(tmp_path) == tmp_path / "t" / "roms"
 
 
 def test_fetches_default_to_the_tune_cache(served, monkeypatch, tmp_path):
-    monkeypatch.setenv("PYSID_ROMCACHE", str(tmp_path))
-    assert fetch_rom("kernal") == tmp_path / ROMS["kernal"].filename
+    monkeypatch.setenv("PYSID_TUNECACHE", str(tmp_path))
+    assert fetch_rom("kernal") == tmp_path / "roms" / ROMS["kernal"].filename
     assert fetch_rom("kernal", cache_dir=tmp_path / "x").parent == tmp_path / "x"
     assert len(served) == 2
 

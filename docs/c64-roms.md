@@ -10,8 +10,8 @@ interpreter has to run, and unclean rips call KERNAL routines from their init.
 
 The C64 ROMs are **copyright Commodore**. They are **never committed** to this
 repository in any form — no bytes, no base64, no test fixtures, no `dist/`.
-They are fetched on demand into `.tunecache/roms/` (gitignored, `$PYSID_ROMCACHE`
-or `$C64_ROMS` override it) and every fetch is verified by SHA-256 before it is
+They are fetched on demand into `.tunecache/roms/` (gitignored,
+[caching.md](caching.md); `$C64_ROMS` names a local ROM directory) and every fetch is verified by SHA-256 before it is
 written; a mismatch raises `RomFetchError` and nothing is cached. This is the same
 contract the HVSC `.sid` tune fixtures use.
 

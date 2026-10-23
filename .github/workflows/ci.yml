@@ -43,23 +43,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      - name: Pull sidtrace oracle image
-        id: image
-        run: |
-          docker pull anarkiwi/sidtrace:latest
-          digest=$(docker inspect --format '{{index .RepoDigests 0}}' anarkiwi/sidtrace:latest)
-          echo "digest=${digest##*@}" >> "$GITHUB_OUTPUT"
-      - name: Cache HVSC tunes
-        uses: actions/cache@v6
+      - name: Cache tunes and oracle traces
+        uses: ./.github/actions/cache
         with:
-          path: .oracle-cache/hvsc
-          key: hvsc-${{ hashFiles('tests/test_oracle_hvsc.py') }}
-          restore-keys: hvsc-
-      - name: Cache oracle CSVs
-        uses: actions/cache@v6
-        with:
-          path: .oracle-cache/csv
-          key: oracle-csv-${{ steps.image.outputs.digest }}-${{ hashFiles('tests/test_oracle_hvsc.py') }}
+          key: ${{ hashFiles('tests/test_oracle_hvsc.py', 'tests/test_irqhost_oracle.py') }}
+          sidtrace: "true"
+          tunes: tests/test_oracle_hvsc.py tests/test_irqhost_oracle.py
       - name: Oracle comparison (never skipped)
         run: pytest -m oracle -n auto
 
@@ -104,10 +93,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Cache C64 ROMs
-        uses: actions/cache@v6
+        uses: ./.github/actions/cache
         with:
-          path: .tunecache/roms
-          key: c64-roms-${{ hashFiles('src/pysidtracker/roms.py') }}
+          key: ${{ hashFiles('src/pysidtracker/roms.py') }}
       - name: Real ROM fetch + checksum (never skipped)
         run: pytest -m roms -o addopts='' -n auto
 

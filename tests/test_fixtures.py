@@ -12,10 +12,9 @@ import zipfile
 
 import pytest
 
-from pysidtracker import fixtures
+from pysidtracker import fixtures, testing
 from pysidtracker.fixtures import (
     DEFAULT_CSDB,
-    RATE_LIMIT,
     SUMS_NAME,
     USER_AGENT,
     CsdbFetchError,
@@ -59,8 +58,8 @@ def _page_html(dids):
 
 @pytest.fixture(autouse=True)
 def _no_env(monkeypatch):
-    monkeypatch.delenv("PYSID_NATIVECACHE", raising=False)
     monkeypatch.delenv("PYSID_TUNECACHE", raising=False)
+    monkeypatch.setattr(testing, "HOST_INTERVAL", {})
 
 
 @pytest.fixture
@@ -102,33 +101,27 @@ class _FakeResp:
 def test_constants():
     assert DEFAULT_CSDB == "https://csdb.dk"
     assert USER_AGENT.startswith("pysidtracker/")
-    assert RATE_LIMIT > 0 and 0 < RATE_LIMIT < 5
     assert SUMS_NAME == "SHA256SUMS.txt"
 
 
-def test_default_native_cache_default_and_env(monkeypatch, tmp_path):
-    monkeypatch.delenv("PYSID_TUNECACHE", raising=False)
+def test_default_native_cache_nests_under_the_tune_cache(monkeypatch, tmp_path):
     assert default_native_cache(tmp_path) == tmp_path / ".tunecache" / "native"
-    monkeypatch.setenv("PYSID_NATIVECACHE", str(tmp_path / "nc"))
-    assert default_native_cache(tmp_path) == tmp_path / "nc"
-    # It nests under the shared tune cache, like the C64 ROMs.
-    monkeypatch.delenv("PYSID_NATIVECACHE", raising=False)
     monkeypatch.setenv("PYSID_TUNECACHE", str(tmp_path / "tc"))
     assert default_native_cache(tmp_path) == tmp_path / "tc" / "native"
 
 
 @pytest.fixture
 def _no_sleep(monkeypatch):
-    monkeypatch.setattr(fixtures.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(testing.time, "sleep", lambda *_: None)
 
 
 def test_http_get_success_returns_final_url_and_bytes(monkeypatch):
     monkeypatch.setattr(
-        fixtures.urllib.request,
+        testing.urllib.request,
         "urlopen",
         lambda *a, **k: _FakeResp(b"blob", "https://csdb.dk/final.bin"),
     )
-    url, data = _http_get("https://csdb.dk/release/download.php?id=1", rate_limit=0)
+    url, data = _http_get("https://csdb.dk/release/download.php?id=1")
     assert data == b"blob" and url == "https://csdb.dk/final.bin"
 
 
@@ -139,28 +132,41 @@ def test_http_get_sends_user_agent(monkeypatch):
         seen["ua"] = req.get_header("User-agent")
         return _FakeResp(b"b", req.full_url)
 
-    monkeypatch.setattr(fixtures.urllib.request, "urlopen", fake)
-    _http_get("https://csdb.dk/x", rate_limit=0)
+    monkeypatch.setattr(testing.urllib.request, "urlopen", fake)
+    _http_get("https://csdb.dk/x")
     assert seen["ua"] == USER_AGENT
 
 
-def test_http_get_is_polite(_no_sleep, monkeypatch):
+def test_http_get_is_throttled_per_host(monkeypatch, tmp_path):
+    monkeypatch.setattr(testing.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(testing, "HOST_INTERVAL", {"csdb.dk": 60.0})
     sleeps = []
-    monkeypatch.setattr(fixtures.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(testing.time, "sleep", sleeps.append)
     monkeypatch.setattr(
-        fixtures.urllib.request, "urlopen", lambda *a, **k: _FakeResp(b"b", "u")
+        testing.urllib.request, "urlopen", lambda *a, **k: _FakeResp(b"b", "u")
     )
     _http_get("https://csdb.dk/x", retries=1)
-    assert RATE_LIMIT in sleeps
+    _http_get("https://csdb.dk/y", retries=1)
+    assert sleeps[-1] > 59
+
+
+def test_http_get_retries_an_empty_body(_no_sleep, monkeypatch):
+    replies = [b"", b"b"]
+    monkeypatch.setattr(
+        testing.urllib.request,
+        "urlopen",
+        lambda *a, **k: _FakeResp(replies.pop(0), "u"),
+    )
+    assert _http_get("https://csdb.dk/x") == ("u", b"b")
 
 
 def test_http_get_404_raises(monkeypatch):
     def fake(*_a, **_k):
         raise urllib.error.HTTPError("u", 404, "nf", {}, None)
 
-    monkeypatch.setattr(fixtures.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(testing.urllib.request, "urlopen", fake)
     with pytest.raises(CsdbFetchError, match="not found"):
-        _http_get("https://csdb.dk/x", retries=1, rate_limit=0)
+        _http_get("https://csdb.dk/x", retries=1)
 
 
 def test_http_get_retries_then_fails(monkeypatch):
@@ -170,10 +176,10 @@ def test_http_get_retries_then_fails(monkeypatch):
         attempts.append(1)
         raise urllib.error.URLError("down")
 
-    monkeypatch.setattr(fixtures.urllib.request, "urlopen", fake)
-    monkeypatch.setattr(fixtures.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(testing.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(testing.time, "sleep", lambda *_: None)
     with pytest.raises(CsdbFetchError, match="unreachable"):
-        _http_get("https://csdb.dk/x", retries=3, rate_limit=0)
+        _http_get("https://csdb.dk/x", retries=3)
     assert len(attempts) == 3
 
 

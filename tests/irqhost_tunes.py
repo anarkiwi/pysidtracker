@@ -662,7 +662,7 @@ def fixture(name: str) -> Path:
     return FIXTURES / f"{name}.csv.zst"
 
 
-def record(names=None, work=Path(".oracle-cache/irqhost-fixtures")) -> None:
+def record(names=None, work=None) -> None:
     """Trace each tune under sidtrace and keep its rows up to FIXTURE_CYCLES."""
     import os
 
@@ -670,6 +670,9 @@ def record(names=None, work=Path(".oracle-cache/irqhost-fixtures")) -> None:
 
     from pysidtracker.irqhost import boot_cycle
     from pysidtracker.oracle import SIDTRACE_COLUMNS, read_sidtrace, run_sidtrace
+    from pysidtracker.testing import default_cache
+
+    work = Path(work) if work is not None else default_cache("csv") / "irqhost-fixtures"
 
     for name in names or TUNES:
         work.mkdir(parents=True, exist_ok=True)

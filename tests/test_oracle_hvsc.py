@@ -5,16 +5,9 @@ suite excludes them (a CI job runs ``pytest -m oracle``) and an unavailable
 tune or render fails rather than skips. ``make_oracle_fixtures`` reuses the harness.
 """
 
-import os
-from pathlib import Path
-
 import pytest
 
 from pysidtracker import make_oracle_fixtures, register_grid
-
-# Cache under the workspace (a Docker-daemon-visible path, and what CI persists
-# via actions/cache). ``$PYSIDTRACKER_ORACLE_CACHE`` overrides the location.
-_CACHE = Path(os.environ.get("PYSIDTRACKER_ORACLE_CACHE", ".oracle-cache"))
 
 # HVSC tunes verified to render byte-exactly against the deterministic oracle
 # with the base jennings renderer. NMOS illegal opcodes are enabled (harmless for
@@ -36,8 +29,6 @@ def _render(data, nframes):
 
 tune_id, oracle_match = make_oracle_fixtures(
     TUNES,
-    hvsc_cache=_CACHE / "hvsc",
-    oracle_cache=_CACHE / "csv",
     render=_render,
     frames=250,
 )

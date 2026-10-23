@@ -219,6 +219,7 @@ from .testing import (
     TuneFetchError,
     assert_matches,
     assert_oracle_match,
+    default_cache,
     default_tune_cache,
     fetch_archive_member,
     fetch_disk,
@@ -244,7 +245,7 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.26.0"
+__version__ = "0.30.0"
 
 __all__ = [
     "AudioUnavailable",
@@ -359,6 +360,7 @@ __all__ = [
     "decode_cstr",
     "default_device",
     "default_rom_cache",
+    "default_cache",
     "default_tune_cache",
     "detect_playroutine",
     "disassemble",

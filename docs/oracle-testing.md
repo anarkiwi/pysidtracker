@@ -63,12 +63,7 @@ TUNES = {"demo": "MUSICIANS/X/Author/Demo.sid"}
 def render(data, nframes):
     return MyPlayer(data).render_grid(nframes)   # a MemPlayer subclass
 
-tune_id, oracle_match = make_oracle_fixtures(
-    TUNES,
-    hvsc_cache=".oracle-cache/hvsc",
-    oracle_cache=".oracle-cache/csv",
-    render=render,
-)
+tune_id, oracle_match = make_oracle_fixtures(TUNES, render=render)
 
 @pytest.mark.oracle
 def test_render_matches_oracle(oracle_match):
@@ -92,7 +87,7 @@ from pysidtracker.testing import assert_oracle_match
 @pytest.mark.xfail(strict=True, reason="detune carry")
 def test_diverging_tune():
     assert_oracle_match("GAMES/S-Z/Your_Fathers_Nightmare.sid", lambda d: MyPlayer(d),
-                        hvsc_cache=HVSC, oracle_cache=CSV, report_dir=".oracle-cache/why")
+                        report_dir=".tunecache/why")
 ```
 
 `song` (1-based, default 1) selects the subtune on both sides: sidtrace plays it
@@ -111,15 +106,12 @@ test instead of silently skipping and masking a regression.
 
 The tests are `pytest-xdist` safe: each render uses a private mount directory and
 places its cached CSV atomically, so workers sharing one cache directory never
-collide. Point `hvsc_cache` / `oracle_cache` at a workspace directory and cache
-it in CI:
+collide. Tunes and traces default to the shared cache root
+([caching.md](caching.md)), which the `cache` action persists in CI:
 
 ```yaml
-- uses: actions/cache@v4
-  with: { path: .oracle-cache/hvsc, key: hvsc-${{ hashFiles('tests/test_oracle.py') }} }
-- run: docker pull anarkiwi/sidtrace:latest
-- uses: actions/cache@v4
-  with: { path: .oracle-cache/csv, key: oracle-csv-${{ steps.image.outputs.digest }} }
+- uses: anarkiwi/pysidtracker/.github/actions/cache@v0.30.0
+  with: { key: "${{ hashFiles('tests/test_oracle.py') }}", sidtrace: "true", tunes: tests }
 - run: pytest -m oracle -n auto
 ```
 

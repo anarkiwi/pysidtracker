@@ -11,8 +11,8 @@ native-format audits previously copy-pasted into each repository.
 
 The native-format files are **copyright** their authors and are **never
 committed** — no bytes, no base64, no fixtures, no `dist/`. They are fetched on
-demand into `.tunecache/native/` (gitignored with the rest of the shared fixture
-cache; `$PYSID_NATIVECACHE` overrides, `$PYSID_TUNECACHE` sets the shared root)
+demand into `.tunecache/native/` (gitignored with the rest of the shared cache,
+[caching.md](caching.md); `$PYSID_TUNECACHE` sets the root)
 and indexed by SHA-256 in `SHA256SUMS.txt`. A test names the file it needs by that
 hash and resolves to the cached copy — or **skips** — when the cache is cold,
 rather than failing a suite for a file it cannot obtain. This is the same
