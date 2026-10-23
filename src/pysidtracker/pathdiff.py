@@ -38,10 +38,11 @@ from .testing import ChecksumMismatch, TuneFetchError, oracle_grid, resolve_tune
 from .whydiff import Divergence, explain_cell, explain_divergence, python_side
 
 CPU = "6502"
+FORMAT = 2
 VERDICTS = ("differs", "exact")
 COMPARE = ("lead", "onset")
 _ROW_KEYS = ("indptr", "indices", "count", "fail", "onset", "lead", "register")
-_ROW_KEYS += ("host", "frames")
+_ROW_KEYS += ("host", "frames", "rank")
 _PW_MASK = np.full(NREGS, 0xFF, np.int16)
 _PW_MASK[list(PW_HI_REGS)] = 0x0F
 
@@ -209,9 +210,10 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
     ``names``/``labels`` are prefixed feature names and texts; ``indptr``/``indices``
     the distinct rows over them (the failing onset row last when ``fail``), ``count``
     each row's frames. ``onset``/``lead``/``register`` place the divergence (``onset``
-    -1: none), ``left``/``right`` are each side's last store to it; ``host`` marks a
-    jennings side parting from the ``ocsv`` sidtrace oracle first, its rows dropped
-    from there.
+    -1: none), ``left``/``right`` are each side's last store to it; ``rank`` is each
+    name's first-occurrence rank on its side in the onset frame (-1: not run there);
+    ``host`` marks a jennings side parting from the ``ocsv`` sidtrace oracle first,
+    its rows dropped from there.
     """
     total = nframes + (LEAD if mode == "lead" else 0)
     tl, tr = (trace(s, data, song, total) for s in (left, right))
@@ -232,11 +234,18 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
     names = [pl + n for n in tl.names] + [pr + n for n in tr.names]
     labels = tl.labels + tr.labels
     sites = ["", ""]
+    rank = np.full(len(used), -1, np.int32)
     if cut.frame is not None:
         sites = [
             _site(t, cut.at(r), cut.register, p)
             for t, r, p in ((tl, False, pl), (tr, True, pr))
         ]
+        at = [(tl, cut.at(False), 0), (tr, cut.at(True), len(tl.names))]
+        if all(t.order for t, _, _ in at):
+            cols = np.concatenate([t.frames[f] + off for t, f, off in at])
+            rank[np.searchsorted(used, cols)] = np.concatenate(
+                [t.order[f] for t, f, _ in at]
+            )
     return dict(
         names=[names[i] for i in used],
         labels=[labels[i] for i in used],
@@ -247,6 +256,7 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
         onset=-1 if cut.frame is None else cut.frame,
         lead=cut.lead,
         register=-1 if cut.register is None else cut.register,
+        rank=rank,
         left=sites[0],
         right=sites[1],
         host=dropped,
@@ -345,6 +355,7 @@ def frames_for(row: dict, max_frames: int) -> int:
 def _meta(pair: Path, **want) -> dict:
     path = pair / "meta.json"
     meta = json.loads(path.read_text("utf-8")) if path.exists() else {}
+    _check_format(pair, meta)
     for k in ("left", "right", "compare"):
         if meta.get(k, want[k]) != want[k]:
             raise ValueError(f"{pair} holds {k}={meta[k]!r}, not {want[k]!r}")
@@ -352,6 +363,14 @@ def _meta(pair: Path, **want) -> dict:
     pair.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(meta, indent=1, sort_keys=True) + "\n", "utf-8")
     return meta
+
+
+def _check_format(pair: Path, meta: dict) -> None:
+    if meta and meta.get("format", 1) != FORMAT:
+        raise ValueError(
+            f"{pair} is cache format {meta.get('format', 1)}, not {FORMAT}: "
+            "rebuild it with build --force"
+        )
 
 
 def build(
@@ -376,7 +395,9 @@ def build(
     pair = pair_dir(work, left, right)
     if force:
         (pair / "meta.json").unlink(missing_ok=True)
-    meta = _meta(pair, left=left, right=right, compare=mode, hvsc=str(hvsc))
+    meta = _meta(
+        pair, left=left, right=right, compare=mode, hvsc=str(hvsc), format=FORMAT
+    )
     (pair / "tunes").mkdir(exist_ok=True)
     vocab = _Vocab(pair / "vocab.txt")
     rows = select(work, tunes_csv, verdicts, limit)
@@ -441,7 +462,10 @@ def _matrix(rec: dict, width: int) -> Tuple[sparse.csr_matrix, Optional[int]]:
 def _sample(key: str, rec: dict, extra=()) -> tuple:
     """A :func:`~pysidtracker.faultloc.build_spectrum` sample of a record."""
     mat, onset = _matrix(rec, len(rec["names"]))
-    return key, mat, rec["names"], onset, extra
+    rank = rec.get("rank")
+    if rank is not None:
+        rank = np.append(rank, np.full(len(rec["names"]) - len(rank), -1))
+    return key, mat, rec["names"], onset, extra, rank
 
 
 def info_extras(work) -> Dict[str, Tuple[str, ...]]:
@@ -468,7 +492,7 @@ def _pair(rec: dict) -> Optional[Tuple[str, str]]:
 @dataclass
 class Analysis:
     """A pair's cached corpus localised: its spectrum, correspondence, per-failure
-    candidates and ranked fixes."""
+    partings and candidates, and ranked fixes."""
 
     pair: Path
     meta: dict
@@ -477,6 +501,7 @@ class Analysis:
     spec: fl.Spectrum
     corr: fl.Correspondence
     scores: np.ndarray
+    parts: List[Optional[fl.Parting]]
     cands: List[set]
     fixes: List[fl.Fix]
 
@@ -486,16 +511,26 @@ class Analysis:
             return self.records[key]
         return _load(_tune_path(self.pair, key), _names(self.pair), True)
 
+    def context(self, fix: fl.Fix) -> Tuple[str, ...]:
+        """A ``first`` fix's representative's last agreed pair before the parting."""
+        if fix.key[0] != "first" or not fix.representative:
+            return ()
+        fails = self.spec.tune[self.spec.fail_rows]
+        row = int(np.argmax(fails == self.spec.tunes.index(fix.representative)))
+        part = self.parts[row]
+        return tuple(n for n in part.after if n) if part is not None else ()
+
     def label_fixes(self) -> None:
         """Name each fix's features by its representative's texts, else by the first
-        tune that ran them."""
+        tune that ran them; a ``first`` fix's labels end with ``after: `` its
+        representative's last agreed features."""
         own = {}
         for fix in self.fixes:
             if fix.representative:
                 rep = self.tune(fix.representative, labels=True)
                 own[fix.representative] = dict(zip(rep["names"], rep["labels"]))
         text: Dict[str, str] = {}
-        want = {n for f in self.fixes for n in fl.key_names(f.key)}
+        want = {n for f in self.fixes for n in fl.key_names(f.key) + self.context(f)}
         want -= {n for f in self.fixes for n in own.get(f.representative, ())}
         for key, rec in self.records.items():
             if not want:
@@ -508,7 +543,7 @@ class Analysis:
             mine = own.get(fix.representative, {})
             fix.labels = tuple(
                 mine.get(n, text.get(n, n)) for n in fl.key_names(fix.key)
-            )
+            ) + tuple("after: " + mine.get(n, n) for n in self.context(fix))
 
     def keys_of(self, rec: dict, key: str = "") -> set:
         """Candidate keys of a fresh :func:`record` under this corpus's correspondence."""
@@ -532,7 +567,8 @@ class Analysis:
             [1 + p.startswith(self.corr.prefixes[1]) for p in mini.names], np.int8
         )
         side[[not n.startswith(self.corr.prefixes) for n in mini.names]] = 0
-        corr = fl.Correspondence(mini.names, side, adj, self.corr.prefixes)
+        classes = np.where(gid >= 0, self.corr.classes[np.maximum(gid, 0)], -1)
+        corr = fl.Correspondence(mini.names, side, adj, self.corr.prefixes, classes)
         scores = np.where(gid >= 0, self.scores[np.maximum(gid, 0)], 0.0)
         return fl.candidates(mini, corr, [_pair(rec)], scores)[0]
 
@@ -545,6 +581,7 @@ def analyse(work, left: str = CPU, right: str = "", progress: bool = True) -> An
     """Load a built pair, score its spectrum and rank the minimum cover of fixes."""
     pair = pair_dir(work, left, right)
     meta = json.loads((pair / "meta.json").read_text("utf-8"))
+    _check_format(pair, meta)
     names = _names(pair)
     files = sorted((pair / "tunes").glob("*.npz"))
     recs = [_load(f, names) for f in tqdm(files, desc="load", disable=not progress)]
@@ -556,9 +593,10 @@ def analyse(work, left: str = CPU, right: str = "", progress: bool = True) -> An
     corr = fl.correspond(spec, *meta.get("prefixes", prefixes(CPU, "python")))
     scores = fl.ochiai(spec)
     pairs = [_pair(r) for r in records.values() if r["fail"]]
-    cands = fl.candidates(spec, corr, store_pairs=pairs, scores=scores)
+    parts = fl.partings(spec, corr)
+    cands = fl.candidates(spec, corr, pairs, scores, parts)
     fixes = fl.rank_fixes(spec, cands, scores)
-    an = Analysis(pair, meta, records, extras, spec, corr, scores, cands, fixes)
+    an = Analysis(pair, meta, records, extras, spec, corr, scores, parts, cands, fixes)
     an.label_fixes()
     return an
 

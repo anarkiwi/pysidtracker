@@ -54,6 +54,17 @@ def test_cpu_edges_alternate_with_the_branch():
     assert np.array_equal(trace.grid, np.asarray(oracle.register_grid(data, 4)))
     assert trace.side == "6502"
     assert all(f.dtype == np.int32 and np.all(np.diff(f) > 0) for f in trace.frames)
+    assert [trace.labels[i] for i in trace.sequence(1)] == [
+        f"${bne:04X} BNE ${lab['odd']:04x} -> ${lab['odd']:04X}",
+        f"${lab['odd'] + 2:04X} STA $d401 -> v1_freq_hi",
+        f"${done:04X} JSR ${sub:04x} -> ${sub:04X}",
+        f"${sub + 3:04X} STA $d418 -> mode_vol",
+        f"${sub + 6:04X} RTS -> ${done + 3:04X}",
+        f"${done + 6:04X} RTS -> out",
+    ]
+    assert all(
+        o.dtype == np.int32 and sorted(o) == list(range(len(o))) for o in trace.order
+    )
 
 
 def test_cpu_store_sites_and_reads():
@@ -169,6 +180,11 @@ def test_py_memplayer_arcs_sites_and_grid(backend):
     assert trace.names[trace.sites[1, 24]] == f"store:24:{rel}:ToyMem._volume:{vol}"
     assert trace.sites[0, 1] == -1 and trace.sites[1, 0] == -1
     assert trace.reads[0].tolist() == [0x1000]
+    assert [trace.names[i] for i in trace.sequence(0)] == [
+        even,
+        f"store:0:{rel}:ToyMem._frame:{head + 3}",
+        f"store:24:{rel}:ToyMem._volume:{vol}",
+    ]
     assert trace.side == "python"
     assert not any("pysidtracker/player.py" in n for n in trace.names)
     assert {n for n in trace.names if n.startswith("edge:")} <= set(

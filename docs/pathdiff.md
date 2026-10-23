@@ -66,12 +66,14 @@ every song of `tunes.csv` is a candidate. Each subtune is recorded over its song
 length up to `--max-frames` (default 3000), in `pysidtracker.jobs` workers with a
 `--timeout` deadline, skipping keys already cached unless `--force`.
 
-`work/pathdiff/<left>-<right>/` holds `meta.json` (sides, compare mode, HVSC
-root, prefixes), `vocab.txt` (the pair's feature names, line `i` naming id `i`)
-and `tunes/<key>.npz` per subtune: its distinct frames as CSR over feature ids
-with their frame counts (the onset row last), the features' texts in this tune,
-the onset, lead and first diverging register, each side's last store to it, and
-`host`. A failed subtune's file holds its error.
+`work/pathdiff/<left>-<right>/` holds `meta.json` (cache `format`, sides, compare
+mode, HVSC root, prefixes), `vocab.txt` (the pair's feature names, line `i` naming
+id `i`) and `tunes/<key>.npz` per subtune: its distinct frames as CSR over feature
+ids with their frame counts (the onset row last), the features' texts in this tune,
+each feature's first-occurrence `rank` on its side in the onset frame (-1: not run
+there), the onset, lead and first diverging register, each side's last store to it,
+and `host`. A failed subtune's file holds its error. A cache of another `format`
+is refused by `build` and `rank` until rebuilt with `--force`.
 
 ## `rank`
 
@@ -79,19 +81,46 @@ Builds the spectrum (`faultloc.build_spectrum`, `results.csv` `info` fields as
 `info:key=value` features), pairs the sides' features by their passing frames
 (`correspond`), takes per failing tune its candidate causes (`candidates`):
 
-- `path`: a feature active at the onset whose partners are all inactive (or an
-  unpartnered one its own tune never ran before);
+- `first`: where the two executions first part in the onset frame (`partings`);
+- otherwise `path`: a feature active at the onset whose partners are all inactive
+  (or an unpartnered one its own tune never ran before);
 - `value`: the sides ran partnered paths, so the diverging register's two last
   stores are the cause;
 - `info`: a build option at least as suspicious;
 
-and ranks the minimum cover (`rank_fixes`, exact `milp`). It writes `fixes.csv`
+and ranks the minimum cover (`rank_fixes`, exact `milp`). A `first` key's labels end
+with `after:` its representative's last agreed pair. It writes `fixes.csv`
 (`rank`, `id`, `kind`, `key`, `n_tunes`, `score`, `representative`, `labels`,
 `tunes`) and prints the table and how many failing tunes the top 1/5/10 fixes are
 credited with. Labels are the representative's disassembly and source lines.
 `--explain N` writes `explain/<rank>.txt`: `whydiff.explain_divergence` of each
 top fix's representative for a 6502 pair, `explain_cell` of both `python_side`s
 otherwise.
+
+### The first parting
+
+An onset frame is mostly the first or second play call, where the sides' feature
+sets differ almost everywhere: a set-based key then names the mismatch most tunes
+share, a symptom. Each side's trace also ranks its features by first execution
+in the call (`PathTrace.order`: the jennings step, or the Python event, that first
+ran it), and `partings` walks the two onset sequences together:
+
+1. keep the partnered features that are not `store:` sites (an unpartnered one is
+   helper code the other side need not mirror) and map them to their
+   correspondence class (`Correspondence.classes`, the components of the partner
+   graph);
+2. take both heads together while they are the same class or both are run
+   somewhere by the other side in that frame (voices taken in another order),
+   skipping later repeats of a taken class;
+3. stop at the first head the other side never runs in the frame: the key is
+   `("first", left head, right head)` (`""` for a side that has ended), with the
+   last equal pair as context.
+
+The key names features, not tunes or positions, so one root cause in any tune
+yields one key. A tune whose sequences never part, or a cache without `rank`,
+falls back to the set-based `path` and `value` keys. A parting whose two arms are
+each run elsewhere in the frame by the other side (another voice) is taken as an
+interleaving, and the walk continues to the next exclusive head.
 
 ## `xfails`
 

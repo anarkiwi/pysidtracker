@@ -386,3 +386,39 @@ def test_compare_masks_pulse_width_highs():
     high[3:, 3] = 0x40
     assert pd.compare(base, high, "lead").frame is None
     assert pd.compare(base, high, "onset", (0, 0, 0)).frame is None
+
+
+def test_branch_bug_keys_on_the_first_parting(corpus, tmp_path):
+    hvsc, work, _ = corpus
+    root = tmp_path / "gate"
+    root.mkdir()
+    text = PLAYERS.format(late=FIXED, off=DATA_OFFSET)
+    (root / "players.py").write_text(
+        text.replace("if cnt & 1:", "if cnt & 1 or cnt == 6:")
+    )
+    survey.load_render.cache_clear()
+    spec = f"{root / 'players.py'}:native"
+    assert pd.build(hvsc, work / "tunes.csv", work, pd.CPU, spec, jobs=1) == {
+        "differs": len(FAILING + EXACT),
+        "error": 1,
+    }
+    an = pd.analyse(work, pd.CPU, spec, progress=False)
+    (top,) = an.fixes
+    assert top.key[0] == "first" and top.n_tunes == len(FAILING + EXACT)
+    assert "BNE" in top.labels[0] and "or cnt == 6" in top.labels[1]
+    assert top.labels[2].startswith("after: $") and "BCC" in top.labels[2]
+    assert top.labels[3].startswith("after: ") and "if cnt >= " in top.labels[3]
+    rec = an.records[top.representative]
+    assert int(rec["onset"]) == 6 and (np.asarray(rec["rank"]) >= 0).any()
+    fresh = pd.record(_tune(0, 3), 1, pd.CPU, spec, "lead", 10)
+    assert an.keys_of(fresh, "k") == {top.key}
+
+    pair = pd.pair_dir(work, pd.CPU, spec)
+    meta = json.loads((pair / "meta.json").read_text())
+    (pair / "meta.json").write_text(json.dumps(dict(meta, format=1)))
+    with pytest.raises(ValueError, match="--force"):
+        pd.analyse(work, pd.CPU, spec, progress=False)
+    with pytest.raises(ValueError, match="--force"):
+        pd.build(hvsc, work / "tunes.csv", work, pd.CPU, spec, jobs=1)
+    assert pd.build(hvsc, work / "tunes.csv", work, pd.CPU, spec, limit=1, force=True)
+    assert json.loads((pair / "meta.json").read_text())["format"] == pd.FORMAT

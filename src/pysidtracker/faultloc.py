@@ -1,17 +1,29 @@
 """Corpus-wide spectrum-based fault localisation over executed-feature traces.
 
 Pre-onset frames pass, the onset frame fails; features are scored (Ochiai,
-DStar), paired across sides, turned into per-failure candidate causes and
-reduced to a minimum hitting set of fixes.
+DStar), paired across sides, turned into per-failure candidate causes (the branch
+where the two executions first part, when the onset frame's execution order is
+known) and reduced to a minimum hitting set of fixes.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Hashable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import (
+    Dict,
+    Hashable,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 import numpy as np
 from scipy import sparse
+from scipy.sparse.csgraph import connected_components
 from scipy.optimize import Bounds, LinearConstraint, milp
 from tqdm import tqdm
 
@@ -26,7 +38,9 @@ class Spectrum:
 
     ``x`` is (unique rows x features), ``weight`` each row's multiplicity,
     ``tune`` its index into ``tunes``; ``onset`` is per tune (-1: none) and
-    ``extra`` flags the per-tune constant columns.
+    ``extra`` flags the per-tune constant columns. ``order`` is (failing rows x
+    features), aligned to :attr:`fail_rows`: 1 + each feature's first-occurrence rank
+    on its side in the onset frame, an empty row where the order is not known.
     """
 
     names: List[str]
@@ -37,6 +51,7 @@ class Spectrum:
     tunes: List[str]
     onset: np.ndarray
     extra: np.ndarray
+    order: Optional[sparse.csr_matrix] = None
     index: Dict[str, int] = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -66,21 +81,25 @@ def _cat(parts, dtype):
 
 
 def build_spectrum(samples, progress: bool = False) -> Spectrum:
-    """A :class:`Spectrum` from ``(tune, matrix, names, onset[, extra])`` samples.
+    """A :class:`Spectrum` from ``(tune, matrix, names, onset[, extra[, rank]])`` samples.
 
     Frames before ``onset`` pass, frame ``onset`` fails, later frames drop (None:
-    all pass); ``extra`` names tune-constant features. Identical
-    ``(features, fail, tune)`` rows collapse into one weighted row.
+    all pass); ``extra`` names tune-constant features; ``rank`` (aligned with
+    ``names``, -1: not run) is each feature's first-occurrence rank on its side in
+    the onset frame. Identical ``(features, fail, tune)`` rows collapse into one
+    weighted row.
     """
     vocab: Dict[str, int] = {}
     tunes, onsets, extra_cols = [], [], []
     rows, cols, weights, fails, tix = [], [], [], [], []
+    ocols, oranks, olens = [], [], []
     nrow = 0
     for t, (tune, mat, names, onset, *rest) in enumerate(
         tqdm(samples, desc="spectrum", unit="tune", disable=not progress)
     ):
         lut = _ids(vocab, names)
         ext = np.unique(_ids(vocab, rest[0] if rest else ()))
+        rank = rest[1] if len(rest) > 1 and rest[1] is not None else None
         extra_cols.append(ext)
         tunes.append(tune)
         mat = sparse.csr_matrix(mat, dtype=bool)
@@ -90,6 +109,11 @@ def build_spectrum(samples, progress: bool = False) -> Spectrum:
         mat = mat[: onset + 1 if hit else nframes]
         if not mat.shape[0]:
             continue
+        if hit:
+            ran = np.flatnonzero(np.asarray(rank) >= 0) if rank is not None else []
+            ocols.append(lut[ran])
+            oranks.append(np.asarray(rank)[ran] + 1 if len(ran) else np.zeros(0))
+            olens.append(len(ran))
         fail = np.zeros(mat.shape[0], np.uint8)
         fail[-1] = hit
         key = np.ascontiguousarray(
@@ -115,6 +139,12 @@ def build_spectrum(samples, progress: bool = False) -> Spectrum:
     ).astype(bool)
     extra = np.zeros(len(vocab), bool)
     extra[_cat(extra_cols, np.int64)] = True
+    indptr = np.zeros(len(olens) + 1, np.int64)
+    np.cumsum(olens, out=indptr[1:])
+    order = sparse.csr_matrix(
+        (_cat(oranks, np.int64), _cat(ocols, np.int64), indptr),
+        shape=(len(olens), len(vocab)),
+    )
     return Spectrum(
         names=list(vocab),
         x=x,
@@ -124,6 +154,7 @@ def build_spectrum(samples, progress: bool = False) -> Spectrum:
         tunes=tunes,
         onset=np.array(onsets, np.int64),
         extra=extra,
+        order=order,
     )
 
 
@@ -162,12 +193,22 @@ def _column_keys(m: sparse.csc_matrix) -> np.ndarray:
 
 @dataclass
 class Correspondence:
-    """Partner columns across the two sides, as a directed adjacency."""
+    """Partner columns across the two sides, as a directed adjacency.
+
+    ``classes`` (default: the connected components of ``adj``) numbers each partnered
+    column's class of mutually corresponding columns, -1 for an unpartnered one.
+    """
 
     names: List[str]
     side: np.ndarray
     adj: sparse.csr_matrix
     prefixes: Tuple[str, str]
+    classes: Optional[np.ndarray] = None
+
+    def __post_init__(self):
+        if self.classes is None:
+            _, comp = connected_components(self.adj, directed=False)
+            self.classes = np.where(self.matched, comp, -1)
 
     def partners(self, col: int) -> np.ndarray:
         """The other side's columns paired with ``col``."""
@@ -284,13 +325,106 @@ def correspond(
     return Correspondence(spec.names, side, adj, (left, right))
 
 
+class Parting(NamedTuple):
+    """Where the two sides' onset-frame executions first part (feature names, "" none).
+
+    ``left``/``right`` run at the parting, ``after`` is the last agreed pair before it.
+    """
+
+    left: str
+    right: str
+    after: Tuple[str, str]
+
+
+def _part(a: np.ndarray, b: np.ndarray, ina: np.ndarray, inb: np.ndarray):
+    """Positions ``(i, j, ci, cj)`` where class sequences ``a`` and ``b`` first part.
+
+    Heads that are equal, or both run somewhere by the other side (an interleaving),
+    are consumed together and later repeats of consumed classes skipped; the first
+    head the other side never runs parts them (``len`` when a side has ended).
+    ``(ci, cj)`` are the last equal heads (-1: none); None when nothing parts them.
+    """
+    done = np.zeros(len(ina), np.bool_)
+    i = j = 0
+    ci = cj = -1
+    while True:
+        while i < len(a) and done[a[i]]:
+            i += 1
+        while j < len(b) and done[b[j]]:
+            j += 1
+        if i == len(a) and j == len(b):
+            return None
+        if i == len(a) or j == len(b) or not (inb[a[i]] and ina[b[j]]):
+            return i, j, ci, cj
+        if a[i] == b[j]:
+            ci, cj = i, j
+        done[a[i]] = done[b[j]] = True
+        i += 1
+        j += 1
+
+
+def partings(spec: Spectrum, corr: Correspondence) -> List[Optional[Parting]]:
+    """Per failing row (aligned to :attr:`Spectrum.fail_rows`) its :class:`Parting`.
+
+    Each side's partnered non-``store:`` features of the onset frame, in their
+    first-occurrence order, are mapped to their correspondence classes and walked
+    together (:func:`_part`): an unpartnered feature is helper code the other side
+    need not mirror, and an interleaving (voices taken in another order) is not a
+    parting. None where the order is unknown or nothing parts the sides.
+    """
+    nf = len(spec.fail_rows)
+    order = spec.order
+    if order is None or not order.nnz:
+        return [None] * nf
+    plen = np.array([len(p) for p in corr.prefixes])
+    side = corr.side.astype(np.int64)
+    store = np.array(
+        [
+            s > 0 and n.startswith("store:", plen[s - 1])
+            for n, s in zip(spec.names, side)
+        ]
+    )
+    use = (corr.classes >= 0) & ~store
+    out: List[Optional[Parting]] = []
+    for r in range(nf):
+        lo, hi = order.indptr[r], order.indptr[r + 1]
+        col, rank = order.indices[lo:hi], order.data[lo:hi]
+        keep = use[col]
+        col, rank = col[keep], rank[keep]
+        seqs = [col[side[col] == s] for s in (1, 2)]
+        seqs = [
+            c[np.argsort(rank[side[col] == s], kind="stable")]
+            for c, s in zip(seqs, (1, 2))
+        ]
+        cls, local = np.unique(corr.classes[np.concatenate(seqs)], return_inverse=True)
+        a, b = local[: len(seqs[0])], local[len(seqs[0]) :]
+        ina, inb = (np.isin(np.arange(len(cls)), x) for x in (a, b))
+        got = _part(a, b, ina, inb) if len(col) else None
+        if got is None:
+            out.append(None)
+            continue
+        i, j, ci, cj = got
+
+        def name(seq, k):
+            return spec.names[seq[k]] if 0 <= k < len(seq) else ""
+
+        out.append(
+            Parting(
+                name(seqs[0], i),
+                name(seqs[1], j),
+                (name(seqs[0], ci), name(seqs[1], cj)),
+            )
+        )
+    return out
+
+
 def key_names(key: Hashable) -> Tuple[str, ...]:
     """The feature names a candidate key mentions."""
     kind = key[0]
     if kind == "path":
         return (key[1],) + tuple(key[2])
-    if kind in ("value", "info"):
-        return tuple(n for n in key[1:] if n is not None)
+    if kind in ("value", "info", "first"):
+        return tuple(n for n in key[1:] if n)
     return ()
 
 
@@ -305,17 +439,21 @@ def candidates(
     corr: Correspondence,
     store_pairs: Optional[Sequence[Optional[Tuple[str, str]]]] = None,
     scores: Optional[np.ndarray] = None,
+    parts: Optional[Sequence[Optional[Parting]]] = None,
 ) -> List[Set[Hashable]]:
     """Candidate cause keys per failing row (aligned to :attr:`Spectrum.fail_rows`).
 
-    ``("path", name, partners)`` per side column active with all partners off
-    (unpartnered: unseen in its tune's passing rows), else ``("value", ..)``,
-    else ``("unexplained",)``; plus ``("info", name)`` extras scoring >= them.
+    ``("first", left, right)`` where the sides part (``parts``, default
+    :func:`partings`); else ``("path", name, partners)`` per side column active with
+    all partners off (unpartnered: unseen in its tune's passing rows), else
+    ``("value", ..)``, else ``("unexplained",)``; plus ``("info", name)`` extras
+    scoring >= them.
     """
     scores = ochiai(spec) if scores is None else scores
     fr = spec.fail_rows
     if not len(fr):
         return []
+    parts = partings(spec, corr) if parts is None else parts
     f = spec.x[fr].astype(np.float64).tocsr()
     pt = np.flatnonzero(~spec.fail)
     seen = (
@@ -328,20 +466,26 @@ def candidates(
     hit = (f @ corr.adj.T.astype(np.float64)).tocsr()
     r, c = f.nonzero()
     onside = corr.side[c] > 0
+    parted = np.array([p is not None for p in parts], bool)
     keep = (
         onside
+        & ~parted[r]
         & (np.asarray(hit[r, c]).ravel() == 0)
         & (corr.matched[c] | (np.asarray(seen[spec.tune[fr][r], c]).ravel() == 0))
     )
     nf = len(fr)
     best = np.full(nf, -np.inf)
     np.maximum.at(best, r[keep], scores[c[keep]])
+    out: List[Set[Hashable]] = [set() for _ in range(nf)]
+    for i in np.flatnonzero(parted):
+        key = ("first", parts[i].left, parts[i].right)
+        out[i].add(key)
+        best[i] = key_score(spec, scores, key)
     fallback = np.full(nf, -np.inf)
     np.maximum.at(fallback, r[onside], scores[c[onside]])
     thr = np.where(np.isfinite(best), best, fallback)
     info = spec.extra[c] & (scores[c] >= thr[r])
     keys: Dict[int, Tuple] = {}
-    out: List[Set[Hashable]] = [set() for _ in range(nf)]
     for i, col in zip(r[keep], c[keep]):
         if col not in keys:
             keys[col] = (

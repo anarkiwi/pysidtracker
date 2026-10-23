@@ -44,6 +44,8 @@ class PathTrace:
       names: feature id to its cross-tune key, ``edge:...`` or ``store:<reg>:...``.
       labels: feature id to its text in this tune (disassembly or source line).
       frames: per play call, the sorted unique ``int32`` feature ids it executed.
+      order: per play call, aligned with ``frames``, each feature's ``int32``
+        first-occurrence rank in that call (0: executed first); empty when not recorded.
       grid: ``(nframes, 25)`` registers after each play call.
       sites: ``(nframes, 25)`` ``store:`` id of each call's last write to a register, -1 none.
       reads: per play call, the sorted unique data addresses it read.
@@ -62,6 +64,11 @@ class PathTrace:
     roots: List[str] = field(default_factory=list)
     sources: Dict[str, str] = field(default_factory=dict)
     starts: Optional[tuple] = None
+    order: List[np.ndarray] = field(default_factory=list)
+
+    def sequence(self, frame: int) -> np.ndarray:
+        """Play call ``frame``'s feature ids in the order they first executed."""
+        return self.frames[frame][np.argsort(self.order[frame], kind="stable")]
 
     def matrix(self, upto: Optional[int] = None):
         """``(frames[:upto], len(names))`` boolean CSR matrix of executed features."""
@@ -83,6 +90,30 @@ def _split(keys: np.ndarray, nframes: int, width: int) -> List[np.ndarray]:
     bounds = np.searchsorted(keys, np.arange(nframes + 1, dtype=np.int64) * width)
     vals = keys % width
     return [vals[bounds[f] : bounds[f + 1]] for f in range(nframes)]
+
+
+def _first(frame, fid, when, nframes: int, width: int):
+    """``(frames, order)``: per frame its sorted unique feature ids among events
+    ``(frame, fid)`` at times ``when``, and each one's rank by first time in the frame.
+    """
+    key = np.asarray(frame, np.int64) * width + fid
+    srt = np.lexsort((when, key))
+    key, when = key[srt], np.asarray(when, np.int64)[srt]
+    head = np.ones(len(key), bool)
+    head[1:] = key[1:] != key[:-1]
+    uk, first = key[head], when[head]
+    ufr = uk // width
+    bounds = np.searchsorted(ufr, np.arange(nframes + 1))
+    by_time = np.lexsort((first, ufr))
+    rank = np.empty(len(uk), np.int64)
+    rank[by_time] = np.arange(len(uk))
+    rank -= bounds[ufr]
+    vals = (uk % width).astype(np.int32)
+    rank = rank.astype(np.int32)
+    return (
+        [vals[bounds[f] : bounds[f + 1]] for f in range(nframes)],
+        [rank[bounds[f] : bounds[f + 1]] for f in range(nframes)],
+    )
 
 
 # --- 6502 -------------------------------------------------------------------
@@ -331,7 +362,8 @@ def cpu_paths(
       operands ``init`` or a play call wrote (self-modifying code) are folded to ``data``,
       as a packer or the tune patches its own values into them. Repeats of a
       name (voice-duplicated code) take ``#k`` by offset. A store site is keyed by
-      its register and the normalised block up to the store.
+      its register and the normalised block up to the store. ``order`` ranks each
+      feature by the step that first ran it in the call.
     """
     from tqdm import tqdm
 
@@ -402,10 +434,10 @@ def cpu_paths(
     store_fid = store_id + len(edges)
     width = len(names) + 1
     wframe = frame_of[ws]
-    feats = _split(
-        np.concatenate(
-            [frame_of[is_edge] * width + pair_id, wframe * width + store_fid]
-        ),
+    feats, order = _first(
+        np.concatenate([frame_of[is_edge], wframe]),
+        np.concatenate([pair_id, store_fid]),
+        np.concatenate([np.flatnonzero(is_edge), ws]),
         nframes,
         width,
     )
@@ -418,10 +450,11 @@ def cpu_paths(
         "6502",
         names,
         labels,
-        [f.astype(np.int32) for f in feats],
+        feats,
         grid,
         sites,
         [r.astype(np.uint16) for r in _split(rframe * 0x10000 + rd, nframes, 0x10000)],
+        order=order,
     )
 
 
@@ -589,6 +622,8 @@ class _Recorder:
 
     An arc steps from a line with more than one static exit (coverage.py's analysis)
     to the next line its frame runs, or out (``exit``); stores log as they start.
+    ``arcs`` maps each arc to the event count at its first run, ``log`` entries end
+    with theirs.
     """
 
     def __init__(self, roots: Sequence[str], sources: Dict[str, str]):
@@ -597,8 +632,18 @@ class _Recorder:
         self._skip = os.path.realpath(inspect.getsourcefile(MemPlayer))
         self._codes: Dict[object, Optional[_Source]] = {}
         self._stack: List[list] = []
-        self.arcs: set = set()
+        self.arcs: Dict[tuple, int] = {}
         self.log: List[tuple] = []
+        self.seq = 0
+
+    def arc(self, key: tuple) -> None:
+        if key not in self.arcs:
+            self.arcs[key] = self.seq
+            self.seq += 1
+
+    def store(self, held, at, src: _Source, line: int) -> None:
+        self.log.append((held, at, src, line, self.seq))
+        self.seq += 1
 
     def src(self, code) -> Optional[_Source]:
         if code in self._codes:
@@ -630,7 +675,7 @@ class _Recorder:
         if stack and stack[-1][0] is code:
             _, src, last = stack.pop()
             if last in src.branch:
-                self.arcs.add((src, last, _EXIT))
+                self.arc((src, last, _EXIT))
         return self._codes.get(code) is not None
 
     def line(self, code, line: int, frame=None) -> bool:
@@ -640,7 +685,7 @@ class _Recorder:
         top = stack[-1]
         src = top[1]
         if top[2] in src.branch:
-            self.arcs.add((src, top[2], line))
+            self.arc((src, top[2], line))
         top[2] = line
         exprs = src.stores.get(line)
         if exprs:
@@ -652,7 +697,7 @@ class _Recorder:
                     at = eval(index, *scope)  # pylint: disable=eval-used
                 except Exception:  # pylint: disable=broad-except
                     continue
-                self.log.append((held, at, src, line))
+                self.store(held, at, src, line)
         return True
 
     @staticmethod
@@ -748,7 +793,7 @@ def _wrap(player, recorder: _Recorder, reads: List[int]) -> None:
         wr(addr, value)
         site = recorder.caller()
         if site is not None:
-            recorder.log.append((mem, addr & 0xFFFF, *site))
+            recorder.store(mem, addr & 0xFFFF, *site)
 
     def read(addr):
         reads.append(addr & 0xFFFF)
@@ -757,16 +802,19 @@ def _wrap(player, recorder: _Recorder, reads: List[int]) -> None:
     player._wr, player._rd = write, read  # pylint: disable=protected-access
 
 
-def _last_stores(log) -> Dict[tuple, tuple]:
-    """``(id(container), index)`` to the ``(source, line)`` of its last logged store."""
+def _last_stores(log) -> Tuple[Dict[tuple, tuple], Dict[tuple, int]]:
+    """``(id(container), index)`` to the ``(source, line)`` of its last logged store,
+    and each ``(source, line)`` to the event count of its first."""
     last: Dict[tuple, tuple] = {}
-    for held, at, src, line in log:
+    first: Dict[tuple, int] = {}
+    for held, at, src, line, seq in log:
+        first.setdefault((src, line), seq)
         try:
             idx = range(*at.indices(len(held))) if isinstance(at, slice) else (at,)
             last.update(((id(held), i), (src, line)) for i in idx)
         except TypeError:
             continue
-    return last
+    return last, first
 
 
 def py_paths(
@@ -792,6 +840,8 @@ def py_paths(
       ``MemPlayer._rd`` addresses (none for other players). Keys are
       ``file:qualname:line``; in exec'd ``sources`` the line's text (numbers as ``#``,
       ``@k`` for its k-th repeat in the function) replaces the line number.
+      ``order`` ranks an arc by its first run in the frame, a store site by its
+      first logged store.
     """
     from tqdm import tqdm
 
@@ -815,17 +865,17 @@ def py_paths(
             cells = [subject.cell(player, r) for r in range(_NREG)]
             mem = isinstance(player, MemPlayer)
             rows.append(list(player.regs) if mem else [held[i] for held, i in cells])
-            last = _last_stores(recorder.log)
+            last, first = _last_stores(recorder.log)
             stores.append(
                 {
-                    r: last[(id(held), i)]
+                    r: (*last[(id(held), i)], first[last[(id(held), i)]])
                     for r, (held, i) in enumerate(cells)
                     if (id(held), i) in last
                 }
             )
             arcs.append(recorder.arcs)
             frame_reads.append(np.unique(np.asarray(reads, np.int64)).astype(np.uint16))
-            recorder.arcs, recorder.log = set(), []
+            recorder.arcs, recorder.log = {}, []
             reads.clear()
     trace = _py_trace(subject.label, rows, arcs, stores, frame_reads, roots, sources)
     if subject.starts is not None:
@@ -845,19 +895,27 @@ def _py_trace(side, rows, arcs, stores, frame_reads, roots, sources) -> PathTrac
 
     nframes = len(rows)
     sites = np.full((nframes, _NREG), -1, np.int32)
-    frames = []
+    events: List[Tuple[int, int, int]] = []
     for f in range(nframes):
-        got = set()
-        for src, a, b in sorted(arcs[f], key=lambda x: (x[0].name, x[1], x[2])):
+        for (src, a, b), seq in sorted(
+            arcs[f].items(), key=lambda x: (x[0][0].name, x[0][1], x[0][2])
+        ):
             to = str(b) if b != _EXIT else "exit"
-            got.add(fid(src.arc_key(a, b), f"{src.file}:{a} {src.text(a)} -> {to}"))
-        for r, (src, line) in sorted(stores[f].items()):
+            events.append(
+                (
+                    f,
+                    fid(src.arc_key(a, b), f"{src.file}:{a} {src.text(a)} -> {to}"),
+                    seq,
+                )
+            )
+        for r, (src, line, seq) in sorted(stores[f].items()):
             sites[f, r] = fid(
                 f"store:{r}:{src.where(line)}",
                 f"{src.file}:{line} {src.text(line)} -> {REG_NAMES[r]}",
             )
-            got.add(int(sites[f, r]))
-        frames.append(np.array(sorted(got), np.int32))
+            events.append((f, int(sites[f, r]), seq))
+    ev = np.array(events, np.int64).reshape(-1, 3)
+    frames, order = _first(ev[:, 0], ev[:, 1], ev[:, 2], nframes, len(ids) + 1)
     return PathTrace(
         side,
         list(ids),
@@ -868,6 +926,7 @@ def _py_trace(side, rows, arcs, stores, frame_reads, roots, sources) -> PathTrac
         frame_reads,
         list(roots),
         dict(sources),
+        order=order,
     )
 
 

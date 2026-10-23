@@ -283,3 +283,103 @@ def test_correspond_pairs_per_build_code_over_shared_tunes():
         ).size
         == 0
     )
+
+
+def _ordered_corpus(seed=0, ntunes=120, nbg=40):
+    """Tunes whose onset (frame 1 or 2) follows one of two planted root branches.
+
+    Each side runs shared background code in its own random order; at the onset the
+    6502 takes ``rootX_t`` where Python takes ``rootX_f`` (both arms co-run on passing
+    frames), and both bugs then reach one shared symptom (``6502:symY`` against
+    ``py:symX``, never co-run). Python also runs per-tune helper code no passing
+    frame has, and the 6502 an exclusive store, before the root.
+    """
+    rng = np.random.default_rng(seed)
+    arms = [f"root{b}_{arm}" for b in "AB" for arm in "tf"]
+    shared = [f"e{i}" for i in range(nbg)] + arms + ["store:0:a", "symY", "symX"]
+    samples, bug_of = [], {}
+    for t in range(ntunes):
+        bug = "AB"[t % 2]
+        onset = int(rng.integers(1, 3))
+        names = [f"{p}:{n}" for p in ("6502", "py") for n in shared]
+        names += [f"py:helper{t}"]
+        width = len(shared)
+        dense = np.zeros((onset + 1, len(names)), bool)
+        for f in range(onset):
+            on = rng.random(width) < 0.5
+            on[width - 2 :] = [True, False]
+            dense[f, :width] = dense[f, width : 2 * width] = on
+        bg = rng.choice(nbg, nbg // 2, replace=False)
+        left = [f"e{i}" for i in rng.permutation(bg)]
+        right = [f"e{i}" for i in rng.permutation(bg)]
+        left += ["store:0:a", f"root{bug}_t", "e0", "symY"]
+        right += [f"helper{t}", f"root{bug}_f", "symX", "e0"]
+        rank = np.full(len(names), -1)
+        for prefix, seq in (("6502", left), ("py", right)):
+            for k, n in enumerate(dict.fromkeys(seq)):
+                col = names.index(f"{prefix}:{n}")
+                dense[onset, col] = True
+                rank[col] = k
+        samples.append(_sample(f"t{t}", dense, names, onset) + (rank,))
+        bug_of[f"t{t}"] = bug
+    return samples, bug_of
+
+
+def test_first_parting_separates_roots_the_set_method_merges():
+    samples, bug_of = _ordered_corpus()
+    spec = fl.build_spectrum(samples)
+    corr = fl.correspond(spec)
+    assert corr.partners(spec.index["6502:rootA_t"]).size
+    assert corr.partners(spec.index["py:helper0"]).size == 0
+    scores = fl.ochiai(spec)
+    nf = len(spec.fail_rows)
+    by_set = fl.candidates(spec, corr, scores=scores, parts=[None] * nf)
+    (merged,) = fl.min_cover(by_set)
+    assert merged[0] == "path" and "sym" in merged[1]
+
+    parts = fl.partings(spec, corr)
+    assert all(p.after[0][5:] == p.after[1][3:] for p in parts)
+    assert {p.after[0] for p in parts} - {""} <= {f"6502:e{i}" for i in range(40)}
+    cands = fl.candidates(spec, corr, scores=scores)
+    roots = {("first", f"6502:root{b}_t", f"py:root{b}_f") for b in "AB"}
+    assert all(len(c) == 1 for c in cands) and set().union(*cands) == roots
+    fixes = fl.rank_fixes(spec, cands, scores)
+    assert {f.key for f in fixes} == roots
+    for f in fixes:
+        assert f.n_tunes == len(samples) // 2
+        assert {bug_of[t] for t in f.tunes} == {f.key[1][9]}
+    assert fl.key_names(("first", "6502:x", "")) == ("6502:x",)
+
+
+def test_part_walk_skips_interleavings_and_reports_ends():
+    def part(a, b):
+        a, b = np.array(a), np.array(b)
+        n = max(np.max(a, initial=-1), np.max(b, initial=-1)) + 1
+        ina, inb = (np.isin(np.arange(n), x) for x in (a, b))
+        return fl._part(a, b, ina, inb)  # pylint: disable=protected-access
+
+    assert part([0, 1, 2, 3], [1, 0, 2, 4]) == (3, 3, 2, 2)
+    assert part([0, 1, 2], [0, 2, 1]) is None
+    assert part([0, 1, 2, 5], [0, 2, 1]) == (3, 3, 0, 0)
+    assert part([0, 1], [0, 1, 6]) == (2, 2, 1, 1)
+    assert part([7, 0], [0]) == (0, 0, -1, -1)
+    assert part([], []) is None
+
+
+def test_spectrum_order_rows_follow_the_failing_rows():
+    dense = np.array([[1, 1], [1, 1]])
+    spec = fl.build_spectrum(
+        [
+            _sample("a", dense, ["6502:x", "py:x"], 1) + (np.array([0, -1]),),
+            _sample("b", dense, ["6502:x", "py:x"], None) + (np.array([0, 0]),),
+            _sample("c", dense, ["6502:x", "py:x"], 1),
+            _sample("d", dense, ["py:x", "6502:x"], 1) + (np.array([2, 1]),),
+        ]
+    )
+    assert spec.order.shape == (3, 2)
+    assert spec.order.toarray().tolist() == [[1, 0], [0, 0], [2, 3]]
+    corr = fl.correspond(spec)
+    assert corr.classes[0] == corr.classes[1] >= 0
+    assert fl.partings(spec, corr) == [fl.Parting("6502:x", "", ("", "")), None, None]
+    bare = fl.build_spectrum([])
+    assert fl.partings(bare, fl.correspond(bare)) == []
