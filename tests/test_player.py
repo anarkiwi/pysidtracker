@@ -1,7 +1,7 @@
 """Tests for the MemPlayer scaffold and the reglog player helper."""
 
 from pysidtracker import MemPlayer, register_writes_from_player
-from pysidtracker.registers import SID_BASE, SID_REG_COUNT
+from pysidtracker.registers import PW_HI_REGS, SID_BASE, SID_REG_COUNT
 
 
 class _CountPlayer(MemPlayer):
@@ -58,3 +58,23 @@ def test_register_writes_from_player():
     # Frames start at start_frame=1.
     frame_clocks = {w.clock // 19656 for w in writes if w.clock >= 19656}
     assert frame_clocks == {1, 2}
+
+
+class _PwPlayer(_CountPlayer):
+    """Writes a full byte to every pulse-width-high register at init."""
+
+    def _init(self, subtune):
+        for register in PW_HI_REGS:
+            self._wr(SID_BASE + register, 0xF0 | register)
+
+
+class _MaskedPwPlayer(_PwPlayer):
+    MASK_PW_HI = True
+
+
+def test_snapshot_masks_pw_hi_only_when_asked():
+    raw, masked = _PwPlayer(b"", 0x1000).regs, _MaskedPwPlayer(b"", 0x1000).regs
+    assert [raw[r] for r in PW_HI_REGS] == [0xF3, 0xFA, 0xF1]
+    assert [masked[r] for r in PW_HI_REGS] == [0x03, 0x0A, 0x01]
+    others = [r for r in range(SID_REG_COUNT) if r not in PW_HI_REGS]
+    assert [raw[r] for r in others] == [masked[r] for r in others]

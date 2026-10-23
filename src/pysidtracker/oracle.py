@@ -181,15 +181,17 @@ class EmuPlayer(MemPlayer):
     (:data:`PAL_FLAG`) is set for ``ntsc`` unless the image covers it, as
     :func:`boot_flat` sets it.
 
-    ``snapshot`` masks the pulse-width-high registers to a nibble (the SID
-    ignores their upper bits, see :data:`~pysidtracker.registers.PW_HI_REGS`), so
-    the per-frame grid matches the reference-grid convention. The frame *cadence*
-    (PAL/NTSC) is the caller's concern -- one ``play`` call is one frame; an
+    :attr:`~pysidtracker.player.MemPlayer.MASK_PW_HI` is set: ``snapshot``
+    masks the pulse-width-high registers to a nibble (the SID ignores their
+    upper bits), so the per-frame grid matches the reference-grid convention.
+    The frame *cadence* (PAL/NTSC) is the caller's concern -- one ``play`` call is one frame; an
     oracle grid it is compared against is framed at the tune's clock (see
     :func:`~pysidtracker.registers.cycles_per_frame_for_flags`).
 
     Requires jennings (a core dependency).
     """
+
+    MASK_PW_HI = True
 
     def __init__(
         self,
@@ -235,13 +237,6 @@ class EmuPlayer(MemPlayer):
             if late:
                 return
         run_to_rts(self._mpu, self._obs, self._play_addr, 0, self._max_cycles)
-
-    def snapshot(self) -> List[int]:
-        base = self.SID_BASE
-        return [
-            (self._mem[base + i] & 0x0F) if i in reg.PW_HI_REGS else self._mem[base + i]
-            for i in range(self.REG_COUNT)
-        ]
 
 
 def _frame_grid(
