@@ -31,8 +31,11 @@ Metadata = Callable[[Any], Sequence]
 class FormatCommand:
     """A format-specific subcommand contributed to the generic CLI.
 
-    ``add_arguments(subparser)`` configures the argparse subparser; ``handler``
-    receives the parsed ``args`` and the owning :class:`SidFormat`.
+    ``add_arguments(subparser)`` configures the argparse subparser, whose first
+    positional argument is the tune, ``song``; ``handler`` receives the parsed
+    ``args`` and the owning :class:`SidFormat`.  A name several installed
+    formats contribute becomes one subcommand that runs the command of the
+    format recognising ``song``, parsed with that format's own arguments.
     """
 
     name: str

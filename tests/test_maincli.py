@@ -11,6 +11,7 @@ from pysidtracker import (
     FormatCommand,
     MemPlayer,
     SidFormat,
+    SidError,
     SidParseError,
 )
 from pysidtracker import formats as formats_mod
@@ -113,6 +114,77 @@ def test_wav_renders(monkeypatch, tmp_path, tune):
 def test_format_specific_subcommand(capsys, tune):
     _run([_fake_format()], ["echo", str(tune), "--tag", "hi"])
     assert "echo fake hi" in capsys.readouterr().out
+
+
+class _OtherParser(BaseSidParser):
+    """Recognises a tune whose init starts with ``LDX``."""
+
+    def recognize(self, image):
+        return image.mem[0x1000] == 0xA2
+
+    def parse(self, data, **kwargs):
+        return _FakeModel()
+
+
+def _other_args(subparser):
+    subparser.add_argument("song")
+    subparser.add_argument("output")
+    subparser.add_argument("--level", type=int, choices=(1, 2), default=1)
+
+
+def _other_format():
+    return SidFormat(
+        name="other",
+        parser=_OtherParser(),
+        player=lambda model: _FakePlayer(b"\x00", 0x1000),
+        commands=(
+            FormatCommand(
+                "echo",
+                "echo a level",
+                _other_args,
+                lambda args, fmt: print(f"echo {fmt.name} {args.output} {args.level}"),
+            ),
+        ),
+    )
+
+
+def _shared_cli(argv):
+    formats = [_fake_format(), _other_format()]
+    return maincli.run_cli(lambda: maincli.build_parser(formats), SidError, argv)
+
+
+def test_shared_subcommand_runs_the_recognised_formats_command(capsys, tmp_path, tune):
+    other = tmp_path / "other.sid"
+    other.write_bytes(
+        build_psid(b"\xa2\x00\x60", load=0x1000, init=0x1000, play=0x1000)
+    )
+    assert _shared_cli(["echo", str(tune), "--tag", "hi"]) == 0
+    assert _shared_cli(["echo", str(other), "out.bin", "--level", "2"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "echo fake hi",
+        "echo other out.bin 2",
+    ]
+
+
+def test_shared_subcommand_parses_with_the_owners_arguments(capsys, tune):
+    with pytest.raises(SystemExit):
+        _shared_cli(["echo", str(tune), "--level", "2"])
+    assert "unrecognized arguments: --level" in capsys.readouterr().err
+
+
+def test_shared_subcommand_help_lists_each_owner(capsys):
+    with pytest.raises(SystemExit):
+        _shared_cli(["echo", "--help"])
+    out = capsys.readouterr().out
+    assert "fake: usage: echo [-h] [--tag TAG] song" in out
+    assert "other: usage: echo [-h] [--level {1,2}] song output" in out
+
+
+def test_shared_subcommand_rejects_an_unowned_tune(capsys, tmp_path):
+    rts = tmp_path / "rts.sid"
+    rts.write_bytes(build_psid(b"\x60", load=0x1000, init=0x1000, play=0x1000))
+    assert _shared_cli(["echo", str(rts)]) == 1
+    assert "format with 'echo' recognises" in capsys.readouterr().err
 
 
 def test_recognize_format_selects_and_rejects(tune):

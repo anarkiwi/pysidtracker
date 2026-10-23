@@ -14,7 +14,7 @@ model and player.
 from __future__ import annotations
 
 import argparse
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from vagrant_moses.memmap import PAL
 
@@ -26,7 +26,7 @@ from .disasm import disassemble, entry_labels, image_after_init
 from .editorio import editor_io
 from .errors import SidError, SidParseError
 from .fixtures import add_fixtures_commands
-from .formats import SidFormat, discover_formats, recognize_format
+from .formats import FormatCommand, SidFormat, discover_formats, recognize_format
 from .image import SidImage
 from .reglog import register_writes_from_player, write_reglog
 from .source import read_bytes
@@ -190,14 +190,60 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
     )
     add_media_commands(media)
 
+    _add_format_commands(subparsers, formats)
+    return parser
+
+
+def _command_parser(command: FormatCommand, prog: Optional[str] = None):
+    """A standalone parser for one format's contributed ``command``."""
+    parser = argparse.ArgumentParser(prog=prog, description=command.help)
+    command.add_arguments(parser)
+    return parser
+
+
+def _dispatch(name: str, owners: Sequence[Tuple[SidFormat, FormatCommand]], args):
+    """Run ``name`` for the owner whose parser recognises ``args.song``."""
+    fmt = recognize_format([owner for owner, _ in owners], read_bytes(args.song))
+    if fmt is None:
+        raise SidParseError(
+            f"no installed pysidtracker format with {name!r} recognises {args.song!r}"
+        )
+    command = next(cmd for owner, cmd in owners if owner is fmt)
+    parser = _command_parser(command, f"pysidtracker {name} ({fmt.name})")
+    command.handler(parser.parse_args([args.song, *args.rest]), fmt)
+
+
+def _add_format_commands(subparsers, formats: Sequence[SidFormat]) -> None:
+    """Add every contributed subcommand; a name several formats share dispatches
+    on the tune's format, so each format keeps its own arguments."""
+    owners: Dict[str, List[Tuple[SidFormat, FormatCommand]]] = {}
     for fmt in formats:
         for command in fmt.commands:
-            sub = subparsers.add_parser(command.name, help=command.help)
+            owners.setdefault(command.name, []).append((fmt, command))
+    for name, pairs in owners.items():
+        if len(pairs) == 1:
+            fmt, command = pairs[0]
+            sub = subparsers.add_parser(name, help=command.help)
             command.add_arguments(sub)
             sub.set_defaults(
                 func=lambda args, cmd=command, owner=fmt: cmd.handler(args, owner)
             )
-    return parser
+            continue
+        usages = "\n".join(
+            f"{fmt.name}: {_command_parser(cmd, name).format_usage().strip()}"
+            for fmt, cmd in pairs
+        )
+        sub = subparsers.add_parser(
+            name,
+            help="; ".join(f"{fmt.name}: {cmd.help}" for fmt, cmd in pairs),
+            description=f"The tune's format selects the arguments:\n{usages}",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        sub.add_argument("song", help="input tune")
+        sub.add_argument(
+            "rest", nargs=argparse.REMAINDER, help="the tune format's own arguments"
+        )
+        sub.set_defaults(func=lambda args, n=name, p=pairs: _dispatch(n, p, args))
 
 
 def main(argv: Optional[List[str]] = None) -> int:

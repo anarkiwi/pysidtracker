@@ -146,7 +146,8 @@ API.
 - `formats` / `maincli` — the one `pysidtracker` CLI (`info` / `reglog` / `wav`
   / `disasm`) that discovers installed formats through the `pysidtracker.formats`
   entry-point group and runs against each format's parser + player, plus any
-  subcommands it contributes. A format package registers a `SidFormat` instead
+  subcommands it contributes (a name several formats contribute, such as
+  `export`, runs the command of the format recognising the tune). A format package registers a `SidFormat` instead
   of shipping its own CLI; `find_format(data, name)` and `SidFormat.play(data,
   subtune)` play a tune's subtune (default its start song) on the installed
   format, as `survey --format` and `whydiff --format` do. `cli` holds the underlying argparse scaffold
