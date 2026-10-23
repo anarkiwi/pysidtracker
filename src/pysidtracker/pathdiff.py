@@ -33,6 +33,7 @@ from .oracle import register_grid
 from .paths import PathTrace, PySubject, cpu_paths, py_paths
 from .player import MemPlayer
 from .registers import PW_HI_REGS
+from .relevance import cpu_relevant, py_relevant
 from .survey import load_render, load_tunes, oracle_frames, read_results
 from .testing import (
     ChecksumMismatch,
@@ -44,11 +45,11 @@ from .testing import (
 from .whydiff import Divergence, explain_cell, explain_divergence, python_side
 
 CPU = "6502"
-FORMAT = 2
+FORMAT = 3
 VERDICTS = ("differs", "exact")
 COMPARE = ("lead", "onset")
 _ROW_KEYS = ("indptr", "indices", "count", "fail", "onset", "lead", "register")
-_ROW_KEYS += ("host", "frames", "rank")
+_ROW_KEYS += ("host", "frames", "rank", "relevant")
 _PW_MASK = np.full(NREGS, 0xFF, np.int16)
 _PW_MASK[list(PW_HI_REGS)] = 0x0F
 
@@ -87,6 +88,15 @@ def trace(spec: str, data: bytes, song: int, nframes: int) -> PathTrace:
     if subj is None:
         return cpu_paths(data, nframes, subtune=song - 1)
     return py_paths(subj, nframes)
+
+
+def relevant(spec: str, tr: PathTrace, data: bytes, song: int, frame: int, register):
+    """``tr``'s feature ids that side ``spec``'s ``register`` at ``frame`` depends on
+    (:mod:`~pysidtracker.relevance`)."""
+    subj = subject(spec, data, song)
+    if subj is None:
+        return cpu_relevant(tr, data, frame, register, song - 1)
+    return py_relevant(tr, subj, frame, register)
 
 
 def grid(spec: str, data: bytes, song: int, nframes: int):
@@ -230,7 +240,8 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
     the distinct rows over them (the failing onset row last when ``fail``), ``count``
     each row's frames. ``onset``/``lead``/``register`` place the divergence (``onset``
     -1: none), ``left``/``right`` are each side's last store to it; ``rank`` is each
-    name's first-occurrence rank on its side in the onset frame (-1: not run there);
+    name's first-occurrence rank on its side in the onset frame (-1: not run there),
+    ``relevant`` the indices of the names its register depends on (``relevance``);
     ``host`` marks a jennings side parting from the ``ocsv`` sidtrace oracle first,
     its rows dropped from there.
     """
@@ -254,6 +265,7 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
     labels = tl.labels + tr.labels
     sites = ["", ""]
     rank = np.full(len(used), -1, np.int32)
+    rel = np.zeros(0, np.int64)
     if cut.frame is not None:
         sites = [
             _site(t, cut.at(r), cut.register, p)
@@ -265,6 +277,13 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
             rank[np.searchsorted(used, cols)] = np.concatenate(
                 [t.order[f] for t, f, _ in at]
             )
+        rel = np.concatenate(
+            [
+                relevant(s, t, data, song, f, cut.register) + off
+                for s, (t, f, off) in zip((left, right), at)
+            ]
+        )
+        rel = np.searchsorted(used, rel[np.isin(rel, used)])
     return dict(
         names=[names[i] for i in used],
         labels=[labels[i] for i in used],
@@ -276,6 +295,7 @@ def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict
         lead=cut.lead,
         register=-1 if cut.register is None else cut.register,
         rank=rank,
+        relevant=rel.astype(np.int32),
         left=sites[0],
         right=sites[1],
         host=dropped,
@@ -488,7 +508,7 @@ def _sample(key: str, rec: dict, extra=()) -> tuple:
     rank = rec.get("rank")
     if rank is not None:
         rank = np.append(rank, np.full(len(rec["names"]) - len(rank), -1))
-    return key, mat, rec["names"], onset, extra, rank
+    return key, mat, rec["names"], onset, extra, rank, rec.get("relevant")
 
 
 def info_extras(work) -> Dict[str, Tuple[str, ...]]:

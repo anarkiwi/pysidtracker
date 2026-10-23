@@ -39,7 +39,8 @@ class Spectrum:
     ``tune`` its index into ``tunes``; ``onset`` is per tune (-1: none) and
     ``extra`` flags the per-tune constant columns. ``order`` is (failing rows x
     features), aligned to :attr:`fail_rows`: 1 + each feature's first-occurrence rank
-    on its side in the onset frame, an empty row where the order is not known.
+    on its side in the onset frame, an empty row where the order is not known;
+    ``relevant`` (aligned alike) the features the diverging register depends on.
     """
 
     names: List[str]
@@ -51,6 +52,7 @@ class Spectrum:
     onset: np.ndarray
     extra: np.ndarray
     order: Optional[sparse.csr_matrix] = None
+    relevant: Optional[sparse.csr_matrix] = None
     index: Dict[str, int] = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -80,18 +82,19 @@ def _cat(parts, dtype):
 
 
 def build_spectrum(samples, progress: bool = False) -> Spectrum:
-    """A :class:`Spectrum` from ``(tune, matrix, names, onset[, extra[, rank]])`` samples.
+    """A :class:`Spectrum` from ``(tune, matrix, names, onset[, extra[, rank[,
+    relevant]]])`` samples.
 
-    Frames before ``onset`` pass, frame ``onset`` fails, later frames drop (None:
-    all pass); ``extra`` names tune-constant features; ``rank`` (aligned with
-    ``names``, -1: not run) is each feature's first-occurrence rank on its side in
-    the onset frame. Identical ``(features, fail, tune)`` rows collapse into one
-    weighted row.
+    Frames before ``onset`` pass, frame ``onset`` fails, later frames drop (None: all
+    pass); ``extra`` names tune-constant features; ``rank`` (aligned with ``names``,
+    -1: not run) is each feature's first-occurrence rank on its side in the onset
+    frame and ``relevant`` the indices of ``names`` the diverging register depends on.
+    Identical ``(features, fail, tune)`` rows collapse into one weighted row.
     """
     vocab: Dict[str, int] = {}
     tunes, onsets, extra_cols = [], [], []
     rows, cols, weights, fails, tix = [], [], [], [], []
-    ocols, oranks, olens = [], [], []
+    ocols, oranks, olens, rcols, rlens = [], [], [], [], []
     nrow = 0
     for t, (tune, mat, names, onset, *rest) in enumerate(
         tqdm(samples, desc="spectrum", unit="tune", disable=not progress)
@@ -99,6 +102,7 @@ def build_spectrum(samples, progress: bool = False) -> Spectrum:
         lut = _ids(vocab, names)
         ext = np.unique(_ids(vocab, rest[0] if rest else ()))
         rank = rest[1] if len(rest) > 1 and rest[1] is not None else None
+        rel = rest[2] if len(rest) > 2 and rest[2] is not None else ()
         extra_cols.append(ext)
         tunes.append(tune)
         mat = sparse.csr_matrix(mat, dtype=bool)
@@ -113,6 +117,8 @@ def build_spectrum(samples, progress: bool = False) -> Spectrum:
             ocols.append(lut[ran])
             oranks.append(np.asarray(rank)[ran] + 1 if len(ran) else np.zeros(0))
             olens.append(len(ran))
+            rcols.append(np.unique(lut[np.asarray(rel, np.int64)]))
+            rlens.append(len(rcols[-1]))
         fail = np.zeros(mat.shape[0], np.uint8)
         fail[-1] = hit
         key = np.ascontiguousarray(
@@ -144,6 +150,13 @@ def build_spectrum(samples, progress: bool = False) -> Spectrum:
         (_cat(oranks, np.int64), _cat(ocols, np.int64), indptr),
         shape=(len(olens), len(vocab)),
     )
+    rptr = np.zeros(len(rlens) + 1, np.int64)
+    np.cumsum(rlens, out=rptr[1:])
+    relevant = sparse.csr_matrix(
+        (np.ones(int(rptr[-1]), bool), _cat(rcols, np.int64), rptr),
+        shape=(len(rlens), len(vocab)),
+    )
+
     return Spectrum(
         names=list(vocab),
         x=x,
@@ -154,6 +167,7 @@ def build_spectrum(samples, progress: bool = False) -> Spectrum:
         onset=np.array(onsets, np.int64),
         extra=extra,
         order=order,
+        relevant=relevant,
     )
 
 
@@ -318,12 +332,14 @@ class Parting(NamedTuple):
     """Where each side's onset-frame execution first departs (feature names, "" none).
 
     ``left``/``right`` are each side's first feature no partner of which runs on the
-    other side; ``after`` each side's last feature before it that one does.
+    other side; ``after`` each side's last feature before it that one does;
+    ``relevant`` whether only departures the diverging register depends on counted.
     """
 
     left: str
     right: str
     after: Tuple[str, str]
+    relevant: bool = False
 
 
 def _first_per(group: np.ndarray, key: np.ndarray, pick: np.ndarray, ngroups: int):
@@ -336,15 +352,26 @@ def _first_per(group: np.ndarray, key: np.ndarray, pick: np.ndarray, ngroups: in
     return out
 
 
+def relevance(spec: Spectrum, row, col) -> np.ndarray:
+    """Per ``(failing row, feature)`` pair whether :attr:`Spectrum.relevant` holds it."""
+    if spec.relevant is None or not spec.relevant.nnz:
+        return np.zeros(len(row), bool)
+    rel = spec.relevant.tocoo()
+    width = np.int64(len(spec.names))
+    have = np.unique(rel.row.astype(np.int64) * width + rel.col)
+    return np.isin(np.asarray(row, np.int64) * width + np.asarray(col), have)
+
+
 def partings(spec: Spectrum, corr: Correspondence) -> List[Optional[Parting]]:
     """Per failing row (aligned to :attr:`Spectrum.fail_rows`) its :class:`Parting`.
 
     Over each side's partnered, non-``store:`` features of the onset frame, in their
     first-occurrence order (:attr:`Spectrum.order`), the first one none of whose
-    partners the other side runs in that frame: where that side's execution left
-    the other's. Shared features may run in any order on either side (voices taken
-    in another order), and an unpartnered one is helper code the other side need not
-    mirror. None where the order is unknown or every feature has a running partner.
+    partners the other side runs in that frame: where that side's execution left the
+    other's. Where the diverging register depends on some departure of either side
+    (:func:`relevance`), only those count. Shared features may run in any order on either side, and
+    an unpartnered one is helper code the other side need not mirror. None where the
+    order is unknown or every feature has a running partner.
     """
     nf = len(spec.fail_rows)
     if spec.order is None or not spec.order.nnz:
@@ -364,8 +391,11 @@ def partings(spec: Spectrum, corr: Correspondence) -> List[Optional[Parting]]:
         (np.ones(len(row)), (row, col)), shape=(nf, len(spec.names))
     )
     hit = np.asarray((ran @ corr.adj.T.astype(np.float64))[row, col]).ravel() > 0
+    rel = relevance(spec, row, col) & ~hit
+    sliced = np.zeros(nf, bool)
+    sliced[row[rel]] = True
     group = row * 2 + side[col] - 1
-    first = _first_per(group, rank, ~hit, 2 * nf)
+    first = _first_per(group, rank, ~hit & (rel | ~sliced[row]), 2 * nf)
     limit = np.where(first >= 0, rank[first], -1)
     after = _first_per(group, -rank, hit & (rank < limit[group]), 2 * nf)
     names = np.array(list(spec.names) + [""], object)
@@ -373,8 +403,8 @@ def partings(spec: Spectrum, corr: Correspondence) -> List[Optional[Parting]]:
         names[np.where(x >= 0, col[x], -1)].reshape(nf, 2) for x in (first, after)
     )
     return [
-        Parting(l, r, (al, ar)) if l or r else None
-        for (l, r), (al, ar) in zip(first, after)
+        Parting(l, r, (al, ar), bool(s)) if l or r else None
+        for (l, r), (al, ar), s in zip(first, after, sliced)
     ]
 
 
