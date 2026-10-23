@@ -263,8 +263,20 @@ def test_python_pair_onset_end_to_end(corpus, tmp_path):
     rec = pd.record(_tune(16, 3), 1, spec, lift, "onset", 10)
     assert repr(top.key) in {repr(k) for k in an.keys_of(rec, "k")}
     assert an.keys_of(pd.record(_tune(0, 3), 1, spec, lift, "onset", 10)) == set()
+    alias = tmp_path / "alias.json"
+    names = ["--as-left", "toy.players:native", "--as-right", "toy.players:lift"]
+    assert pd.main([*base, "--manifest", str(alias), "--no-verify", *names]) == 0
+    (named,) = pd.load_manifest(alias)
+    assert (named["left"], named["right"]) == ("toy.players:native", "toy.players:lift")
+    assert {k: v for k, v in named.items() if k not in ("left", "right")} == {
+        k: v for k, v in case.items() if k not in ("left", "right")
+    }
+    kw = dict(as_left=named["left"], as_right=named["right"])
+    alias.unlink()
+    assert pd.xfails(an, alias, check=check, **kw) == [named]
     _players(tmp_path / "players", FIXED)
     check(case)
+    assert pd.xfails(an, alias, prune=True, check=check, top=0, **kw) == []
 
 
 def test_patch_turns_an_exact_tune_into_a_case(corpus):

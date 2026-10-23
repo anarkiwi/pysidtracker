@@ -861,8 +861,11 @@ def save_manifest(path, cases: Sequence[dict]) -> None:
     Path(path).write_text(json.dumps(out, indent=1, sort_keys=True) + "\n", "utf-8")
 
 
-def make_case(an: Analysis, fix: fl.Fix) -> Optional[dict]:
-    """The manifest case of a fix's representative, its reason from whydiff's headline."""
+def make_case(
+    an: Analysis, fix: fl.Fix, as_left: str = "", as_right: str = ""
+) -> Optional[dict]:
+    """The manifest case of a fix's representative, its reason from whydiff's headline;
+    its sides are written as ``as_left``/``as_right`` (default the pair's specs)."""
     rec = an.tune(fix.representative)
     meta = an.meta
     data = (Path(meta["hvsc"]) / rec["path"]).read_bytes()
@@ -874,15 +877,15 @@ def make_case(an: Analysis, fix: fl.Fix) -> Optional[dict]:
         md5=hashlib.md5(data).hexdigest(),
         song=int(rec["song"]),
         frames=case_frames(rec, meta["compare"]),
-        left=meta["left"],
-        right=meta["right"],
+        left=as_left or meta["left"],
+        right=as_right or meta["right"],
         compare=meta["compare"],
     )
     why = diverge(
         data,
         entry["song"],
-        entry["left"],
-        entry["right"],
+        meta["left"],
+        meta["right"],
         entry["compare"],
         entry["frames"],
         name=rec["path"],
@@ -923,17 +926,28 @@ def xfails(
     top: int = 10,
     prune: bool = False,
     check: Optional[Callable[[dict], None]] = None,
+    as_left: str = "",
+    as_right: str = "",
 ) -> List[dict]:
     """Merge the top fixes' cases into ``manifest``; existing ids are kept as they are.
 
     With ``check`` (a :func:`check_case` partial) a new case is kept only when
-    :func:`verify_case` holds; ``prune`` drops existing cases ``check`` passes.
+    :func:`verify_case` holds; ``prune`` drops existing cases ``check`` passes. Cases
+    name their sides ``as_left``/``as_right`` (default the pair's specs) and are
+    checked with the pair's own.
     """
+    meta = an.meta
+
+    def real(case):
+        alias = {as_left: meta["left"], as_right: meta["right"]}
+        alias.pop("", None)
+        return dict(case, **{s: alias.get(case[s], case[s]) for s in ("left", "right")})
+
     cases = {c["id"]: c for c in load_manifest(manifest)}
     if prune and check is not None:
         for cid, case in tqdm(list(cases.items()), desc="prune", unit="case"):
             try:
-                check(case)
+                check(real(case))
                 del cases[cid]
             except AssertionError:
                 pass
@@ -941,8 +955,8 @@ def xfails(
         f for f in an.fixes[:top] if f.representative and fix_id(f.key) not in cases
     ]
     for fix in tqdm(fresh, desc="cases", unit="case"):
-        entry = make_case(an, fix)
-        if entry is not None and (check is None or verify_case(an, entry, check)):
+        entry = make_case(an, fix, as_left, as_right)
+        if entry is not None and (check is None or verify_case(an, real(entry), check)):
             cases[entry["id"]] = entry
     out = list(cases.values())
     save_manifest(manifest, out)
@@ -985,6 +999,10 @@ def main(argv=None) -> int:
     p.add_argument("--prune", action="store_true")
     p.add_argument("--verify", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--oracle-cache", type=Path, help="default: default_cache('csv')")
+    p.add_argument("--as-left", default="", help="the left spec cases are written with")
+    p.add_argument(
+        "--as-right", default="", help="the right spec cases are written with"
+    )
     args = ap.parse_args(argv)
     if args.command == "build":
         tally = build(
@@ -1028,7 +1046,15 @@ def main(argv=None) -> int:
                 resolve=lambda rel, cache_dir: hvsc / rel,
             )
 
-    cases = xfails(an, args.manifest, top=args.top, prune=args.prune, check=check)
+    cases = xfails(
+        an,
+        args.manifest,
+        top=args.top,
+        prune=args.prune,
+        check=check,
+        as_left=args.as_left,
+        as_right=args.as_right,
+    )
     print(f"{len(cases)} cases in {args.manifest}")
     return 0
 
