@@ -3,6 +3,7 @@
 import hashlib
 import http.client
 import io
+import json
 import tarfile
 import threading
 import time
@@ -240,6 +241,20 @@ def test_gather_tune_relpaths_from_a_manifest(tmp_path):
     manifest.write_text("B/y.sid\n\n  C/z.sid notes.txt\n", encoding="utf-8")
     assert gather_tune_relpaths([manifest]) == ["B/y.sid", "C/z.sid"]
     assert gather_tune_relpaths([tmp_path]) == ["A/x.sid"]
+
+
+def test_gather_tune_relpaths_from_a_pathdiff_manifest(tmp_path):
+    cases = [
+        {"id": "a", "relpath": "MUSICIANS/X/x.sid", "song": 1},
+        {"id": "b", "relpath": "GAMES/y.sid", "reason": "C/not_me.sid differs"},
+        {"id": "c", "relpath": "bare.sid"},
+        "D/neither.sid",
+    ]
+    (tmp_path / "pathdiff.json").write_text(json.dumps(cases), encoding="utf-8")
+    (tmp_path / "one.json").write_text('{"relpath": "E/z.sid"}', encoding="utf-8")
+    want = ["E/z.sid", "GAMES/y.sid", "MUSICIANS/X/x.sid"]
+    assert gather_tune_relpaths([tmp_path]) == want
+    assert gather_tune_relpaths([tmp_path / "pathdiff.json"]) == want[1:]
 
 
 def test_fetch_main_caches_reachable_reports_missing(monkeypatch, tmp_path, capsys):
