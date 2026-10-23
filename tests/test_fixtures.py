@@ -6,7 +6,9 @@ behaviours are all exercised against the fake HTTP layer.
 """
 
 import hashlib
+import io
 import urllib.error
+import zipfile
 
 import pytest
 
@@ -25,6 +27,7 @@ from pysidtracker.fixtures import (
     default_native_cache,
     fetch_csdb,
     fixture,
+    index_media,
     load_manifest,
     main,
     make_native_fixtures,
@@ -32,6 +35,8 @@ from pysidtracker.fixtures import (
     read_sums,
     write_manifest,
 )
+
+from .helpers import build_disk
 
 _GOAT = b"\x00GOAT-blitz\x01"
 _DMC = b"\x00DMC-drive\x02"
@@ -401,3 +406,53 @@ def test_cli_verify_and_manifest(tmp_path, capsys):
     main(["manifest", "--cache", str(tmp_path), "--out", str(m)])
     assert main(["verify", str(m), "--cache", str(tmp_path)]) == 0
     assert "2/2 expected fixture(s)" in capsys.readouterr().out
+
+
+_ON_DISK = b"\x00\x43" + bytes(range(256)) * 3
+
+
+def _disk_zip():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("rel/Song Disk.d64", build_disk([("S.SONG", _ON_DISK, 0x82)]))
+        zf.writestr("rel/readme.txt", b"not media")
+        zf.writestr("rel/bad.d64", b"short")
+    return buf.getvalue()
+
+
+@pytest.fixture
+def disk_release(http):  # pylint: disable=redefined-outer-name,unused-argument
+    """Release 777's file 102 is a zip holding a disk with the wanted PRG."""
+    saved = _FILES[102], _FINAL_URL[102]
+    _FILES[102], _FINAL_URL[102] = _disk_zip(), "https://csdb.dk/files/102/rel.zip"
+    yield
+    _FILES[102], _FINAL_URL[102] = saved
+
+
+@pytest.mark.usefixtures("disk_release")
+def test_index_media_pins_a_prg_inside_a_release_disk(tmp_path):
+    downloads = fetch_csdb(["777"], tmp_path)
+    found = index_media(downloads, {_sha(_ON_DISK), "f" * 64}, tmp_path)
+    rel = "media/777/102_rel.zip/rel/Song_Disk.d64/S.SONG"
+    url = f"{DEFAULT_CSDB}/release/download.php?id=102"
+    assert found == [SumEntry(_sha(_ON_DISK), rel, url)]
+    assert fixture(_sha(_ON_DISK), tmp_path).read_bytes() == _ON_DISK
+    assert index_media(downloads, set(), tmp_path) == []
+    index_media(downloads, {_sha(_ON_DISK)}, tmp_path)
+    assert (tmp_path / SUMS_NAME).read_text().count(rel) == 1
+    by_sha = {r.sha256: r for r in manifest_from_cache(tmp_path)}
+    assert by_sha[_sha(_ON_DISK)][:2] == ("777", "S.SONG")
+
+
+@pytest.mark.usefixtures("disk_release")
+def test_cli_fetch_pins_manifest_files_on_release_media(tmp_path):
+    m = tmp_path / "m.txt"
+    write_manifest(
+        [
+            NativeFixture("777", "S.SONG", _sha(_ON_DISK), ""),
+            NativeFixture("777", "Blitz Demo.sng", _sha(_GOAT), ""),
+        ],
+        m,
+    )
+    assert main(["fetch", str(m), "--cache", str(tmp_path)]) == 0
+    assert fixture(_sha(_ON_DISK), tmp_path).name == "S.SONG"

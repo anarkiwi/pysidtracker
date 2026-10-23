@@ -98,7 +98,8 @@ API.
 - `fixtures` — CSDB (csdb.dk) native-format editor files (GoatTracker/DMCSID/JCH)
   are copyright works and never committed: `fetch_csdb` scrapes release pages and
   downloads every file into a gitignored, resume-safe cache indexed by SHA-256 in
-  `SHA256SUMS.txt`; `fixture(sha256, cache)` resolves a file by hash,
+  `SHA256SUMS.txt`, `index_media` pinning files found inside release disks and
+  archives; `fixture(sha256, cache)` resolves a file by hash,
   `make_native_fixtures` is a pytest factory that resolves or **skips** when the
   cache is cold, and `load_manifest`/`write_manifest` are the committed
   hash-only manifest. `pysidtracker fixtures fetch <manifest>` (and the
