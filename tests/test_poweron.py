@@ -76,7 +76,51 @@ def test_memplayer_boots_from_the_poweron_image():
     player = _ReadPlayer(b"", 0x8000)
     want = poweron.power_on_ram()
     want[mm.SID_BASE + 0x18] = 0x0F  # the PSID driver seeds maximum volume
+    poweron.place_tune(want, 0x8000, b"")
     assert bytes(player._mem) == want
+
+
+def test_place_tune_leaves_the_basic_load_pointers():
+    ram = poweron.power_on_ram()
+    poweron.place_tune(ram, 0x1000, b"\x01\x02\x03")
+    assert ram[0x1000:0x1003] == b"\x01\x02\x03"
+    assert [ram[a] | ram[a + 1] << 8 for a in (0x2D, 0x2F, 0x31, 0xAE)] == [0x1003] * 4
+    assert ram[0xAC] | ram[0xAD] << 8 == 0x1000
+
+
+def test_place_tune_image_covers_the_pointers():
+    ram = poweron.power_on_ram()
+    poweron.place_tune(ram, 0x0020, bytes(range(0x20, 0x40)))
+    assert ram[0x2D] == 0x2D and ram[0x31] == 0x31  # the image's own bytes
+    assert ram[0xAC:0xB0] == bytes((0x20, 0x00, 0x40, 0x00))
+
+
+def test_flat_players_see_the_basic_load_pointers():
+    """A tune reading ``$2D``/``$AC`` sees its bounds on every flat path, as sidplayfp."""
+    from pysidtracker.asm6502 import assemble
+    from pysidtracker.header import write_psid
+    from pysidtracker.oracle import EmuPlayer, register_grid
+
+    code, labels = assemble(
+        """init: RTS
+        play: LDA $2D
+        STA $D400
+        LDA $2E
+        STA $D401
+        LDA $AC
+        STA $D405
+        LDA $AD
+        STA $D406
+        RTS""",
+        0x1000,
+    )
+    end = 0x1000 + len(code)
+    want = (end & 0xFF, end >> 8, 0x00, 0x10)
+    psid = write_psid(load=0x1000, init=0x1000, play=labels["play"], image=code)
+    row = register_grid(psid, 1)[0]
+    assert (row[0], row[1], row[5], row[6]) == want
+    emu = EmuPlayer(code, 0x1000, 0x1000, labels["play"]).render_grid(1)[0]
+    assert (emu[0], emu[1], emu[5], emu[6]) == want
 
 
 def test_memplayer_reads_poweron_ram_not_zeros():

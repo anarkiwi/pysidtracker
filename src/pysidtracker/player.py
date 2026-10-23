@@ -13,7 +13,7 @@ from __future__ import annotations
 import abc
 from typing import Iterator, List, Optional, Tuple
 
-from .poweron import power_on_ram
+from .poweron import place_tune, power_on_ram
 from .registers import SID_BASE, SID_REG_COUNT
 
 
@@ -21,7 +21,9 @@ class MemPlayer(abc.ABC):
     """Abstract per-frame player over a flat 64 KiB memory image.
 
     The image starts as libsidplayfp's power-on RAM (:func:`~pysidtracker.poweron.power_on_ram`)
-    so a tune reading uninitialised memory reads what the C64 had at power-on, not zeros.
+    so a tune reading uninitialised memory reads what the C64 had at power-on, not zeros,
+    and the image is loaded with :func:`~pysidtracker.poweron.place_tune`'s BASIC
+    ``LOAD`` pointers.
     Subclasses implement :meth:`_init` (run the tune's init, programming the
     initial SID register file) and :meth:`_frame` (advance one play call). Both
     use :meth:`_rd`/:meth:`_wr`; SID writes land in ``$D400..`` and are read
@@ -34,7 +36,7 @@ class MemPlayer(abc.ABC):
     def __init__(self, image: bytes, load: int, subtune: int = 0):
         self._mem = power_on_ram()
         self._load = load & 0xFFFF
-        self._mem[self._load : self._load + len(image)] = image
+        place_tune(self._mem, self._load, image)
         # The libsidplayfp PSID driver seeds maximum volume ($D418=$0F) before
         # running init, so a tune that never sets volume is still audible.
         self._mem[self.SID_BASE + 0x18] = 0x0F

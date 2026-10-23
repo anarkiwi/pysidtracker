@@ -16,7 +16,7 @@ from . import registers as reg
 from .emu import run_to_rts, set_iomap, wire_mpu
 from .errors import EmulatorUnavailable, SidParseError
 from .image import SidImage
-from .poweron import power_on_ram, psid_init_bank, psid_play_bank
+from .poweron import place_tune, power_on_ram, psid_init_bank, psid_play_bank
 
 _W_A: FrozenSet[str] = frozenset(
     (
@@ -367,7 +367,7 @@ def trace_frames(
     _mpu()
 
     subject = power_on_ram()
-    subject[image.load : image.load + len(image.image)] = image.image
+    place_tune(subject, image.load, image.image)
     subject[mm.SID_BASE + 0x18] = 0x0F
     init = image.header.init_address or image.header.real_load_address
     play = image.header.play_address or init
