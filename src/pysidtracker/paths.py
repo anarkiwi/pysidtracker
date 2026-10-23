@@ -52,6 +52,8 @@ class PathTrace:
       roots: the files a Python side traced (for :func:`py_universe`).
       sources: the exec'd code a Python side traced (for :func:`py_universe`).
       starts: each voice's first-note frame (None: not begun), when the side gives them.
+      code: a 6502 side's :class:`StaticCode`.
+      edges: a 6502 side's ``(src, dst)`` of each ``edge:`` feature id (-1: out).
     """
 
     side: str
@@ -65,6 +67,8 @@ class PathTrace:
     sources: Dict[str, str] = field(default_factory=dict)
     starts: Optional[tuple] = None
     order: List[np.ndarray] = field(default_factory=list)
+    code: Optional["StaticCode"] = None
+    edges: List[Tuple[int, int]] = field(default_factory=list)
 
     def sequence(self, frame: int) -> np.ndarray:
         """Play call ``frame``'s feature ids in the order they first executed."""
@@ -181,6 +185,11 @@ class StaticCode:
         if mn == "JMP" and mode == "abs":
             return [self._target(pc)]
         return []
+
+    def cfg(self, out) -> List[Tuple[int, object]]:
+        """The decoded code's intra-routine edges; a routine's ``RTS``/``RTI`` (and a
+        ``BRK``, ``JAM`` or indirect jump) leads to ``out``."""
+        return [(pc, s) for pc in sorted(self.seen) for s in self._succ(pc) or [out]]
 
     def explore(self, seeds, entries) -> None:
         """Descend from ``seeds``, adding decoded runs and static edges.
@@ -465,6 +474,8 @@ def cpu_paths(
         sites,
         [r.astype(np.uint16) for r in _split(rframe * 0x10000 + rd, nframes, 0x10000)],
         order=order,
+        code=code,
+        edges=edges,
     )
 
 
@@ -547,6 +558,7 @@ class _Source:
     keys: Dict[int, str]
     stores: Dict[int, list]
     arcs: frozenset
+    flow: frozenset = frozenset()
 
     @functools.cached_property
     def file(self) -> str:
@@ -601,7 +613,22 @@ def _source(name: str, text: str, generated: bool) -> Optional[_Source]:
         keys,
         _stores(tree, name),
         frozenset((a, b) for a, b in parser.arcs() if exits.get(a, 0) > 1),
+        frozenset(parser.arcs()),
     )
+
+
+def source_of(path: str, sources: Optional[Dict[str, str]] = None) -> Optional[_Source]:
+    """The parsed file at ``path`` (an exec'd pseudo-filename in ``sources``: its text),
+    None when it cannot be read or parsed."""
+    if sources and path in sources:
+        return _source(path, sources[path], True)
+    real = os.path.realpath(path)
+    try:
+        with open(real, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return _source(real, text, False)
 
 
 @dataclass
@@ -663,14 +690,13 @@ class _Recorder:
         if code.co_name.startswith("<") and code.co_name != "<module>":
             pass
         elif path in self.sources:
-            got = _source(path, self.sources[path], True)
+            got = source_of(path, self.sources)
         else:
             real = os.path.realpath(path)
             if real != self._skip and any(
                 real == r or real.startswith(r + os.sep) for r in self.roots
             ):
-                with open(real, encoding="utf-8") as fh:
-                    got = _source(real, fh.read(), False)
+                got = source_of(real)
         self._codes[code] = got
         return got
 
@@ -986,5 +1012,6 @@ __all__ = [
     "py_paths",
     "py_sources",
     "py_universe",
+    "source_of",
     "static_code",
 ]

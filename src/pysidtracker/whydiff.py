@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import dis
 import enum
 import importlib
 import inspect
@@ -53,6 +54,8 @@ _IMPURE = (
 _HIDDEN = (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)
 _HIDDEN += (types.MethodType, types.BuiltinMethodType)
 _FLAGS = "NV-BDIZC"
+_ORDERED = frozenset({"bytes", "bytearray", "list", "tuple"})
+_YIELD = dis.opmap["YIELD_VALUE"]
 
 
 def _pure(node) -> bool:
@@ -198,6 +201,7 @@ class _Stmt:
     start: int
     control: Optional[int]
     fresh: bool
+    zips: bool = False
 
 
 _BRANCHING = (ast.If, ast.For, ast.AsyncFor, ast.While)
@@ -240,6 +244,24 @@ def _header(node):
     return end, reads, cond, sets
 
 
+def _zips(node) -> bool:
+    """Whether a statement stores a slice from an order-preserving build of one
+    generator expression (``x[a:b] = bytes(f(v) for v in seq)``): item i is yield i."""
+    if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+        return False
+    target, value = node.targets[0], node.value
+    if not (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Slice)):
+        return False
+    return (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id in _ORDERED
+        and len(value.args) == 1
+        and not value.keywords
+        and isinstance(value.args[0], ast.GeneratorExp)
+    )
+
+
 def _statements(node, control=None):
     """Every statement under ``node`` with the line of its nearest enclosing branch."""
     for value in ast.iter_fields(node):
@@ -276,6 +298,7 @@ def _index(path: str) -> Dict[int, _Stmt]:
             and not isinstance(
                 node.value, (ast.Name, ast.Attribute, ast.Subscript, type(None))
             ),
+            _zips(node),
         )
         for line in range(node.lineno, end + 1):
             held = index.get(line)
@@ -349,6 +372,7 @@ class PyEvent:
     rets: List[int] = field(default_factory=list)
     live: List[Tuple[str, str]] = field(default_factory=list)
     state: List[Tuple[str, str, tuple]] = field(default_factory=list, repr=False)
+    yielded: bool = False
 
 
 def _scalar(value) -> bool:
@@ -382,6 +406,7 @@ class PyTrace:
         self._branch: Dict[object, Dict[int, int]] = {}
         self._last: Dict[tuple, int] = {}
         self._fresh: set = set()
+        self._items: Dict[tuple, Tuple[int, int]] = {}
         self.objects: Dict[int, object] = {}
         self._saved = None
 
@@ -468,6 +493,13 @@ class PyTrace:
         """The event that last stored ``container[index]`` in the trace, if one did."""
         return self._last.get((id(container), index))
 
+    def item(self, container, index) -> Optional[int]:
+        """The yield that produced ``container[index]`` when its last store took a
+        generator's yields in order (see ``_zips``), else None."""
+        key = (id(container), index)
+        held = self._items.get(key)
+        return held[1] if held and held[0] == self._last.get(key) else None
+
     def _emit(self, frame, kind: str, text: str, **kw) -> int:
         code = frame.f_code
         self.events.append(
@@ -495,6 +527,10 @@ class PyTrace:
             for _, _, own, *_ in got:
                 for key in own:
                     self._last[key] = idx
+            yields = [r for r in self.events[idx].rets if self.events[r].yielded]
+            own = got[0][2] if stmt.zips and got else []
+            if own and len(yields) == len(own):
+                self._items.update((k, (idx, y)) for k, y in zip(own, yields))
         return idx
 
     def _caller(self, frame):
@@ -614,12 +650,17 @@ class PyTrace:
             self._line(frame)
         elif event == "return":
             last = self._settle(frame)
+            yielded = frame.f_code.co_code[frame.f_lasti] == _YIELD
+            deps = ([] if last is None else [last]) + (
+                self._drawn(frame) if yielded else []
+            )
             idx = self._emit(
                 frame,
                 "return",
                 "return",
                 sets=[("", self._repr.repr(arg))],
-                deps=[] if last is None else [last],
+                deps=deps,
+                yielded=yielded,
             )
             site = self._site(frame)
             if site is not None:
@@ -631,10 +672,24 @@ class PyTrace:
             self._emit(frame, "exception", f"raise {kind.__name__}: {value}")
         return self._local
 
-    def slice(self, root: int, limit: int = 200) -> List[int]:
+    def _drawn(self, frame) -> List[int]:
+        """The store of the list or tuple item a generator's ``.0`` iterator last drew."""
+        try:
+            _, (seq, *_), at = frame.f_locals[".0"].__reduce__()
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return []
+        if not isinstance(seq, (list, tuple)):
+            return []
+        hit = self._last.get((id(seq), at - 1))
+        return [] if hit is None else [hit]
+
+    def slice(
+        self, root: int, limit: int = 200, rets: Optional[Sequence[int]] = None
+    ) -> List[int]:
         """The events ``root``'s value came from, nearest first up to ``limit``, in order.
 
-        A line reached through a call site counts only the returns of calls made before it.
+        A line reached through a call site counts only the returns of calls made before
+        it; ``rets`` replaces the root's own returns (one item of a bulk store).
         """
         end = len(self.events)
         seen = {root: end}
@@ -643,8 +698,9 @@ class PyTrace:
             step = []
             for i, bound in frontier:
                 event = self.events[i]
+                own = rets if i == root and rets is not None else event.rets
                 step += [(d, end) for d in event.deps]
-                step += [(r, end) for r in event.rets if r < bound]
+                step += [(r, end) for r in own if r < bound]
                 if event.site is not None:
                     step.append((event.site, i))
             frontier = []
@@ -685,12 +741,19 @@ class CpuStep:
         return out
 
 
-def cpu_slice(steps: Sequence[CpuStep], root: int, address: Optional[int] = None):
+def cpu_slice(
+    steps: Sequence[CpuStep],
+    root: int,
+    address: Optional[int] = None,
+    control: Optional[Sequence[int]] = None,
+):
     """The steps ``root``'s store to ``address`` (default its SID stores) came from, and
     the state it read at entry.
 
     A backward dynamic slice over each step's ``flow``: ``(indices, live)``, ``live``
     mapping each location read before this call set it to the value read (registers None).
+    With ``control`` (each step's dynamic control parent, -1: none) a kept step also
+    keeps the branch it ran under, and that branch its condition's inputs.
     """
     top = steps[root]
     if address is None:
@@ -700,12 +763,19 @@ def cpu_slice(steps: Sequence[CpuStep], root: int, address: Optional[int] = None
     needed = set().union(*(top.flow.get(a, ()) for a in cells))
     values = dict(top.reads)
     keep = [root]
+    want = {control[root]} if control is not None else set()
     for i in range(root - 1, -1, -1):
         hit = needed & steps[i].flow.keys()
-        if not hit:
+        ruled = i in want
+        if not (hit or ruled):
             continue
         keep.append(i)
         needed = (needed - hit).union(*(steps[i].flow[loc] for loc in hit))
+        if ruled:
+            needed |= steps[i].flow.get("PC", frozenset())
+        if control is not None:
+            want.add(control[i])
+        needed.discard("PC")
         values.update(steps[i].reads)
     order = sorted(needed, key=lambda x: (isinstance(x, int), str(x)))
     return sorted(keep), {loc: values.get(loc) for loc in order}
@@ -1072,11 +1142,14 @@ def python_side(
     grid=None,
     progress: bool = False,
     traced: Optional[int] = None,
+    control: Optional[Callable] = None,
 ) -> Side:
     """The :class:`PyTrace` of ``make_player()``'s ``play_frame`` call ``frame`` (0-based).
 
     ``cell(player, register)`` names the ``(container, index)`` holding the register; its
     last store is the root. Without one, ``grid`` (this player's) retraces :func:`last_change`.
+    ``control(events)``, each event's dynamic control parent (-1: none), adds that parent
+    to the event's dependences before slicing.
     """
     traced = frame if traced is None else traced
     player = make_player()
@@ -1105,9 +1178,19 @@ def python_side(
             sources=sources,
             progress=progress,
             traced=back,
+            control=control,
         )
-    keep = trace.slice(root) if root is not None else []
     events = trace.events
+    if control is not None and root is not None:
+        for event, parent in zip(events, control(events)):
+            if parent >= 0:
+                event.deps = sorted({*event.deps, int(parent)})
+    item = trace.item(*cell(player, register)) if root is not None else None
+    keep = (
+        trace.slice(root, rets=None if item is None else [item])
+        if root is not None
+        else []
+    )
     state: Dict[tuple, bool] = {}
     sliced = set(keep)
     for i, event in enumerate(events):
@@ -1155,10 +1238,12 @@ def cpu_side(
     grid=None,
     traced: Optional[int] = None,
     address: Optional[int] = None,
+    control: Optional[Callable] = None,
 ) -> Side:
     """The jennings :func:`cpu_history` of play call ``frame``, sliced from its last store
     to SID ``register`` (or RAM ``address``, ``grid`` then its column 0); without one,
-    ``grid`` (the jennings grid) retraces :func:`last_change`.
+    ``grid`` (the jennings grid) retraces :func:`last_change`. ``control(steps)``, each
+    step's dynamic control parent, adds control dependence to the slice.
     """
     traced = frame if traced is None else traced
     steps = cpu_history(data, traced, subtune=subtune)
@@ -1183,9 +1268,14 @@ def cpu_side(
             subtune=subtune,
             traced=back,
             address=address,
+            control=control,
         )
     root = hits[-1] if hits else None
-    keep, live = cpu_slice(steps, root, address) if root is not None else ([], {})
+    keep, live = (
+        cpu_slice(steps, root, address, control and control(steps))
+        if root is not None
+        else ([], {})
+    )
     return Side(
         label,
         frame,
