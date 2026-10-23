@@ -53,10 +53,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
-def _cache_dir(config: pytest.Config) -> Path:
-    from pysidtracker.testing import default_tune_cache
+def _cache_dir(config: pytest.Config, kind: str = "") -> Path:
+    from pysidtracker.testing import default_cache
 
-    return default_tune_cache(config.rootpath)
+    return default_cache(kind, config.rootpath)
 
 
 class HvscTunes:
@@ -92,7 +92,7 @@ class SidtraceOracle:
     """Session retriever for CSV-cached sidtrace register grids."""
 
     def __init__(self, cache_dir):
-        self._csv = Path(cache_dir) / "csv"
+        self._csv = Path(cache_dir)
 
     def grid(
         self,
@@ -132,7 +132,7 @@ class DiskFixtures:
     """Session retriever for PRG fixtures inside cached ``.d64`` disk images."""
 
     def __init__(self, cache_dir):
-        self._cache = Path(cache_dir) / "disks"
+        self._cache = Path(cache_dir)
 
     def prgs(self, url: str, *, member=None, name=None):
         """The PRG files (``[D64File, ...]``) from the disk image at ``url``."""
@@ -166,7 +166,7 @@ class C64Roms:
     """Session retriever for the fetch-cached C64 KERNAL/BASIC/CHARGEN ROMs."""
 
     def __init__(self, cache_dir):
-        self._cache = Path(cache_dir) / "roms"
+        self._cache = Path(cache_dir)
 
     def path(self, name: str) -> Path:
         """Cached local path to the ``name`` ROM (raises when unreachable)."""
@@ -204,24 +204,22 @@ def hvsc(pytestconfig: pytest.Config) -> HvscTunes:
 @pytest.fixture(scope="session")
 def sidtrace_oracle(pytestconfig: pytest.Config) -> SidtraceOracle:
     """Session sidtrace-oracle retriever: ``sidtrace_oracle(path, frames=N)``."""
-    return SidtraceOracle(_cache_dir(pytestconfig))
+    return SidtraceOracle(_cache_dir(pytestconfig, "csv"))
 
 
 @pytest.fixture(scope="session")
 def disk_prgs(pytestconfig: pytest.Config) -> DiskFixtures:
     """Session PRG-fixture retriever: ``disk_prgs(url)`` -> cached ``[D64File]``."""
-    return DiskFixtures(_cache_dir(pytestconfig))
+    return DiskFixtures(_cache_dir(pytestconfig, "disks"))
 
 
 @pytest.fixture(scope="session")
 def native(pytestconfig: pytest.Config) -> NativeFixtures:
     """Session CSDB native-file retriever: ``native(sha256)`` -> cached path or None."""
-    from pysidtracker.fixtures import default_native_cache
-
-    return NativeFixtures(default_native_cache(pytestconfig.rootpath))
+    return NativeFixtures(_cache_dir(pytestconfig, "native"))
 
 
 @pytest.fixture(scope="session")
 def c64_roms(pytestconfig: pytest.Config) -> C64Roms:
     """Session C64 ROM retriever: ``c64_roms("kernal")``, ``.image()``, ``.available()``."""
-    return C64Roms(_cache_dir(pytestconfig))
+    return C64Roms(_cache_dir(pytestconfig, "roms"))

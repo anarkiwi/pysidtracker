@@ -8,7 +8,6 @@ The fetch, verify and mapping logic is vagrant-moses'; these wrappers only defau
 from __future__ import annotations
 
 import functools
-import os
 from pathlib import Path
 
 from vagrant_moses import roms as _roms
@@ -24,7 +23,7 @@ from vagrant_moses.roms import (
 )
 
 from .errors import SidError
-from .testing import default_tune_cache
+from .testing import default_cache
 
 
 class RomFetchError(SidError, _roms.RomFetchError):
@@ -32,9 +31,8 @@ class RomFetchError(SidError, _roms.RomFetchError):
 
 
 def default_rom_cache(root=None) -> Path:
-    """``$PYSID_ROMCACHE`` or ``<tune cache>/roms``, one CI cache with the tunes."""
-    env = os.environ.get("PYSID_ROMCACHE")
-    return Path(env) if env else default_tune_cache(root) / "roms"
+    """``default_cache("roms")``: one CI cache with the tunes."""
+    return default_cache("roms", root)
 
 
 def _cached(func):

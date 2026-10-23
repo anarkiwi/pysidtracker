@@ -13,6 +13,8 @@ import pytest
 
 from pysidtracker import testing
 from pysidtracker.testing import (
+    CACHE_KINDS,
+    default_cache,
     DEFAULT_MIRROR,
     ChecksumMismatch,
     TuneFetchError,
@@ -35,6 +37,9 @@ class _FakeResp:
 
     def read(self):
         return self._data
+
+    def geturl(self):
+        return "final"
 
     def __enter__(self):
         return self
@@ -185,6 +190,37 @@ def test_default_tune_cache_default_and_env(monkeypatch, tmp_path):
     assert default_tune_cache(tmp_path) == tmp_path / ".tunecache"
     monkeypatch.setenv("PYSID_TUNECACHE", str(tmp_path / "c"))
     assert default_tune_cache(tmp_path) == tmp_path / "c"
+
+
+def test_default_cache_kinds(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYSID_TUNECACHE", str(tmp_path / "c"))
+    assert default_cache() == tmp_path / "c"
+    assert [default_cache(k) for k in CACHE_KINDS] == [
+        tmp_path / "c" / k for k in CACHE_KINDS
+    ]
+    with pytest.raises(ValueError, match="cache kind"):
+        default_cache("hvsc")
+
+
+def test_fetches_default_into_the_cache_root(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYSID_TUNECACHE", str(tmp_path))
+    url = "https://x.example/rel.zip"
+    _serve(monkeypatch, {url: b"one"})
+    assert fetch_verified(url, _sha(b"one")) == tmp_path / "archives" / "rel.zip"
+
+
+def test_host_slot_spaces_requests_to_a_throttled_host(monkeypatch, tmp_path):
+    monkeypatch.setattr(testing.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(testing, "HOST_INTERVAL", {"slow.example": 60.0})
+    sleeps = []
+    monkeypatch.setattr(testing.time, "sleep", sleeps.append)
+    with testing._host_slot("https://www.slow.example/a"):
+        pass
+    with testing._host_slot("https://slow.example/b"):
+        pass
+    with testing._host_slot("https://fast.example/c"):
+        pass
+    assert len(sleeps) == 2 and sleeps[1] > 59
 
 
 def test_gather_tune_relpaths_from_ast(tmp_path):

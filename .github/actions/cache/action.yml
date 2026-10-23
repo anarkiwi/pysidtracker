@@ -1,0 +1,70 @@
+name: pysidtracker cache
+description: >-
+  Restore and save the one pysidtracker cache root (.tunecache: HVSC tunes,
+  CSDB native files, pinned archives, disk images, C64 ROMs) and, with
+  sidtrace, its oracle traces keyed on the oracle image digest; optionally
+  pre-fetch tunes and native fixtures serially before the suite runs.
+inputs:
+  key:
+    description: >-
+      Hash of the files naming what the suite fetches, e.g.
+      hashFiles('tests/fixtures/*.txt', 'tests/test_oracle_hvsc.py').
+    required: true
+  sidtrace:
+    description: Pull anarkiwi/sidtrace and cache .tunecache/csv keyed on its digest.
+    default: "false"
+  tunes:
+    description: >-
+      Space-separated files/dirs passed to `pysid-tune-fetch --tests`
+      (pysidtracker must already be installed).
+    default: ""
+  native:
+    description: >-
+      Space-separated committed native-fixture manifests passed to
+      `pysid-fixtures fetch` (pysidtracker must already be installed).
+    default: ""
+outputs:
+  sidtrace-digest:
+    description: The pulled sidtrace image digest (empty unless sidtrace).
+    value: ${{ steps.image.outputs.digest }}
+runs:
+  using: composite
+  steps:
+    - name: Cache downloads
+      uses: actions/cache@v6
+      with:
+        path: |
+          .tunecache
+          !.tunecache/csv
+        key: pysid-cache-${{ inputs.key }}
+        restore-keys: pysid-cache-
+    - name: Pull sidtrace oracle image
+      id: image
+      if: inputs.sidtrace == 'true'
+      shell: bash
+      run: |
+        docker pull anarkiwi/sidtrace:latest
+        digest=$(docker inspect --format '{{index .RepoDigests 0}}' anarkiwi/sidtrace:latest)
+        echo "digest=${digest##*@}" >> "$GITHUB_OUTPUT"
+    - name: Cache oracle traces
+      if: inputs.sidtrace == 'true'
+      uses: actions/cache@v6
+      with:
+        path: .tunecache/csv
+        key: pysid-csv-${{ steps.image.outputs.digest }}-${{ inputs.key }}
+        restore-keys: pysid-csv-${{ steps.image.outputs.digest }}-
+    - name: Pre-fetch HVSC tunes
+      if: inputs.tunes != ''
+      shell: bash
+      env:
+        TUNES: ${{ inputs.tunes }}
+      run: |
+        args=()
+        for t in $TUNES; do args+=(--tests "$t"); done
+        pysid-tune-fetch "${args[@]}"
+    - name: Pre-fetch native fixtures
+      if: inputs.native != ''
+      shell: bash
+      env:
+        NATIVE: ${{ inputs.native }}
+      run: for m in $NATIVE; do pysid-fixtures fetch "$m"; done

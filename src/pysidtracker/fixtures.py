@@ -8,28 +8,26 @@ resolves a file by hash -- and skips when the cache is cold.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import os
 import re
 import sys
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 
+from tqdm import tqdm
+
 from .d64 import iter_prgs
-from .errors import SidError
-from .testing import _atomic_write, default_tune_cache
+from .testing import TuneFetchError, _atomic_write, _fetch, default_cache
 
 DEFAULT_CSDB = "https://csdb.dk"
 USER_AGENT = "pysidtracker/native-fixture"
-RATE_LIMIT = 0.5  # seconds between network requests (be polite to csdb.dk)
 SUMS_NAME = "SHA256SUMS.txt"
 
 
-class CsdbFetchError(SidError):
+class CsdbFetchError(TuneFetchError):
     """A CSDB release file could not be fetched (page missing, or a 404)."""
 
 
@@ -51,40 +49,23 @@ class NativeFixture(NamedTuple):
 
 
 def default_native_cache(root=None) -> Path:
-    """Cache dir: ``$PYSID_NATIVECACHE`` or ``<tune cache>/native`` (gitignored)."""
-    env = os.environ.get("PYSID_NATIVECACHE")
-    if env:
-        return Path(env)
-    return default_tune_cache(root) / "native"
+    """``default_cache("native")``: the gitignored CSDB cache."""
+    return default_cache("native", root)
 
 
 def _hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _http_get(url: str, *, retries: int = 4, rate_limit: float = RATE_LIMIT):
-    """GET ``url`` with a User-Agent and retries; return ``(final_url, bytes)``.
+def _http_get(url: str, *, retries: int = 4):
+    """``(final_url, bytes)`` of ``url`` via the shared, CSDB-throttled fetch.
 
-    A short ``rate_limit`` pause precedes the call to stay polite; a 404 and
-    repeated failures raise :class:`CsdbFetchError`.
+    A 404 and repeated failures raise :class:`CsdbFetchError`.
     """
-    if rate_limit:
-        time.sleep(rate_limit)
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    last = None
-    for attempt in range(retries):
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r:  # nosec B310 (https)
-                return r.geturl(), r.read()
-        except urllib.error.HTTPError as exc:
-            if exc.code == 404:
-                raise CsdbFetchError(f"{url}: not found") from exc
-            last = exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            last = exc
-        if attempt + 1 < retries:
-            time.sleep(min(2**attempt, 5))
-    raise CsdbFetchError(f"{url}: unreachable after {retries} attempts ({last})")
+    try:
+        return _fetch(url, retries=retries, user_agent=USER_AGENT)
+    except TuneFetchError as exc:
+        raise CsdbFetchError(*exc.args) from exc
 
 
 def _scrape_release(
@@ -110,7 +91,7 @@ def _file_name(final_url: str, fallback: str) -> str:
 
 def fetch_csdb(
     release_ids,
-    cache_dir,
+    cache_dir=None,
     *,
     mirror: str = DEFAULT_CSDB,
     retries: int = 4,
@@ -121,15 +102,26 @@ def fetch_csdb(
     Cached pages and files are reused unless ``force`` (resume). Each file is
     written to ``dl/<rid>/<did>_<name>`` and indexed in ``SHA256SUMS.txt`` as
     ``sha256  relpath  url``; a missing file is reported and skipped, not fatal.
+    Concurrent callers serialise on the cache's lock, so a file downloads once.
 
     Args:
         release_ids: CSDB release ids to fetch.
-        cache_dir: cache root holding ``html/``, ``dl/`` and the sums file.
+        cache_dir: cache root holding ``html/``, ``dl/`` and the sums file
+            (default :func:`default_native_cache`).
         mirror: CSDB base URL; retries: transient-failure attempts; force: refetch.
     """
-    cache_dir = Path(cache_dir)
+    cache_dir = Path(cache_dir if cache_dir is not None else default_native_cache())
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with open(cache_dir / ".fetch.lock", "w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _fetch_csdb_locked(
+            release_ids, cache_dir, mirror=mirror, retries=retries, force=force
+        )
+
+
+def _fetch_csdb_locked(release_ids, cache_dir, *, mirror, retries, force):
     entries: List[SumEntry] = []
-    for rid in release_ids:
+    for rid in tqdm(release_ids, desc="csdb releases", unit="release"):
         rid = str(rid)
         try:
             dids = _scrape_release(
@@ -336,7 +328,7 @@ def add_fixtures_commands(parser) -> None:
     def _cache(dest_parser):
         dest_parser.add_argument(
             "--cache",
-            help="cache dir (default $PYSID_NATIVECACHE or <tune cache>/native)",
+            help="cache dir (default <tune cache>/native)",
         )
 
     sub = parser.add_subparsers(dest="fixtures_command", required=True)

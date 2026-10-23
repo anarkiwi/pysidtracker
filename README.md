@@ -55,6 +55,11 @@ API.
   `grid_from_writes` framer, `read_sidwr` (`preframr-sidtrace` `.sidwr.bin`),
   `aligned_match`, and the `sidtrace` (sidplayfp) oracle bridge — `run_sidtrace`,
   `read_sidtrace`, `sidtrace_cadence`, `sidtrace_grid`.
+- Caching — every download lands under one root, `.tunecache`
+  (`$PYSID_TUNECACHE`; `default_cache(kind)` for `native` / `archives` /
+  `disks` / `roms` / `csv`), CSDB requests are serialised machine-wide, and the
+  `.github/actions/cache` composite action persists and pre-fetches it in CI
+  ([docs/caching.md](docs/caching.md)).
 - `testing` — HVSC tune fetch/resolve for test suites (`fetch_tune`,
   `resolve_tune`, `make_tune_fixtures`), SHA-256-pinned release downloads
   (`fetch_verified`, `fetch_archive_member` for one zip/tar member; a changed

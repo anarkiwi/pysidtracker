@@ -13,6 +13,9 @@ mirror" logic. This module is that shared core:
 * :func:`fetch_verified` / :func:`fetch_archive_member` -- a SHA-256-pinned
   download, or one SHA-256-pinned member of a pinned zip/tar release archive,
   cached while it verifies (copyright fixtures from an upstream release).
+* :func:`default_cache` -- the one cache root (``$PYSID_TUNECACHE`` or
+  ``.tunecache``) and its per-kind subdirectories, which every fetch defaults to
+  (``docs/caching.md``).
 * :func:`make_tune_fixtures` -- a pytest fixture factory for parametrized
   ``tune_id`` / ``tune_path`` fixtures (pytest is imported lazily, so importing
   this module without pytest still works).
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import fcntl
 import hashlib
 import http.client
@@ -38,7 +42,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 from .d64 import D64File, read_d64
 from .errors import SidError
@@ -54,6 +58,12 @@ from .oracle import (
 DEFAULT_MIRROR = "https://hvsc.brona.dk/HVSC/C64Music"
 # Retried download failures (an HTTPError other than 404 is a URLError).
 _TRANSIENT = (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException)
+_USER_AGENT = "pysidtracker/fetch"
+# Hosts whose requests every process on the machine serialises, at least this
+# many seconds apart: CSDB answers concurrent requests with empty bodies.
+HOST_INTERVAL = {"csdb.dk": 0.5}
+# Subdirectories of the cache root; HVSC tunes sit at the root by relpath.
+CACHE_KINDS = ("archives", "csv", "disks", "native", "roms")
 
 
 def default_tune_cache(root=None) -> Path:
@@ -67,6 +77,18 @@ def default_tune_cache(root=None) -> Path:
     if env:
         return Path(env)
     return Path(root if root is not None else Path.cwd()) / ".tunecache"
+
+
+def default_cache(kind: str = "", root=None) -> Path:
+    """``kind``'s directory under :func:`default_tune_cache` (the root for ``""``).
+
+    ``kind`` is one of :data:`CACHE_KINDS`: ``archives`` (pinned downloads),
+    ``csv`` (sidtrace oracle traces), ``disks`` (disk images), ``native`` (CSDB
+    editor files) and ``roms``. One root means one CI cache persists them all.
+    """
+    if kind and kind not in CACHE_KINDS:
+        raise ValueError(f"cache kind {kind!r} not in {CACHE_KINDS}")
+    return default_tune_cache(root) / kind
 
 
 def gather_tune_relpaths(paths: Iterable) -> List[str]:
@@ -128,60 +150,75 @@ def _atomic_write(dest: Path, data: bytes) -> None:
 def fetch_tune(
     relpath: str,
     *,
-    cache_dir,
+    cache_dir=None,
     mirror: str = DEFAULT_MIRROR,
     retries: int = 4,
     force: bool = False,
 ) -> Path:
     """Fetch ``relpath`` from an HVSC mirror into ``cache_dir``; return its path.
 
-    Returns the cached path unchanged when it already exists (unless ``force``).
-    Otherwise downloads ``mirror``/``relpath`` (``$HVSC_MIRROR`` overrides
-    ``mirror``) with a User-Agent, validating the PSID/RSID magic and retrying
-    transient failures with exponential backoff. Raises :class:`TuneFetchError`
-    on a genuine 404 or after ``retries`` attempts.
+    ``cache_dir`` defaults to :func:`default_tune_cache`. Returns the cached
+    path unchanged when it already exists (unless ``force``). Otherwise downloads
+    ``mirror``/``relpath`` (``$HVSC_MIRROR`` overrides ``mirror``) with
+    :func:`_fetch`'s retries, validating the PSID/RSID magic. Raises
+    :class:`TuneFetchError` on a genuine 404 or after ``retries`` attempts.
     """
     relpath = relpath.lstrip("/")
-    dest = Path(cache_dir) / relpath
+    dest = Path(cache_dir if cache_dir is not None else default_tune_cache()) / relpath
     if dest.exists() and not force:
         return dest
     url = f"{_mirror(mirror)}/{urllib.request.quote(relpath)}"
-    req = urllib.request.Request(url, headers={"User-Agent": "pysidtracker/fetch"})
-    last_err = None
-    for attempt in range(retries):
+    data = _download(url, retries=retries)
+    if not _is_sid(data):
+        raise TuneFetchError(f"{relpath}: not a SID file (magic {data[:4]!r})")
+    _atomic_write(dest, data)
+    return dest
+
+
+@contextlib.contextmanager
+def _host_slot(url: str):
+    """Hold ``url``'s host slot: requests to a :data:`HOST_INTERVAL` host from
+    every process on this machine run one at a time, that interval apart."""
+    host = (urllib.parse.urlparse(url).hostname or "").removeprefix("www.")
+    interval = HOST_INTERVAL.get(host)
+    if interval is None:
+        yield
+        return
+    path = Path(tempfile.gettempdir()) / f"pysidtracker-{host}.lock"
+    with open(path, "a+", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        lock.seek(0)
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310 (https)
-                data = resp.read()
-            if not _is_sid(data):
-                raise TuneFetchError(f"{relpath}: not a SID file (magic {data[:4]!r})")
-            _atomic_write(dest, data)
-            return dest
-        except urllib.error.HTTPError as exc:
-            if exc.code == 404:
-                raise TuneFetchError(f"{relpath}: not found on mirror") from exc
-            last_err = exc
-        except _TRANSIENT as exc:
-            last_err = exc
-        if attempt + 1 < retries:
-            time.sleep(min(2**attempt, 5))
-    raise TuneFetchError(
-        f"{relpath}: mirror unreachable after {retries} attempts ({last_err})"
-    )
+            last = float(lock.read() or 0)
+        except ValueError:
+            last = 0.0
+        time.sleep(max(0.0, last + interval - time.time()))
+        try:
+            yield
+        finally:
+            lock.seek(0)
+            lock.truncate()
+            lock.write(repr(time.time()))
 
 
-def _download(url: str, *, retries: int = 4) -> bytes:
-    """Download ``url``, retrying transient failures with exponential backoff.
+def _fetch(url: str, *, retries: int = 4, user_agent=_USER_AGENT) -> Tuple[str, bytes]:
+    """``(final_url, body)`` of ``url``: the one download path every fetch uses.
 
-    An empty body is transient: a throttling server (CSDB) answers 200 with none.
+    Transient failures retry with exponential backoff; an empty body is
+    transient, as a throttling server (CSDB) answers 200 with none. Requests to
+    a :data:`HOST_INTERVAL` host are serialised machine-wide (:func:`_host_slot`).
     """
-    req = urllib.request.Request(url, headers={"User-Agent": "pysidtracker/fetch"})
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
     last_err = None
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310
-                data = resp.read()
+            with (
+                _host_slot(url),
+                urllib.request.urlopen(req, timeout=60) as resp,  # nosec B310
+            ):
+                final, data = resp.geturl(), resp.read()
             if data:
-                return data
+                return final, data
             last_err = "an empty body"
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
@@ -192,6 +229,11 @@ def _download(url: str, *, retries: int = 4) -> bytes:
         if attempt + 1 < retries:
             time.sleep(min(2**attempt, 5))
     raise TuneFetchError(f"{url}: unreachable after {retries} attempts ({last_err})")
+
+
+def _download(url: str, *, retries: int = 4) -> bytes:
+    """The body of ``url`` (see :func:`_fetch`)."""
+    return _fetch(url, retries=retries)[1]
 
 
 def _sha256_file(path: Path) -> Optional[str]:
@@ -210,14 +252,17 @@ def _verified(data: bytes, sha256: str, what: str) -> bytes:
     return data
 
 
-def fetch_verified(url: str, sha256: str, *, cache_dir, name=None) -> Path:
+def fetch_verified(url: str, sha256: str, *, cache_dir=None, name=None) -> Path:
     """``url`` cached as ``cache_dir/name`` (default the URL's file name).
+
+    ``cache_dir`` defaults to ``default_cache("archives")``.
 
     A cached copy is reused while its SHA-256 is ``sha256``; otherwise ``url`` is
     downloaded (retrying transient failures), verified and written atomically.
     Concurrent callers (xdist workers) serialise on a lock beside the file, so
     one downloads and the rest reuse its copy.
     """
+    cache_dir = cache_dir if cache_dir is not None else default_cache("archives")
     dest = Path(cache_dir) / (
         name or PurePosixPath(urllib.parse.urlparse(url).path).name
     )
@@ -232,15 +277,23 @@ def fetch_verified(url: str, sha256: str, *, cache_dir, name=None) -> Path:
 
 
 def fetch_archive_member(
-    url: str, sha256: str, member: str, member_sha256: str, *, cache_dir, name=None
+    url: str,
+    sha256: str,
+    member: str,
+    member_sha256: str,
+    *,
+    cache_dir=None,
+    name=None,
 ) -> Path:
     """``member`` of the zip or tar archive at ``url``, cached as ``cache_dir/name``.
 
-    ``name`` defaults to the member's file name. The archive is
+    ``cache_dir`` defaults to ``default_cache("archives")`` and ``name`` to the
+    member's file name. The archive is
     :func:`fetch_verified` against ``sha256`` and the member against
     ``member_sha256``; a cached member that verifies is returned without the
     archive.
     """
+    cache_dir = cache_dir if cache_dir is not None else default_cache("archives")
     dest = Path(cache_dir) / (name or PurePosixPath(member).name)
     if _sha256_file(dest) == member_sha256:
         return dest
@@ -274,7 +327,7 @@ def _d64_from_zip(blob: bytes, member: Optional[str]) -> bytes:
 def fetch_disk(
     url: str,
     *,
-    cache_dir,
+    cache_dir=None,
     member: Optional[str] = None,
     name: Optional[str] = None,
     force: bool = False,
@@ -284,9 +337,10 @@ def fetch_disk(
     ``url`` may be a raw ``.d64`` or a ``.zip`` containing one (``member`` selects
     the entry by filename suffix; with no ``member`` the first ``.d64`` is used).
     Cached like a tune -- returned unchanged when present unless ``force`` -- so a
-    persisted CI cache avoids re-downloading. ``name`` overrides the cache filename.
+    persisted CI cache avoids re-downloading. ``name`` overrides the cache filename;
+    ``cache_dir`` defaults to ``default_cache("disks")``.
     """
-    cache_dir = Path(cache_dir)
+    cache_dir = Path(cache_dir if cache_dir is not None else default_cache("disks"))
     is_zip = url.lower().endswith(".zip")
     if name is None:
         source = member if member else urllib.parse.urlparse(url).path
@@ -304,7 +358,7 @@ def fetch_disk(
 def fetch_prgs(
     url: str,
     *,
-    cache_dir,
+    cache_dir=None,
     member: Optional[str] = None,
     name: Optional[str] = None,
     force: bool = False,
@@ -319,14 +373,16 @@ def fetch_prgs(
     return read_d64(disk.read_bytes())
 
 
-def resolve_tune(relpath: str, *, cache_dir, local_env: str = "HVSC"):
+def resolve_tune(relpath: str, *, cache_dir=None, local_env: str = "HVSC"):
     """Path to ``relpath``, or ``None`` if it is genuinely unreachable.
 
     Checks a local HVSC tree (``$HVSC`` by default, via ``local_env``) first,
-    then ``cache_dir``, then fetches from the mirror. Returns ``None`` only when
-    the tune is neither local nor cached and the fetch fails (offline).
+    then ``cache_dir`` (default :func:`default_tune_cache`), then fetches from the
+    mirror. Returns ``None`` only when the tune is neither local nor cached and
+    the fetch fails (offline).
     """
     relpath = relpath.lstrip("/")
+    cache_dir = cache_dir if cache_dir is not None else default_tune_cache()
     local = os.environ.get(local_env)
     if local:
         cand = Path(local) / relpath
@@ -343,7 +399,7 @@ def resolve_tune(relpath: str, *, cache_dir, local_env: str = "HVSC"):
 
 def make_tune_fixtures(
     tunes,
-    cache_dir,
+    cache_dir=None,
     *,
     local_env: str = "HVSC",
     skip_if_unavailable: bool = True,
@@ -384,7 +440,7 @@ def make_tune_fixtures(
 def oracle_grid(
     tune_path,
     *,
-    oracle_cache,
+    oracle_cache=None,
     seconds: int = 60,
     frames=None,
     image: str = SIDTRACE_IMAGE,
@@ -397,13 +453,14 @@ def oracle_grid(
     """Per-frame reference grid for ``tune_path`` from the sidtrace oracle.
 
     ``song`` is 1-based; ``None`` plays the header's start song. The CSV is
-    cached at ``oracle_cache/<stem>.csv.zst`` (``<stem>_<song>`` for a given
+    cached at ``oracle_cache/<stem>.csv.zst`` (default ``default_cache("csv")``) (``<stem>_<song>`` for a given
     ``song``) while present (``force`` re-renders). ``cycles_per_frame`` fixes
     the cadence. Returns the first ``frames`` rows (all when ``None``).
     """
     tune_path = Path(tune_path)
     stem = tune_path.stem if song is None else f"{tune_path.stem}_{song}"
     extra = {} if song is None else {"song": song}
+    oracle_cache = oracle_cache if oracle_cache is not None else default_cache("csv")
     csv_path = Path(oracle_cache) / f"{stem}.csv.zst"
     rows = cached_sidtrace(
         tune_path, csv_path, force=force, seconds=seconds, image=image, **extra
@@ -463,8 +520,8 @@ def assert_oracle_match(
     relpath: str,
     make_player,
     *,
-    hvsc_cache,
-    oracle_cache,
+    hvsc_cache=None,
+    oracle_cache=None,
     frames: int = 250,
     song: int = 1,
     seconds=None,
@@ -501,8 +558,8 @@ def assert_oracle_match(
 def make_oracle_fixtures(
     tunes,
     *,
-    hvsc_cache,
-    oracle_cache,
+    hvsc_cache=None,
+    oracle_cache=None,
     render=register_grid,
     frames: int = 250,
     seconds=None,
