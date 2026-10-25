@@ -25,6 +25,9 @@ the tests import ``pysidtracker`` themselves.
 * :func:`c64_roms` -- ``c64_roms("kernal")`` -> the cached C64 ROM path,
   ``c64_roms.image()`` a flat C64 memory image (``MEM_SIZE``) with KERNAL + BASIC
   mapped, and ``c64_roms.available()`` for a suite that skips without them.
+* :func:`lint_project` -- ``lint_project("src/mypkg")`` -> the list of dead-symbol
+  and unresolved-doc-reference problems (empty when clean); see
+  :mod:`pysidtracker.lint`.
 * :func:`native` -- ``native(sha256)`` -> the cached CSDB native-format file for
   that hash, or ``None`` (a suite skips); ``native.available(sha256)`` checks.
 
@@ -222,3 +225,11 @@ def native(pytestconfig: pytest.Config) -> NativeFixtures:
 def c64_roms(pytestconfig: pytest.Config) -> C64Roms:
     """Session C64 ROM retriever: ``c64_roms("kernal")``, ``.image()``, ``.available()``."""
     return C64Roms(_cache_dir(pytestconfig, "roms"))
+
+
+@pytest.fixture(scope="session")
+def lint_project():
+    """:func:`pysidtracker.lint.check_project` -- ``lint_project(package, ...)``."""
+    from pysidtracker.lint import check_project
+
+    return check_project

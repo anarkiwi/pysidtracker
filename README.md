@@ -195,6 +195,8 @@ pip install -e ".[dev]"
 pytest --cov=pysidtracker
 ```
 
+Dead-symbol / doc-reference lint for dependents: [docs/lint.md](docs/lint.md).
+
 See [docs/design.md](docs/design.md) for the detection model and shared
 primitives.
 

@@ -75,7 +75,7 @@ def default_tune_cache(root=None) -> Path:
     """The tune-cache directory: ``$PYSID_TUNECACHE`` or ``<root>/.tunecache``.
 
     ``root`` defaults to the current working directory. This is the location the
-    :mod:`pysidtracker.pytest_plugin` fixtures and the ``pysid-tune-fetch`` CLI
+    :mod:`pysidtracker_pytest` fixtures and the ``pysid-tune-fetch`` CLI
     share, and what a GitHub ``actions/cache`` step persists across CI runs.
     """
     env = os.environ.get("PYSID_TUNECACHE")

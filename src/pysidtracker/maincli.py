@@ -28,6 +28,7 @@ from .errors import SidError, SidParseError
 from .fixtures import add_fixtures_commands
 from .formats import FormatCommand, SidFormat, discover_formats, recognize_format
 from .image import SidImage
+from .lint import add_lint_arguments, run_lint
 from .reglog import register_writes_from_player, write_reglog
 from .source import read_bytes
 
@@ -189,6 +190,12 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
         "media", help="extract PRGs from release media (zip/gz, d64/d71/d81, t64)"
     )
     add_media_commands(media)
+
+    lint = subparsers.add_parser(
+        "lint", help="find unused symbols and unresolved doc references"
+    )
+    add_lint_arguments(lint)
+    lint.set_defaults(func=run_lint)
 
     _add_format_commands(subparsers, formats)
     return parser
