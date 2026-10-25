@@ -27,6 +27,7 @@ from typing import (
 import numpy as np
 
 from .base import BaseSidParser
+from .cadence import cadence_info
 from .errors import SidParseError
 from .image import SidImage
 from .player import MemPlayer
@@ -71,7 +72,9 @@ class SidFormat:
     installed.  ``variant`` optionally detects the model's
     :class:`~pysidtracker.facets.Variant`; its ``as_info()`` joins the survey
     renderer's ``info``.  ``facet_sites`` optionally maps the model to
-    ``{addr: facet}``, the code address each facet was detected at.
+    ``{addr: facet}``, the code address each facet was detected at.  ``survey``
+    optionally replaces the facet part of :meth:`info` with ``survey(model, data,
+    song)``, the format-specific fields the survey renderer reports.
     """
 
     name: str
@@ -82,10 +85,23 @@ class SidFormat:
     commands: Sequence[FormatCommand] = field(default_factory=tuple)
     variant: Optional[Callable[[Any], Any]] = None
     facet_sites: Optional[Callable[[Any], Mapping[int, str]]] = None
+    survey: Optional[Callable[[Any, bytes, int], Mapping[str, Any]]] = None
 
     def variant_info(self, model: Any) -> Dict[str, Any]:
         """``model``'s :meth:`Variant.as_info` (empty without a ``variant`` hook)."""
         return self.variant(model).as_info() if self.variant is not None else {}
+
+    def info(self, model: Any, data: bytes, song: int) -> Dict[str, Any]:
+        """The survey ``info`` of 1-based ``song`` of ``data`` (loaded as ``model``).
+
+        ``survey(model, data, song)`` when the format supplies it, else
+        :meth:`variant_info`; plus :func:`~pysidtracker.cadence.cadence_info`.
+        """
+        if self.survey is not None:
+            fields = dict(self.survey(model, data, song))
+        else:
+            fields = self.variant_info(model)
+        return {**fields, **cadence_info(data, song)}
 
     def sites(self, model: Any) -> Dict[int, str]:
         """``{addr: facet}`` of ``model``: the facet each detected code site belongs to.
@@ -179,10 +195,13 @@ def render(
     """A survey renderer: 1-based ``song`` of ``data`` on format ``name`` (or ``auto``).
 
     ``(grid, info)``, the grid ``nframes`` rows of the 25 SID registers and ``info``
-    ``{"format": name}`` plus the format's facets (:meth:`SidFormat.variant_info`).
+    ``{"format": name}`` plus :meth:`SidFormat.info`.  A named format must also
+    recognise ``data``, else :class:`~pysidtracker.errors.SidParseError`.
     """
     fmt = find_format(data, name)
+    if not recognize_format([fmt], data):
+        raise SidParseError(f"format {fmt.name!r} does not recognise this tune")
     model = fmt.load(data, song - 1)
     grid = fmt.player(model).render_grid(nframes)
-    info = {"format": fmt.name, **fmt.variant_info(model)}
+    info = {"format": fmt.name, **fmt.info(model, data, song)}
     return np.asarray(grid, np.int16), info
