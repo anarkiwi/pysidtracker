@@ -69,6 +69,7 @@ from .oracle import (
     sidtrace_grid,
     sidtrace_image_id,
 )
+from .testing import decode_fidelity
 from .sidid import identify, sidid_signatures
 from .variants import variants_cli
 
@@ -105,6 +106,7 @@ RESULT_FIELDS = [
     "error",
 ]
 FILE_FIELDS = RESULT_FIELDS + ["oracle"]
+FIDELITY_FIELDS = ["fidelity", "fidelity_first", "fidelity_regs", "fidelity_error"]
 SCOPE_FIELDS = ["key", "path", "player", "song", "verdict", "info", "error"]
 _FIND = {}
 
@@ -272,6 +274,37 @@ def library_row(row, oracle, render, data, song, *, lead=LEAD, timeout=0, lcsv=N
         **verdict_fields(scan_leads(oracle, lib, lead)),
         oracle_gated=gated(oracle),
         library_gated=gated(lib),
+    )
+
+
+def fidelity_row(row, data, rebuild, *, render=None, song=1, frames=250, lead=0):
+    """``row`` plus the ``FIDELITY_FIELDS`` verdict column of a decode-fidelity check.
+
+    ``rebuild(data) -> bytes`` writes the image back from the decoded model;
+    ``fidelity`` is ``exact``, ``differs`` (with ``fidelity_first`` frame and
+    ``fidelity_regs``), ``not_decompiled`` or ``rebuild_error`` (see
+    :func:`~pysidtracker.testing.decode_fidelity`).
+    """
+    try:
+        verdict = decode_fidelity(
+            data,
+            rebuild(data),
+            render=render,
+            frames=frames,
+            song=song,
+            max_lead=lead,
+        )
+    except SidParseError as e:
+        return dict(row, fidelity="not_decompiled", fidelity_error=str(e))
+    except Exception as e:  # pylint: disable=broad-except
+        return dict(row, fidelity="rebuild_error", fidelity_error=_err(e))
+    if verdict.ok:
+        return dict(row, fidelity="exact")
+    return dict(
+        row,
+        fidelity="differs",
+        fidelity_first=verdict.first,
+        fidelity_regs=",".join(str(r) for r in verdict.regs),
     )
 
 

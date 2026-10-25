@@ -10,9 +10,10 @@ from pysidtracker import (
     locate,
     variant_facet,
 )
-from pysidtracker.locate import AFTER_INIT, STATIC
+from pysidtracker.asm6502 import assemble
+from pysidtracker.locate import AFTER_INIT, STATIC, SYS_UNPACK
 
-from .helpers import build_psid, store_sig
+from .helpers import build_prg, build_psid, store_sig
 
 SIG = b"SIG"
 
@@ -82,3 +83,28 @@ def test_variant_facet_domain():
 def test_bad_stage():
     with pytest.raises(ValueError):
         Strategy("x", "never", _find_sig)
+
+
+def test_sys_unpack_stage_runs_the_stub_chain():
+    code, _ = assemble(
+        """
+  LDX #0
+copy: TXA
+  STA $2000,X
+  INX
+  BNE copy
+  JMP $2000
+""",
+        0x0801,
+    )
+    img = SidImage.from_prg(build_prg(bytes(code), 0x0801))
+    got = locate(
+        img,
+        [
+            Strategy("direct", STATIC, _find_sig),
+            Strategy("unpacked", SYS_UNPACK, lambda staged, _c: staged.load),
+        ],
+    )
+    assert got.strategy == "unpacked" and got.layout == 0x2000
+    assert got.detection.kind is PlayroutineKind.PACKED
+    assert not got.detection.ran_init

@@ -325,3 +325,18 @@ def test_renderer_prefers_format_over_spec():
     assert survey.renderer(f"{__name__}:render_exact") is render_exact
     render = survey.renderer(f"{__name__}:render_exact", "auto")
     assert render.func is formats.render and render.args == ("auto",)
+
+
+def test_fidelity_row():
+    def render(data, nframes, _song):
+        return [[data[0]] * 25 for _ in range(nframes)]
+
+    ok = survey.fidelity_row({}, b"\x01", lambda d: d, render=render, frames=3)
+    assert ok["fidelity"] == "exact"
+    bad = survey.fidelity_row({}, b"\x01", lambda d: b"\x02", render=render, frames=3)
+    assert bad["fidelity"] == "differs" and bad["fidelity_first"] == 0
+
+    def boom(_):
+        raise ValueError("x")
+
+    assert survey.fidelity_row({}, b"\x01", boom)["fidelity"] == "rebuild_error"

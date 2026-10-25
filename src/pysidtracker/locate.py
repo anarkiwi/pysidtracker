@@ -3,8 +3,10 @@
 A format supplies :class:`Strategy` objects that yield *candidate* layouts and
 decode one candidate into the format's layout (or reject it).
 :func:`locate` runs them in stage order -- :data:`STATIC` (the image as loaded),
-:data:`AFTER_INIT` (init emulated once), :data:`RUN_PLAYER` (init plus a few play
-calls, emulated once) -- caching each emulated image so no stage is run twice.
+:data:`NATIVE` (exomizer decrunched natively, no init), :data:`AFTER_INIT` (init
+emulated once), :data:`SYS_UNPACK` (the BASIC ``SYS`` stub chain run on the KERNAL
+host until it jumps into code it unpacked), :data:`RUN_PLAYER` (init plus a few
+play calls) -- caching each derived image so no stage is run twice.
 The first accepted candidate wins; its strategy name is recorded as the
 ``variant`` facet. When nothing is accepted the result carries the full
 ``(strategy, candidate, reason)`` rejection log rather than only the last error.
@@ -12,6 +14,7 @@ The first accepted candidate wins; its strategy name is recorded as the
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, List, NamedTuple, Optional, Sequence
 
@@ -20,22 +23,25 @@ from .detect import (
     PlayroutineKind,
     _count_changed,
     _count_written_outside,
-    resolve_entry_points,
     run_init,
 )
 from .emu import run_to_rts, wire_mpu
-from .errors import SidParseError
+from .errors import KernalHostError, SidError, SidParseError
 from .facets import Entry, Facet, inferred
 from .image import MEM_SIZE, SidImage
 from .poweron import psid_init_bank
 from .registers import sid_model_for_flags
 
 STATIC = "static"
+NATIVE = "native-decrunch"
 AFTER_INIT = "after-init"
+SYS_UNPACK = "sys-unpack"
 RUN_PLAYER = "run-player"
-STAGES = (STATIC, AFTER_INIT, RUN_PLAYER)
+STAGES = (STATIC, NATIVE, AFTER_INIT, SYS_UNPACK, RUN_PLAYER)
 
 VARIANT_FACET = "variant"
+
+_EMULATED = (AFTER_INIT, SYS_UNPACK, RUN_PLAYER)
 
 # candidates(image) -> iterable of candidate layouts (any objects).
 Candidates = Callable[[SidImage], Iterable[Any]]
@@ -131,15 +137,19 @@ def variant_facet(strategies: Sequence[Strategy], kind: str = "layout") -> Facet
 
 
 class _Stages:
-    """The emulated images, each built at most once."""
+    """The derived images, each built at most once."""
 
-    def __init__(self, image: SidImage, subtune: int, frames: int) -> None:
+    def __init__(
+        self, image: SidImage, subtune: int, frames: int, in_place: bool
+    ) -> None:
         self.static = image
         self._subtune = subtune
         self._frames = frames
-        self._after_init: Optional[SidImage] = None
-        self._run_player: Optional[SidImage] = None
+        self._in_place = in_place
+        self._images: dict = {}
+        self.ran_init = False
         self.init_stats = (0, 0)  # (changed_inside, written_outside)
+        self.native_written = 0
 
     @staticmethod
     def _copy(image: SidImage) -> SidImage:
@@ -152,40 +162,65 @@ class _Stages:
             image.container,
         )
 
-    def after_init(self) -> SidImage:
-        if self._after_init is None:
-            src = self.static
-            img = self._copy(src)
-            snapshot = bytes(src.mem[src.load : src.end])
-            run_init(img, subtune=self._subtune)
-            img.end = MEM_SIZE
-            self.init_stats = (
-                _count_changed(img.mem, src.load, snapshot),
-                _count_written_outside(img.mem, src.load, src.end),
-            )
-            self._after_init = img
-        return self._after_init
+    def _native(self) -> SidImage:
+        from .decrunch import native_decrunch
 
-    def run_player(self) -> SidImage:
-        if self._run_player is None:
-            img = self._copy(self.after_init())
-            header = img.header
-            _, play = resolve_entry_points(header, img.load)
-            if not header.play_address:
-                raise SidParseError("no play address to run (IRQ-driven tune)")
-            mpu, mem = wire_mpu(img.mem, sid_model=sid_model_for_flags(header.flags))
-            img.mem[1] = psid_init_bank(play)
-            for _ in range(self._frames):
-                run_to_rts(mpu, mem, play, 0, 1_000_000)
-            self._run_player = img
-        return self._run_player
+        unpacked = native_decrunch(self.static)
+        if unpacked is None:
+            raise SidParseError("not natively decrunchable")
+        self.native_written = sum(1 for value in unpacked.mem if value)
+        return unpacked
+
+    def _after_init(self) -> SidImage:
+        src = self.static
+        img = src if self._in_place else self._copy(src)
+        snapshot = bytes(src.mem[src.load : src.end])
+        orig_load, orig_end = src.load, src.end
+        run_init(img, subtune=self._subtune)
+        img.end = MEM_SIZE
+        self.ran_init = True
+        self.init_stats = (
+            _count_changed(img.mem, orig_load, snapshot),
+            _count_written_outside(img.mem, orig_load, orig_end),
+        )
+        return img
+
+    def _sys_unpack(self) -> SidImage:
+        from .kernalhost import KernalHost
+
+        with tempfile.TemporaryDirectory() as host_dir:
+            pc, code = KernalHost(host_dir).run_to_unpacked(
+                self.static.to_prg(), entry=self.static.load
+            )
+        return SidImage._place(  # pylint: disable=protected-access
+            code, pc, self.static.header, self.static.container
+        )
+
+    def _run_player(self) -> SidImage:
+        img = self._copy(self.get(AFTER_INIT))
+        header = img.header
+        if not header.play_address:
+            raise SidParseError("no play address to run (IRQ-driven tune)")
+        play = header.play_address
+        mpu, mem = wire_mpu(img.mem, sid_model=sid_model_for_flags(header.flags))
+        img.mem[1] = psid_init_bank(play)
+        for _ in range(self._frames):
+            run_to_rts(mpu, mem, play, 0, 1_000_000)
+        return img
 
     def get(self, stage: str) -> SidImage:
+        """The image for ``stage``; raises ``SidParseError``/``SidError`` if unavailable."""
         if stage == STATIC:
             return self.static
-        if stage == AFTER_INIT:
-            return self.after_init()
-        return self.run_player()
+        if stage not in self._images:
+            build = {
+                NATIVE: self._native,
+                AFTER_INIT: self._after_init,
+                SYS_UNPACK: self._sys_unpack,
+                RUN_PLAYER: self._run_player,
+            }[stage]
+            self._images[stage] = build()
+        return self._images[stage]
 
 
 def locate(
@@ -195,6 +230,8 @@ def locate(
     init: bool = True,
     subtune: int = 0,
     frames: int = 4,
+    in_place: bool = False,
+    strict: bool = False,
 ) -> Located:
     """Run ``strategies`` in stage order (static, after-init, run-player; ties keep
     the given order) and return the first accepted layout, or the rejection log.
@@ -202,7 +239,9 @@ def locate(
     Each emulated stage is built once and shared by its strategies; a stage is not
     emulated at all when an earlier one already won, or when ``init`` is false (the
     stage's strategies are then logged as skipped). ``frames`` is the number of
-    play calls of the run-player stage.
+    play calls of the run-player stage. ``in_place`` makes the after-init stage run
+    init on ``image`` itself instead of a copy; ``strict`` re-raises a stage that
+    cannot be built by emulation (e.g. no SID header to run init on) instead of logging it.
 
     :attr:`Located.detection` classifies the result like
     :func:`~pysidtracker.detect.detect_playroutine`: static is ``DIRECT``; a later
@@ -210,15 +249,19 @@ def locate(
     region; no layout is ``UNKNOWN``.
     """
     ordered = sorted(strategies, key=lambda s: STAGES.index(s.stage))
-    stages = _Stages(image, subtune, frames)
+    stages = _Stages(image, subtune, frames, in_place)
     result = Located()
     for strategy in ordered:
-        if strategy.stage != STATIC and not init:
+        if strategy.stage in _EMULATED and not init:
             result.rejections.append(Rejection(strategy.name, None, "init disabled"))
             continue
         try:
             staged = stages.get(strategy.stage)
-        except SidParseError as exc:
+        except SidError as exc:
+            if (strict and strategy.stage in _EMULATED) or not isinstance(
+                exc, (SidParseError, KernalHostError)
+            ):
+                raise
             result.rejections.append(Rejection(strategy.name, None, str(exc)))
             continue
         for candidate, layout, reason in _attempt(strategy, staged):
@@ -229,8 +272,12 @@ def locate(
             result.strategy, result.stage = strategy.name, strategy.stage
             result.detection = _classify(strategy.stage, stages, candidate)
             return result
+    changed, written = stages.init_stats
     result.detection = Detection(
-        PlayroutineKind.UNKNOWN, ran_init=stages.init_stats != (0, 0)
+        PlayroutineKind.UNKNOWN,
+        ran_init=stages.ran_init,
+        changed_inside=changed,
+        written_outside=written,
     )
     return result
 
@@ -261,6 +308,15 @@ def _attempt(strategy: Strategy, image: SidImage):
 def _classify(stage: str, stages: _Stages, candidate: Any) -> Detection:
     if stage == STATIC:
         return Detection(PlayroutineKind.DIRECT, ran_init=False, anchor=candidate)
+    if stage == NATIVE:
+        return Detection(
+            PlayroutineKind.PACKED,
+            ran_init=False,
+            anchor=candidate,
+            written_outside=stages.native_written,
+        )
+    if stage == SYS_UNPACK:
+        return Detection(PlayroutineKind.PACKED, ran_init=False, anchor=candidate)
     changed, written = stages.init_stats
     kind = PlayroutineKind.PACKED if written > changed else PlayroutineKind.RELOCATED
     return Detection(
@@ -274,9 +330,11 @@ def _classify(stage: str, stages: _Stages, candidate: Any) -> Detection:
 
 __all__ = [
     "AFTER_INIT",
+    "NATIVE",
     "RUN_PLAYER",
     "STAGES",
     "STATIC",
+    "SYS_UNPACK",
     "VARIANT_FACET",
     "Located",
     "Rejection",

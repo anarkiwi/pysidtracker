@@ -332,3 +332,9 @@ layout, the winning `strategy`/`stage`, the decoded `image`, a `variant` facet
 `Entry` (`Located.variant`; `variant_facet(strategies)` declares the facet), a
 `Detection` classification (`detect_playroutine`'s kinds) and the full
 `(strategy, candidate, reason)` rejection log (`describe()`, `require()`).
+
+Stages run in this order: `static`, `native-decrunch` (exomizer, no init),
+`after-init`, `sys-unpack` (the BASIC `SYS` stub chain on `KernalHost`, run until PC
+enters code it unpacked) and `run-player`. `detect_playroutine` is the
+classification step over `locate()` (static, optional native, after-init), keeping
+its in-place init and its raised errors.
