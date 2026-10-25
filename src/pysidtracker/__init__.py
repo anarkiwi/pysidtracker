@@ -28,7 +28,14 @@ from .cadence import (
     playroutine_cadence,
 )
 from .cli import add_reglog_command, add_wav_command, print_info, run_cli
-from .codescan import CodePattern, Match, find_code_all, find_code_first
+from .codescan import (
+    CodePattern,
+    Match,
+    SiteMatch,
+    SitePattern,
+    find_code_all,
+    find_code_first,
+)
 from .disasm import disassemble, entry_labels, image_after_init
 from .editorio import editor_io
 from .detect import (
@@ -268,6 +275,8 @@ __all__ = [
     "InitEffects",
     "Jumps",
     "NativeFixture",
+    "SiteMatch",
+    "SitePattern",
     "SumEntry",
     "add_fixtures_commands",
     "default_native_cache",
