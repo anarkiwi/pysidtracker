@@ -264,6 +264,10 @@ pysidid tune.sid -m                 # every matching player (SIDId -m)
 `identify(data)` / `identify_all(data)` return the first / every matching
 player name for bytes, using the bundled signatures unless `sigs` are passed.
 
+`scan(paths, jobs, cfg=None, multi=False)` identifies `.sid` files in parallel and
+yields `(path, names)` in input order (`names` empty when unidentified); the CLI
+uses it.
+
 ## `pysidtracker variant census`
 
 Groups tunes by their `Variant.as_info()` vector and counts the survey verdicts
