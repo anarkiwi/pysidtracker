@@ -59,6 +59,16 @@ from .errors import (
     SidParseError,
     make_package_errors,
 )
+from .facets import (
+    Facet,
+    FacetRegistry,
+    Finding,
+    Variant,
+    on_off_detector,
+    pattern_detector,
+    probe_detector,
+    reference_detector,
+)
 from .formats import (
     FormatCommand,
     SidFormat,
@@ -389,6 +399,14 @@ __all__ = [
     "fetch_verified",
     "find_code_all",
     "find_code_first",
+    "Facet",
+    "FacetRegistry",
+    "Finding",
+    "Variant",
+    "on_off_detector",
+    "pattern_detector",
+    "probe_detector",
+    "reference_detector",
     "find_register_stores",
     "frame_writes",
     "frames_to_seconds",

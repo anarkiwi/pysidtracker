@@ -287,3 +287,17 @@ reported `PACKED` with `ran_init=False`; if that does not yield a recognised
 image, detection falls back to the existing emulated-init path. Native decrunch
 is opt-in specifically so the default detection behaviour — and every existing
 detect test — is unchanged.
+
+## Facet registry (`pysidtracker.facets`)
+
+A format package declares its variant axes as `Facet(name, kind, domain, default,
+detector)` (kind: `build` / `release` / `layout` / `init`; `per_family=True` makes
+`default` a family -> value mapping) in a `FacetRegistry`. `registry.detect(image,
+family)` returns a `Variant`: per facet a value and a `Source` (`detected@$addr`,
+`default`, or `inferred(evidence)`). `Variant.resolve()` gives a plain frozen
+dataclass for attribute access; `Variant.as_info()` flattens values plus a
+`<facet>.src` key for the survey `info` dict. Detector builders:
+`pattern_detector` (code pattern / capture), `on_off_detector` (enable/disable
+sites), `reference_detector` (reference -> value table) and `probe_detector`
+(format-local behavioural probe). Named `facets` because `pysidtracker.variants`
+already clusters builds by execution fingerprint.
