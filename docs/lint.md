@@ -17,12 +17,12 @@ def test_lint():
 * **Unused symbols**: a module-level function, class, constant or `__init__`
   re-export that nothing in the package or `tests` reads. `__all__` does not count
   as a use.
-* **Unresolved references**: `:class:` / `:func:` / `:meth:` / `:attr:` / `:data:` /
-  `:const:` / `:exc:` roles (and dotted `:mod:`), plus double-backtick dotted names
-  that start with the package name, in docstrings and `docs/*.md`. A reference
+* **Unresolved references**: Sphinx class / func / meth / attr / data / const / exc
+  roles (and dotted mod roles), plus double-backtick dotted names that start with
+  the package name, in docstrings and `docs/*.md`. A reference
   resolves when it equals, or is a dotted suffix of, a name the package defines.
-  Roles whose dotted head is external (`numpy.ndarray`), builtins, names imported
-  by the docstring's module, and file names are skipped.
+  References whose dotted head is external (numpy.ndarray), builtins, names
+  imported by the docstring's module, and file names are skipped.
 
 Pass `whitelist=[...]` (`--whitelist ...`) for public API kept for downstream
 users or external names named in prose.
