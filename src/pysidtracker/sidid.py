@@ -79,6 +79,19 @@ def _scan(args):
     return [name] if name else []
 
 
+def scan(paths, jobs, cfg=None, multi=False):
+    """Identify ``paths`` in parallel: yield ``(path, names)`` in input order.
+
+    ``names`` is every matching player when ``multi`` else at most the first;
+    empty when unidentified.
+    """
+    from .survey import pool  # pylint: disable=import-outside-toplevel
+
+    paths = list(paths)
+    with pool(jobs, _init, (cfg,)) as ex:
+        yield from zip(paths, ex.map(_scan, ((p, multi) for p in paths), chunksize=64))
+
+
 def main(argv=None):
     """``python -m pysidtracker.sidid PATH...``: ``path<TAB>player`` per tune."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0])
@@ -91,19 +104,16 @@ def main(argv=None):
     # pylint: disable-next=import-outside-toplevel
     from tqdm import tqdm
 
-    from .survey import pool  # pylint: disable=import-outside-toplevel
-
     paths = list(sid_paths(a.paths))
     want = re.compile(a.player or "", re.I)
     tally = Counter()
-    with pool(a.jobs, _init, (a.cfg,)) as ex:
-        hits = ex.map(_scan, ((p, a.multi) for p in paths), chunksize=64)
-        for path, names in zip(paths, tqdm(hits, total=len(paths), unit="sid")):
-            for name in [n for n in names if want.search(n)] or (
-                [] if a.player else [UNIDENTIFIED]
-            ):
-                tally[name] += 1
-                print(f"{path}\t{name}")
+    hits = scan(paths, a.jobs, a.cfg, a.multi)
+    for path, names in tqdm(hits, total=len(paths), unit="sid"):
+        for name in [n for n in names if want.search(n)] or (
+            [] if a.player else [UNIDENTIFIED]
+        ):
+            tally[name] += 1
+            print(f"{path}\t{name}")
     for name, n in tally.most_common():
         print(f"{n:7d} {name}", file=sys.stderr)
     return 0
