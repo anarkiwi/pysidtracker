@@ -35,7 +35,7 @@ from .errors import SidParseError
 from .poweron import psid_init_bank
 from .registers import sid_model_for_flags
 from .header import SidHeader
-from .image import MEM_SIZE, SidImage
+from .image import SidImage
 
 JMP_ABS = 0x4C
 
@@ -110,70 +110,33 @@ def detect_playroutine(
     Raises :class:`EmulatorUnavailable` if emulation is needed but ``jennings`` is
     not installed.
     """
-    anchor = recognize(image)
-    if anchor:
-        return Detection(PlayroutineKind.DIRECT, ran_init=False, anchor=anchor)
+    from .locate import AFTER_INIT, NATIVE, STATIC, Strategy, locate
 
+    def anchors(staged: SidImage) -> List[object]:
+        return [recognize(staged)]
+
+    def decode(_staged: SidImage, anchor: object) -> object:
+        return anchor or None
+
+    strategies = [Strategy("recognize", STATIC, decode, anchors)]
     if native:
-        native_hit = _try_native_decrunch(image, recognize)
-        if native_hit is not None:
-            return native_hit
-
-    if not init:
-        return Detection(PlayroutineKind.UNKNOWN, ran_init=False)
-
-    orig_load, orig_end = image.load, image.end
-    snapshot = bytes(image.mem[orig_load:orig_end])
-    run_init(image, subtune=subtune)
-    image.end = MEM_SIZE  # init may have scattered data anywhere
-
-    changed_inside = _count_changed(image.mem, orig_load, snapshot)
-    written_outside = _count_written_outside(image.mem, orig_load, orig_end)
-
-    anchor = recognize(image)
-    if not anchor:
-        kind = PlayroutineKind.UNKNOWN
-    elif written_outside > changed_inside:
-        kind = PlayroutineKind.PACKED
-    else:
-        kind = PlayroutineKind.RELOCATED
-    return Detection(
-        kind,
-        ran_init=True,
-        anchor=anchor,
-        changed_inside=changed_inside,
-        written_outside=written_outside,
+        strategies.append(Strategy("native", NATIVE, decode, anchors))
+    strategies.append(Strategy("init", AFTER_INIT, decode, anchors))
+    located = locate(
+        image,
+        strategies,
+        init=init,
+        subtune=subtune,
+        in_place=True,
+        strict=True,
     )
+    return located.detection
 
 
 # The 6502 stack page is scratch space the init run (and our return-address
 # stub) churns; it is never song data, so it is excluded from the diff metrics.
 _STACK_LO = 0x0100
 _STACK_HI = 0x0200
-
-
-def _try_native_decrunch(image: SidImage, recognize: Recognizer):
-    """Native exomizer decrunch first-try; a :class:`Detection` or ``None``.
-
-    Returns a ``PACKED`` detection (``ran_init=False``) when native decrunch
-    unpacks an image the ``recognize`` callback then accepts, else ``None`` so
-    the caller falls back to the emulated-init path.
-    """
-    from .decrunch import native_decrunch
-
-    unpacked = native_decrunch(image)
-    if unpacked is None:
-        return None
-    anchor = recognize(unpacked)
-    if not anchor:
-        return None
-    written = sum(1 for value in unpacked.mem if value)
-    return Detection(
-        PlayroutineKind.PACKED,
-        ran_init=False,
-        anchor=anchor,
-        written_outside=written,
-    )
 
 
 def _count_changed(mem: bytearray, load: int, snapshot: bytes) -> int:
