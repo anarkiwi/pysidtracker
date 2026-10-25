@@ -328,9 +328,7 @@ def test_renderer_prefers_format_over_spec():
 
 
 def test_fidelity_row():
-    from pysidtracker import survey
-
-    def render(data, nframes, song):
+    def render(data, nframes, _song):
         return [[data[0]] * 25 for _ in range(nframes)]
 
     ok = survey.fidelity_row({}, b"\x01", lambda d: d, render=render, frames=3)

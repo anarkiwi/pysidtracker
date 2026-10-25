@@ -423,7 +423,7 @@ def _prg(value):
     return bytes([0x00, 0x10, 0xA9, value, 0x8D, 0x00, 0xD4, 0x60])
 
 
-def _as_grid(data, nframes, song):
+def _as_grid(data, nframes, _song):
     return [[data[3]] * 25 for _ in range(nframes)]
 
 
