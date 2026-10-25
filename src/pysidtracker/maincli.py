@@ -20,6 +20,7 @@ from vagrant_moses.memmap import PAL
 
 from .audio import CHIP_MODELS, render_player_wav, seconds_to_frames
 from .cadence import playroutine_cadence
+from .census import add_census_arguments
 from .cli import print_info, run_cli
 from .d64 import add_media_commands
 from .disasm import disassemble, entry_labels, image_after_init
@@ -196,6 +197,14 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
     )
     add_lint_arguments(lint)
     lint.set_defaults(func=run_lint)
+
+    variant = subparsers.add_parser("variant", help="variant-level analysis")
+    variant_sub = variant.add_subparsers(dest="variant_command", required=True)
+    census = variant_sub.add_parser(
+        "census", help="group tunes by variant vector and verdict"
+    )
+    add_census_arguments(census)
+    census.set_defaults(formats=formats)
 
     _add_format_commands(subparsers, formats)
     return parser

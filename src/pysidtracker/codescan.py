@@ -36,9 +36,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from .image import MEM_SIZE, SidImage
+from .mos6502 import follow_jmp, s8
 
 CodeBuffer = Union[SidImage, bytes, bytearray, memoryview]
 
@@ -419,3 +420,68 @@ class SitePattern:
     ) -> bool:
         """Whether the pattern matches anywhere in the span."""
         return self.find_first(image, start=start, end=end) is not None
+
+
+class ChainError(ValueError):
+    """A :class:`RoutineChain` routine was not found where the chain leads."""
+
+    def __init__(self, name: str, addr: int):
+        super().__init__(f"routine {name!r} not found at {addr:#06x}")
+        self.name = name
+        self.addr = addr
+
+
+def match_at(image: CodeBuffer, pattern: CodePattern, addr: int) -> Optional[Match]:
+    """The match of ``pattern`` starting exactly at ``addr``, or ``None``."""
+    hit = find_code_all(image, pattern, start=addr, end=addr + pattern.length)
+    return hit[0] if hit and hit[0].addr == addr else None
+
+
+class RoutineChain:
+    """Anchored discovery: named patterns, each located from an earlier capture.
+
+    ``routines`` is a sequence of ``(name, spec)``. The first routine is anchored
+    at the ``entry`` passed to :meth:`discover`; every later routine ``name`` is
+    anchored at the address an earlier capture (or ``<x>_end``) produced under
+    that name. Captures follow conventions by name prefix:
+
+    * ``to_*`` -- a branch offset byte; yields the branch target address, which
+      anchors a later routine of the same name;
+    * ``at_*`` -- a self-modified operand; yields the *address* of that operand
+      under the name without the prefix;
+    * ``*_end`` -- not a capture: every routine ``x`` also defines ``x_end``, the
+      address just past it, so a later routine named ``x_end`` follows on.
+
+    Any other capture is returned as is. A ``JMP`` trampoline at an anchor is
+    followed first (:func:`~pysidtracker.mos6502.follow_jmp`).
+    """
+
+    def __init__(self, routines: Sequence[Tuple[str, Union[CodePattern, str]]]):
+        self.routines = tuple(
+            (name, spec if isinstance(spec, CodePattern) else CodePattern(spec))
+            for name, spec in routines
+        )
+
+    def discover(self, image: SidImage, entry: int) -> Dict[str, Any]:
+        """Facet values (with addresses) found along the chain from ``entry``.
+
+        Includes ``entry`` and each ``<routine>_end``. Raises :class:`ChainError`
+        when a routine is not at its anchor, or no anchor was captured for it.
+        """
+        found: Dict[str, Any] = {"entry": entry}
+        for name, pattern in self.routines:
+            if name not in found:
+                raise ChainError(name, -1)
+            addr = follow_jmp(image, found[name])
+            hit = match_at(image, pattern, addr)
+            if hit is None:
+                raise ChainError(name, addr)
+            for cap, offset, _ in pattern.captures:
+                value = hit.captures[cap]
+                if cap[:3] == "to_":
+                    value = addr + offset + 1 + s8(value)
+                elif cap[:3] == "at_":
+                    cap, value = cap[3:], addr + offset
+                found[cap] = value
+            found[f"{name}_end"] = addr + pattern.length
+        return found
