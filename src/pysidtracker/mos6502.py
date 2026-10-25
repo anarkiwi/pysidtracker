@@ -7,7 +7,7 @@ every faithful 6502 transcription in the family needs, in one place.
 
 from __future__ import annotations
 
-from typing import Iterator, List, Optional, Tuple
+from typing import Collection, Iterator, List, Optional, Set, Tuple
 
 from jennings.opcodes import MODE_LEN, OPCODES
 
@@ -182,3 +182,111 @@ def disasm_len(opcode: int) -> Optional[int]:
     if 0 <= opcode < len(OP_LEN):
         return OP_LEN[opcode]
     return None
+
+
+OP_JSR = 0x20
+OP_JMP = 0x4C
+OP_LDX_IMM = 0xA2
+OP_INX = 0xE8
+
+# BRK, RTI, RTS, JMP (ind): control does not fall through to the next instruction.
+RETURN_OPS = frozenset((0x00, 0x40, 0x60, 0x6C))
+
+
+def _word(image, addr: int) -> int:
+    return image.peek(addr) | (image.peek(addr + 1) << 8)
+
+
+def follow_jmp(image, addr: int) -> int:
+    """``addr``, or where the chain of ``JMP abs`` trampolines at it leads.
+
+    ``image`` is anything with ``peek(addr)`` (a :class:`~pysidtracker.SidImage`).
+    """
+    seen: Set[int] = set()
+    while image.peek(addr) == OP_JMP and addr not in seen:
+        seen.add(addr)
+        addr = _word(image, addr + 1)
+    return addr
+
+
+def walk_calls(
+    image, addr: int, targets: Collection[int], seen: Optional[Set[int]] = None
+) -> Optional[int]:
+    """The first of ``targets`` that the code at ``addr`` reaches, depth first.
+
+    Follows ``JMP abs`` and descends into ``JSR abs`` targets, falling through
+    otherwise, until a return opcode (:data:`RETURN_OPS`) or a revisit.
+    """
+    seen = set() if seen is None else seen
+    while addr not in seen:
+        if addr in targets:
+            return addr
+        seen.add(addr)
+        op = image.peek(addr)
+        target = _word(image, addr + 1)
+        if op == OP_JMP:
+            addr = target
+            continue
+        if op == OP_JSR:
+            found = walk_calls(image, target, targets, seen)
+            if found is not None:
+                return found
+        if op in RETURN_OPS:
+            return None
+        addr = (addr + OP_LEN[op]) & 0xFFFF
+    return None
+
+
+def track_x(image, target: int, x: int, goal: int, budget: int = 8) -> Tuple[int, bool]:
+    """``(x, reaches_goal)``: follow ``target``'s ``INX``/``LDX #n``/``JMP`` chain.
+
+    ``x`` is updated as each instruction would; stops with ``True`` on reaching
+    ``goal`` and ``False`` on any other instruction or after ``budget`` steps.
+    """
+    for _ in range(budget):
+        if target == goal:
+            return x, True
+        op = image.peek(target)
+        if op == OP_INX:
+            x = (x + 1) & 0xFF
+            target = (target + 1) & 0xFFFF
+        elif op == OP_LDX_IMM:
+            x = image.peek(target + 1)
+            target = (target + 2) & 0xFFFF
+        elif op == OP_JMP:
+            target = _word(image, target + 1)
+        else:
+            return x, False
+    return x, False
+
+
+def called_x_values(image, start: int, goal: int, budget: int = 16) -> Tuple[int, ...]:
+    """The X values at which the code from ``start`` calls ``goal``.
+
+    Walks straight-line code with ``X = 0``; ``LDX #n`` / ``INX`` set X, each
+    ``JSR``/``JMP`` resolvable to ``goal`` (through :func:`track_x`) records the
+    X it arrives with, a ``JSR`` continues with that X and a ``JMP`` or any
+    unrecognised instruction ends the walk.
+    """
+    out: List[int] = []
+    x = 0
+    pc = start
+    for _ in range(budget):
+        op = image.peek(pc)
+        if op == OP_LDX_IMM:
+            x = image.peek(pc + 1)
+            pc = (pc + 2) & 0xFFFF
+        elif op == OP_INX:
+            x = (x + 1) & 0xFF
+            pc += 1
+        elif op in (OP_JSR, OP_JMP):
+            x, hit = track_x(image, _word(image, pc + 1), x, goal)
+            if not hit:
+                break
+            out.append(x)
+            if op == OP_JMP:
+                break
+            pc = (pc + 3) & 0xFFFF
+        else:
+            break
+    return tuple(out)

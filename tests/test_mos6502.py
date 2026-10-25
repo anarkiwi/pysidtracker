@@ -55,3 +55,51 @@ def test_walk_until():
     assert list(walk_until(code, 0, {0x60})) == [0, 2, 5]
     # budget stops the walk.
     assert list(walk_until(bytes([0xEA] * 10), 0, set(), budget=3)) == [0, 1, 2]
+
+
+class _Img:
+    def __init__(self, data):
+        self.mem = bytearray(0x10000)
+        for addr, blob in data.items():
+            self.mem[addr : addr + len(blob)] = blob
+
+    def peek(self, addr):
+        return self.mem[addr] if 0 <= addr < 0x10000 else 0
+
+
+def test_follow_jmp_and_loop():
+    img = _Img({0x1000: b"\x4c\x00\x20", 0x2000: b"\x4c\x00\x30", 0x3000: b"\x60"})
+    assert mos6502.follow_jmp(img, 0x1000) == 0x3000
+    img = _Img({0x1000: b"\x4c\x00\x10"})
+    assert mos6502.follow_jmp(img, 0x1000) == 0x1000
+
+
+def test_walk_calls():
+    img = _Img(
+        {
+            0x1000: b"\xea\x20\x00\x20\x60",  # NOP; JSR $2000; RTS
+            0x2000: b"\x4c\x00\x30",  # JMP $3000
+            0x3000: b"\x60",
+            0x4000: b"\x60\x4c\x00\x40",  # RTS ends the walk
+        }
+    )
+    assert mos6502.walk_calls(img, 0x1000, {0x3000}) == 0x3000
+    assert mos6502.walk_calls(img, 0x1000, {0x5000}) is None
+    assert mos6502.walk_calls(img, 0x4000, {0x4001}) is None
+    img = _Img({0x1000: b"\x4c\x00\x10"})
+    assert mos6502.walk_calls(img, 0x1000, {0x9999}) is None
+
+
+def test_track_x_and_called_x_values():
+    img = _Img(
+        {
+            0x1000: b"\xa2\x01\xe8\x4c\x00\x20",  # LDX #1; INX; JMP out
+            0x2000: b"\x60",
+            0x3000: b"\x20\x00\x20\xe8\x20\x00\x20\x4c\x00\x20",
+            0x4000: b"\xea",
+        }
+    )
+    assert mos6502.track_x(img, 0x1000, 0, 0x2000) == (2, True)
+    assert mos6502.track_x(img, 0x4000, 0, 0x2000) == (0, False)
+    assert mos6502.called_x_values(img, 0x3000, 0x2000) == (0, 1, 1)
+    assert mos6502.called_x_values(img, 0x4000, 0x2000) == ()

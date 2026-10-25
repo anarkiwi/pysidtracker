@@ -29,12 +29,15 @@ from .cadence import (
 )
 from .cli import add_reglog_command, add_wav_command, print_info, run_cli
 from .codescan import (
+    ChainError,
     CodePattern,
     Match,
+    RoutineChain,
     SiteMatch,
     SitePattern,
     find_code_all,
     find_code_first,
+    match_at,
 )
 from .disasm import disassemble, entry_labels, image_after_init
 from .editorio import editor_io
@@ -132,8 +135,12 @@ from .mos6502 import (
     OP_LEN,
     SidWriteCapturingMemory,
     adc,
+    called_x_values,
+    follow_jmp,
     s8,
     sbc,
+    track_x,
+    walk_calls,
     walk_until,
 )
 from .notefreq import (
@@ -418,6 +425,13 @@ __all__ = [
     "fetch_rom",
     "fetch_tune",
     "fetch_verified",
+    "ChainError",
+    "RoutineChain",
+    "called_x_values",
+    "follow_jmp",
+    "match_at",
+    "track_x",
+    "walk_calls",
     "find_code_all",
     "find_code_first",
     "Facet",
