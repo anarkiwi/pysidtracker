@@ -4,6 +4,7 @@ import pytest
 
 from pysidtracker import (
     SidFormatError,
+    SidImage,
     decode_cstr,
     encode_cstr,
     parse_sid_header,
@@ -38,6 +39,36 @@ def test_write_psid_round_trips():
     assert h.released == "2026 X"
     assert h.flags == 0x0004
     assert raw[h.data_start :] == b"\x01\x02\x03"
+
+
+def test_write_psid_embed_load_in_body():
+    image = b"\xea\x20\x60"
+    raw = write_psid(
+        load=0x1800, init=0x1800, play=0x1806, image=image, name="TUNE", embed_load=True
+    )
+    header = raw[:0x7C]
+    assert header[0:4] == b"PSID"
+    assert header[8:10] == b"\x00\x00"  # loadAddress field: 0 -> load lives in body
+    assert header[10:12] == (0x1800).to_bytes(2, "big")
+    assert header[12:14] == (0x1806).to_bytes(2, "big")
+    assert raw[0x7C:0x7E] == (0x1800).to_bytes(2, "little")
+    assert raw[0x7E:] == image
+    h = parse_sid_header(raw)
+    assert h.load_address == 0
+    assert h.real_load_address == 0x1800
+    assert h.data_start == 0x7E
+    loaded = SidImage.from_bytes(raw)
+    assert loaded.load == 0x1800
+    assert loaded.image == image
+
+
+def test_write_psid_load_address_in_header_by_default():
+    image = b"\xea\x20\x60"
+    raw = write_psid(load=0x1800, init=0x1800, play=0x1806, image=image)
+    assert raw[0x7C:] == image
+    h = parse_sid_header(raw)
+    assert h.load_address == 0x1800
+    assert h.data_start == 0x7C
 
 
 def test_write_psid_rsid_kind():

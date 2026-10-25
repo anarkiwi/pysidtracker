@@ -14,6 +14,7 @@ exists after the init routine runs. This module resolves the on-disk fields;
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
 
 from .errors import SidFormatError
@@ -271,15 +272,24 @@ def write_psid(
     version: int = 2,
     kind: str = "PSID",
     speed: int = 0,
+    embed_load: bool = False,
 ) -> bytes:
     """Assemble a PSID/RSID v2 container (the inverse of :func:`parse_sid_header`).
 
     ``kind`` selects the container magic (``"PSID"`` or ``"RSID"``). The load
     address is written to the header ``loadAddress`` field and ``image`` follows
-    the header directly, so ``parse_sid_header(write_psid(...))`` reproduces the
-    ``load``/``init``/``play``/metadata inputs.
+    the header directly. With ``embed_load=True`` the HVSC "load lives in the
+    body" form is written instead: the header ``loadAddress`` field is zero and
+    ``image`` (a bare image, load word excluded) is preceded by the load address
+    as a little-endian word -- exactly what :func:`parse_sid_header` resolves
+    via ``real_load_address`` / ``data_start``. In both modes
+    ``parse_sid_header(write_psid(...))`` reproduces the ``load``/``init``/
+    ``play``/metadata inputs.
     """
     magic = kind.encode("ascii") if isinstance(kind, str) else bytes(kind)
+    if embed_load:
+        image = struct.pack("<H", load & 0xFFFF) + bytes(image)
+        load = 0
     header = _pack_header(
         magic=magic,
         version=version,
