@@ -104,6 +104,16 @@ def test_diverging_tune():
 start song. `assert_matches(data, player, reference)` is the same check against any
 grid.
 
+## Decode fidelity
+
+Formats whose playback emulates the tune's own code (`EmuPlayer`/`TunePlayer`) never
+exercise the decoded model against the oracle: a wrong decode still renders exact.
+`pysidtracker.testing.decode_fidelity(original, rebuilt)` renders both the original
+image and one rebuilt from the decoded model (the format's writer, or the tracker's
+own packer) and returns the `Verdict`; `assert_decode_fidelity(data, rebuild)` is the
+pytest form, and `survey.fidelity_row(row, data, rebuild)` adds the `fidelity` verdict
+column (`exact`, `differs`, `not_decompiled`, `rebuild_error`; `FIDELITY_FIELDS`).
+
 ## Never skipped
 
 An unavailable tune raises `TuneFetchError` and a missing/failed oracle raises

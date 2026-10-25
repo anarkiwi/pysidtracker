@@ -416,3 +416,27 @@ def test_fetch_archive_member_rejects_a_directory(monkeypatch, tmp_path):
         fetch_archive_member(
             "https://x.example/r.tgz", _sha(archive), "rel/sub", "", cache_dir=tmp_path
         )
+
+
+def _prg(value):
+    # LDA #value; STA $D400; RTS (play at the load address)
+    return bytes([0x00, 0x10, 0xA9, value, 0x8D, 0x00, 0xD4, 0x60])
+
+
+def _as_grid(data, nframes, _song):
+    return [[data[3]] * 25 for _ in range(nframes)]
+
+
+def test_decode_fidelity_exact_and_differs():
+    same = testing.decode_fidelity(_prg(5), _prg(5), render=_as_grid, frames=4)
+    assert same.ok
+    diff = testing.decode_fidelity(_prg(5), _prg(6), render=_as_grid, frames=4)
+    assert not diff.ok and diff.first == 0
+
+
+def test_assert_decode_fidelity():
+    testing.assert_decode_fidelity(_prg(5), lambda d: d, render=_as_grid, frames=4)
+    with pytest.raises(AssertionError, match="replays differently"):
+        testing.assert_decode_fidelity(
+            _prg(5), lambda d: _prg(6), render=_as_grid, frames=4, name="t"
+        )

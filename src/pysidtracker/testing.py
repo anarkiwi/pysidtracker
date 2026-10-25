@@ -47,6 +47,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from .d64 import D64File, read_d64
 from .errors import SidError
+from .gridcmp import verdict_lead
 from .oracle import (
     SIDTRACE_IMAGE,
     aligned_match,
@@ -520,6 +521,67 @@ def oracle_grid(
             f"{tune_path.name}: trace covers {have} of {frames} play calls"
         )
     return grid[:frames] + [grid[-1][:] for _ in range(frames - len(grid))]
+
+
+def decode_fidelity(
+    original,
+    rebuilt,
+    *,
+    render=None,
+    frames: int = 250,
+    song: int = 1,
+    max_lead: int = 0,
+):
+    """The :class:`~pysidtracker.gridcmp.Verdict` of ``rebuilt``'s replay against ``original``'s.
+
+    For formats whose playback emulates the tune's own code, the sidtrace oracle
+    never exercises the decoded model: a wrong decode still renders exact. Rebuild
+    a playable image from the decoded model (the format's writer, or the tracker's
+    own packer under emulation) and pass both images here: each is rendered for
+    ``frames`` frames of 1-based ``song`` and the grids compared, the rebuilt one
+    allowed up to ``max_lead`` frames of silent lead-in. ``render`` is
+    ``render(data, nframes, song) -> grid`` (default
+    :func:`~pysidtracker.oracle.register_grid` on the image, so both sides run their
+    own code).
+    """
+    if render is None:
+
+        def render(data, nframes, song):
+            return register_grid(data, nframes, subtune=song - 1)
+
+    want = render(original, frames + max_lead, song)
+    got = render(rebuilt, frames + max_lead, song)
+    return verdict_lead(want[:frames], got, max_lead=max_lead)
+
+
+def assert_decode_fidelity(
+    data,
+    rebuild,
+    *,
+    render=None,
+    frames: int = 250,
+    song: int = 1,
+    max_lead: int = 0,
+    name: str = "",
+) -> None:
+    """Assert the model decoded from ``data`` rebuilds an image that replays as ``data`` does.
+
+    ``rebuild(data) -> bytes`` decodes ``data`` and writes the playable image back
+    out; see :func:`decode_fidelity` for the comparison and ``render``.
+    """
+    verdict = decode_fidelity(
+        data,
+        rebuild(data),
+        render=render,
+        frames=frames,
+        song=song,
+        max_lead=max_lead,
+    )
+    if not verdict.ok:
+        raise AssertionError(
+            f"{name or 'tune'}: rebuilt image replays differently from the "
+            f"original: {verdict.line()}"
+        )
 
 
 def assert_matches(
