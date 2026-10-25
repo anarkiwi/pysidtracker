@@ -180,6 +180,15 @@ cases `check_case` now passes. Tunes come from the pair's HVSC root; the oracle
 traces are cached in `--oracle-cache` (default `default_cache("csv")`, see
 [caching.md](caching.md)).
 
+Python edge keys are `edge:<qualname>:<digest>>...`: each end is the digest of the
+function's qualified name and the statement's `ast.unparse`d header, plus an
+occurrence index for repeats. A line shift, whitespace or a module split leaves a
+key unchanged; editing the statement changes it. With `--verify`, an existing case
+whose key names a feature absent from the current corpus is reported on stderr and,
+if it still fails, re-keyed to the highest ranked fix among its fresh record's
+candidates. `PySubject(labels={"Player._frame": "play"})` shows a format's own
+routine name in place of the Python location in labels.
+
 ### In a package's tests
 
 ```python

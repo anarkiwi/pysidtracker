@@ -8,6 +8,7 @@ of the edges and store sites each play call ran, keyed stably across tunes;
 from __future__ import annotations
 
 import ast
+import copy
 import functools
 import inspect
 import linecache
@@ -518,6 +519,28 @@ def _qualnames(tree: ast.AST) -> Dict[int, str]:
     return out
 
 
+def _header(node: ast.stmt, line: str) -> str:
+    """``node`` normalised by ``ast.unparse`` without its nested statements
+    (``line`` folded when it cannot be unparsed)."""
+    head = copy.copy(node)
+    for field in ("body", "orelse", "finalbody", "handlers", "cases"):
+        if isinstance(getattr(head, field, None), list):
+            setattr(head, field, [])
+    try:
+        return " ".join(ast.unparse(head).split())
+    except (ValueError, TypeError, AttributeError):
+        return " ".join(line.split())
+
+
+def _statements(tree: ast.AST, lines: List[str]) -> Dict[int, str]:
+    """Each statement's first line to its normalised header text."""
+    out: Dict[int, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt):
+            out.setdefault(node.lineno, _header(node, lines[node.lineno - 1]))
+    return out
+
+
 def _subscripts(node) -> List[ast.Subscript]:
     if isinstance(node, (ast.Tuple, ast.List)):
         return [s for elt in node.elts for s in _subscripts(elt)]
@@ -570,8 +593,9 @@ class _Source:
     def where(self, line: int) -> str:
         first = self.first.get(line, line)
         qual = self.qual.get(first, "<module>")
-        qual = _generic(qual) if self.generated else qual
-        return f"{self.file}:{qual}:{self.keys.get(first, first)}"
+        if self.generated:
+            return f"{self.file}:{_generic(qual)}:{self.keys.get(first, first)}"
+        return f"{qual}:{self.keys.get(first, first)}"
 
     def arc_key(self, src: int, dst: int) -> str:
         dst = self.first.get(dst, dst)
@@ -596,13 +620,17 @@ def _source(name: str, text: str, generated: bool) -> Optional[_Source]:
     exits = parser.exit_counts()
     qual = _qualnames(tree)
     keys = {n: str(n) for n in set(first.values())}
-    if generated:
-        groups: Dict[tuple, int] = {}
-        for n in sorted(keys):
+    stmts = {} if generated else _statements(tree, lines)
+    groups: Dict[tuple, int] = {}
+    for n in sorted(keys):
+        if generated:
             base = _generic(lines[n - 1])
-            k = groups.get((qual.get(n), base), 0)
-            groups[(qual.get(n), base)] = k + 1
-            keys[n] = base + (f"@{k}" if k else "")
+        else:
+            text = stmts.get(n) or " ".join(lines[n - 1].split())
+            base = _digest([qual.get(n, "<module>"), text])[:12]
+        k = groups.get((qual.get(n), base), 0)
+        groups[(qual.get(n), base)] = k + 1
+        keys[n] = base + (f"@{k}" if k else "")
     return _Source(
         name,
         generated,
@@ -644,6 +672,8 @@ class PySubject:
       label: the trace's ``side``.
       starts: ``player`` to its voices' first-note frames after the frames played,
         for :func:`~pysidtracker.gridcmp.verdict_onset` (None: not given).
+      labels: qualified function names (``Player._frame``) to the format's own name
+        for them (a routine or facet), shown in place of the Python location.
     """
 
     make: Callable[[], object]
@@ -652,6 +682,7 @@ class PySubject:
     roots: Optional[Sequence[str]] = None
     label: str = "python"
     starts: Optional[Callable[[object], Sequence]] = None
+    labels: Optional[Dict[str, str]] = None
 
 
 class _Recorder:
@@ -913,13 +944,17 @@ def py_paths(
             frame_reads.append(np.unique(np.asarray(reads, np.int64)).astype(np.uint16))
             recorder.arcs, recorder.log = {}, []
             reads.clear()
-    trace = _py_trace(subject.label, rows, arcs, stores, frame_reads, roots, sources)
+    trace = _py_trace(
+        subject.label, rows, arcs, stores, frame_reads, roots, sources, subject.labels
+    )
     if subject.starts is not None:
         trace.starts = tuple(subject.starts(player))
     return trace
 
 
-def _py_trace(side, rows, arcs, stores, frame_reads, roots, sources) -> PathTrace:
+def _py_trace(
+    side, rows, arcs, stores, frame_reads, roots, sources, names=None
+) -> PathTrace:
     ids: Dict[str, int] = {}
     labels: List[str] = []
 
@@ -928,6 +963,10 @@ def _py_trace(side, rows, arcs, stores, frame_reads, roots, sources) -> PathTrac
             ids[key] = len(ids)
             labels.append(label)
         return ids[key]
+
+    def place(src: _Source, line: int) -> str:
+        named = (names or {}).get(src.qual.get(src.first.get(line, line), ""))
+        return f"{named}:{line}" if named else f"{src.file}:{line}"
 
     nframes = len(rows)
     sites = np.full((nframes, _NREG), -1, np.int32)
@@ -940,14 +979,14 @@ def _py_trace(side, rows, arcs, stores, frame_reads, roots, sources) -> PathTrac
             events.append(
                 (
                     f,
-                    fid(src.arc_key(a, b), f"{src.file}:{a} {src.text(a)} -> {to}"),
+                    fid(src.arc_key(a, b), f"{place(src, a)} {src.text(a)} -> {to}"),
                     seq,
                 )
             )
         for r, (src, line, seq) in sorted(stores[f].items()):
             sites[f, r] = fid(
                 f"store:{r}:{src.where(line)}",
-                f"{src.file}:{line} {src.text(line)} -> {REG_NAMES[r]}",
+                f"{place(src, line)} {src.text(line)} -> {REG_NAMES[r]}",
             )
             events.append((f, int(sites[f, r]), seq))
     ev = np.array(events, np.int64).reshape(-1, 3)
