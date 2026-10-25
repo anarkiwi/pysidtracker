@@ -89,11 +89,21 @@ def as_subject(fn: Callable, data: bytes, song: int) -> PySubject:
     return PySubject(lambda: first.pop() if first else fn(data, song))
 
 
+def _sites(data: bytes, song: int) -> Dict[int, str]:
+    """``{addr: facet}`` of the installed format recognising ``data`` (none if no format
+    does or it declares no sites)."""
+    try:
+        fmt = find_format(data)
+        return dict(fmt.sites(fmt.load(data, song - 1)))
+    except Exception:  # pylint: disable=broad-except
+        return {}
+
+
 def trace(spec: str, data: bytes, song: int, nframes: int) -> PathTrace:
     """The :class:`~pysidtracker.paths.PathTrace` of side ``spec`` over ``nframes``."""
     subj = subject(spec, data, song)
     if subj is None:
-        return cpu_paths(data, nframes, subtune=song - 1)
+        return cpu_paths(data, nframes, subtune=song - 1, sites=_sites(data, song))
     return py_paths(subj, nframes)
 
 

@@ -16,7 +16,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -294,10 +294,17 @@ class StaticCode:
             }
         )
 
-    def edge_label(self, src: int, dst: int) -> str:
-        """``$SRC disassembly -> $DST`` (``out`` for an end outside the span)."""
+    def edge_label(
+        self, src: int, dst: int, sites: Optional[Mapping[int, str]] = None
+    ) -> str:
+        """``$SRC disassembly -> $DST`` (``out`` for an end outside the span).
+
+        ``sites`` (``{addr: facet}``) prefixes ``[facet]`` when an end is a facet site.
+        """
         left = self.text(src) if src != _OUT else "out"
-        return f"{left} -> " + (f"${dst:04X}" if dst != _OUT else "out")
+        text = f"{left} -> " + (f"${dst:04X}" if dst != _OUT else "out")
+        facet = (sites or {}).get(src) or (sites or {}).get(dst)
+        return f"[{facet}] {text}" if facet else text
 
 
 def _ranked(keys: Dict[tuple, str]) -> Dict[tuple, str]:
@@ -368,8 +375,12 @@ def cpu_paths(
     subtune: int = 0,
     max_cycles: int = 8_000_000,
     progress: bool = False,
+    sites: Optional[Mapping[int, str]] = None,
 ) -> PathTrace:
     """The edges and SID store sites of each of ``nframes`` play calls on jennings.
+
+    ``sites`` (:meth:`~pysidtracker.formats.SidFormat.sites`) labels the edges at a
+    facet's site with that facet; names are unchanged.
 
     Booted as :func:`~pysidtracker.oracle.register_grid` is, so ``grid`` equals it.
 
@@ -446,7 +457,7 @@ def cpu_paths(
     code.explore({d for _, d in edges if d != _OUT}, entries)
     names_of = code.edge_names(edges)
     names = [names_of[e] for e in edges] + _store_names(code, store_sites)
-    labels = [code.edge_label(*e) for e in edges] + [
+    labels = [code.edge_label(*e, sites) for e in edges] + [
         (code.text(pc) if code.inspan(pc) else f"${pc:04X}") + f" -> {REG_NAMES[r]}"
         for pc, r in store_sites
     ]

@@ -12,7 +12,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import numpy as np
 
@@ -58,7 +68,10 @@ class SidFormat:
     read from the model (default: the standard ``name``/``author``/``released``/
     ``load_addr``/``init_addr``/``play_addr`` attributes).  ``commands`` are
     extra subcommands (e.g. ``export``) surfaced only while this format is
-    installed.
+    installed.  ``variant`` optionally detects the model's
+    :class:`~pysidtracker.facets.Variant`; its ``as_info()`` joins the survey
+    renderer's ``info``.  ``facet_sites`` optionally maps the model to
+    ``{addr: facet}``, the code address each facet was detected at.
     """
 
     name: str
@@ -67,6 +80,20 @@ class SidFormat:
     describe: Optional[Callable[[Any], Iterable[str]]] = None
     metadata: Optional[Metadata] = None
     commands: Sequence[FormatCommand] = field(default_factory=tuple)
+    variant: Optional[Callable[[Any], Any]] = None
+    facet_sites: Optional[Callable[[Any], Mapping[int, str]]] = None
+
+    def variant_info(self, model: Any) -> Dict[str, Any]:
+        """``model``'s :meth:`Variant.as_info` (empty without a ``variant`` hook)."""
+        return self.variant(model).as_info() if self.variant is not None else {}
+
+    def sites(self, model: Any) -> Dict[int, str]:
+        """``{addr: facet}`` of ``model``: the facet each detected code site belongs to.
+
+        Empty without a ``facet_sites`` hook; the addresses label 6502 edges in
+        whydiff / pathdiff.
+        """
+        return dict(self.facet_sites(model)) if self.facet_sites is not None else {}
 
     def model_metadata(self, model: Any) -> Sequence:
         """The ``(name, author, released, load, init, play)`` tuple for ``model``."""
@@ -151,8 +178,11 @@ def render(
 ) -> Tuple[np.ndarray, Dict[str, str]]:
     """A survey renderer: 1-based ``song`` of ``data`` on format ``name`` (or ``auto``).
 
-    ``(grid, {"format": name})``, the grid ``nframes`` rows of the 25 SID registers.
+    ``(grid, info)``, the grid ``nframes`` rows of the 25 SID registers and ``info``
+    ``{"format": name}`` plus the format's facets (:meth:`SidFormat.variant_info`).
     """
     fmt = find_format(data, name)
-    grid = fmt.play(data, song - 1).render_grid(nframes)
-    return np.asarray(grid, np.int16), {"format": fmt.name}
+    model = fmt.load(data, song - 1)
+    grid = fmt.player(model).render_grid(nframes)
+    info = {"format": fmt.name, **fmt.variant_info(model)}
+    return np.asarray(grid, np.int16), info
