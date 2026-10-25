@@ -196,3 +196,29 @@ def test_site_bad_spec(spec):
 def test_site_bad_span():
     with pytest.raises(ValueError):
         SitePattern("A9", span="rom")
+
+
+def test_routine_chain():
+    from pysidtracker import ChainError, RoutineChain
+
+    payload = bytearray(0x1100)
+    payload[0:3] = b"\x4c\x00\x11"  # $1000 JMP $1100
+    payload += b"\xa2\x07\xd0\x02\xa9\x00"  # $1100 LDX #7; BNE +2; LDA #0
+    payload += b"\x8d\x00\xd4\xea\xea\x60"  # $1106 STA $D400; NOP; NOP; RTS
+    image = _image(payload)
+    chain = RoutineChain(
+        [
+            ("entry", "A2 {x} D0 {to_store} A9 {at_imm}"),
+            ("to_store", "8D {sid:w}"),
+            ("to_store_end", "EA EA 60"),
+        ]
+    )
+    found = chain.discover(image, 0x1000)
+    assert found["x"] == 7 and found["sid"] == 0xD400
+    assert found["to_store"] == 0x1106
+    assert found["imm"] == 0x1105
+    assert found["to_store_end"] == 0x1109 and found["entry_end"] == 0x1106
+    with pytest.raises(ChainError):
+        RoutineChain([("entry", "FF FF")]).discover(image, 0x1000)
+    with pytest.raises(ChainError):
+        RoutineChain([("entry", "A2 {x}"), ("nope", "EA")]).discover(image, 0x1000)

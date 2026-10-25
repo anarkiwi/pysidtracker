@@ -75,6 +75,14 @@ bases (`ReferenceMatch.bases`); `find_reference` / `best_reference` order
 code-identical references at one address by how many data bytes agree, and
 `ReferenceMatch.facets` maps the matched name to `variant` facets.
 
+`RoutineChain([(name, spec), ...]).discover(image, entry)` chains patterns, each
+anchored at an address an earlier capture yielded: `{to_x}` is a branch offset
+(yields target address `x`), `{at_x:...}` the address of a self-modified operand
+(yields `x`), and every routine `r` also defines `r_end` (the address after it)
+to follow straight on. `JMP` trampolines at an anchor are followed. The static
+walkers live in `mos6502`: `follow_jmp`, `walk_calls` (DFS over JSR/JMP to a
+target set), and `track_x` / `called_x_values` (X through `LDX #n` / `INX`).
+
 ### `registers` — hardware register map
 
 Documented C64 hardware addresses (SID `$D400`–`$D418` mirrored every `$20`;
