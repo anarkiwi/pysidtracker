@@ -724,8 +724,8 @@ def diverge(
     song: int,
     left: str,
     right: str,
-    mode: str = "lead",
-    frames: int = 250,
+    mode: str,
+    frames: int,
     *,
     reference=None,
     name: str = "",
@@ -784,8 +784,11 @@ def diverge(
 
 
 def case_frames(rec: dict, mode: str) -> int:
-    """The fewest reference frames that reproduce a record's onset verdict."""
-    return int(rec["onset"]) + 1 + (LEAD if mode == "lead" else 0)
+    """The fewest reference frames that reproduce a record's onset verdict.
+
+    In lead mode every lead in +-``LEAD`` must still overlap the onset, else a
+    shifted lead's shrunk window can miss the bad frames and pass."""
+    return int(rec["onset"]) + 1 + (2 * LEAD if mode == "lead" else 0)
 
 
 def oracle_reference(oracle_cache=None) -> Callable:

@@ -229,7 +229,7 @@ def test_6502_pair_end_to_end(corpus, tmp_path, capsys):
     assert len(cases) == 1
     case = cases[0]
     assert case["id"] == pd.fix_id(top.key) and case["key"] == repr(top.key)
-    assert case["frames"] == 3 + 1 + LEAD and case["left"] == pd.CPU
+    assert case["frames"] == 3 + 1 + 2 * LEAD and case["left"] == pd.CPU
     assert case["right"] == spec and case["compare"] == "lead"
     assert BUG in case["reason"] and "v1_freq_lo" in case["reason"]
     first = manifest.read_text()
