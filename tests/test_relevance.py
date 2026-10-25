@@ -9,6 +9,7 @@ import pytest
 
 from pysidtracker import faultloc as fl
 from pysidtracker import pathdiff as pd
+from pysidtracker import paths
 from pysidtracker import relevance as rv
 from pysidtracker import survey
 from pysidtracker.asm6502 import assemble
@@ -184,6 +185,11 @@ def _line(fragment: str) -> int:
     return next(i for i, t in enumerate(lines, 1) if fragment in t and "if " in t)
 
 
+def _where(spec: str, fragment: str) -> str:
+    """The key of the ``if`` line holding ``fragment`` in the player at ``spec``."""
+    return paths.source_of(spec).where(_line(fragment))
+
+
 def _plain(an):
     """The partings with every departure counted, as before the relevance filter."""
     return fl.partings(dataclasses.replace(an.spec, relevant=None), an.corr)
@@ -194,15 +200,16 @@ def test_6502_pair_keys_on_the_root_not_the_decoy(decoy):
     right = f"{specs['bad']}:native"
     pd.build(hvsc, work / "tunes.csv", work, pd.CPU, right, jobs=1)
     an = pd.analyse(work, pd.CPU, right, progress=False)
-    root, lure = _line("0x1001"), _line("0x1002")
+    root = _where(specs["bad"], "0x1001")
+    lure = _where(specs["bad"], "0x1002")
     assert all(p.relevant for p in an.parts)
-    assert all(f"Decoy._frame:{root}>" in p.right for p in an.parts)
+    assert all(f"{root}>" in p.right for p in an.parts)
     (fix,) = an.fixes
     assert fix.n_tunes == 6 and fix.key[0] == "first"
-    assert f"Decoy._frame:{root}>" in fix.key[2] and "0x1001" in fix.labels[0]
+    assert f"{root}>" in fix.key[2] and "0x1001" in fix.labels[0]
     assert any(t.startswith("vs: $") and "BCC" in t for t in fix.labels)
     plain = _plain(an)
-    assert all(f"Decoy._frame:{lure}>" in p.right and not p.relevant for p in plain)
+    assert all(f"{lure}>" in p.right and not p.relevant for p in plain)
     assert {p.left for p in plain}.isdisjoint(p.left for p in an.parts)
 
 
@@ -213,10 +220,12 @@ def test_python_pair_keys_on_the_root_not_the_decoy(decoy):
     an = pd.analyse(work, left, right, progress=False)
     (fix,) = an.fixes
     assert fix.n_tunes == 6 and 'st["trig"]' in fix.key[2]
-    assert all(p.relevant and f":{_line('0x1001')}>" in p.left for p in an.parts)
+    root = _where(specs["good"], "0x1001")
+    assert all(p.relevant and f"{root}>" in p.left for p in an.parts)
     plain = _plain(an)
     assert all('st["fthr"]' in p.right for p in plain)
-    assert all(f":{_line('0x1002')}>" in p.left for p in plain)
+    lure = _where(specs["good"], "0x1002")
+    assert all(f"{lure}>" in p.left for p in plain)
 
 
 def test_cache_holds_relevance(decoy):

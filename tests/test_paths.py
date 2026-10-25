@@ -175,15 +175,15 @@ def test_py_memplayer_arcs_sites_and_grid(backend):
     assert np.array_equal(
         trace.grid, np.asarray(ToyMem(b"\x0f", 0x1000).render_grid(4))
     )
-    assert trace.names[trace.sites[0, 0]] == f"store:0:{rel}:ToyMem._frame:{head + 3}"
+    assert trace.names[trace.sites[0, 0]] == f"store:0:{src.where(head + 3)}"
     vol = _line(ToyMem._volume, "self._wr")
-    assert trace.names[trace.sites[1, 24]] == f"store:24:{rel}:ToyMem._volume:{vol}"
+    assert trace.names[trace.sites[1, 24]] == f"store:24:{src.where(vol)}"
     assert trace.sites[0, 1] == -1 and trace.sites[1, 0] == -1
     assert trace.reads[0].tolist() == [0x1000]
     assert [trace.names[i] for i in trace.sequence(0)] == [
         even,
-        f"store:0:{rel}:ToyMem._frame:{head + 3}",
-        f"store:24:{rel}:ToyMem._volume:{vol}",
+        f"store:0:{src.where(head + 3)}",
+        f"store:24:{src.where(vol)}",
     ]
     assert trace.side == "python"
     assert not any("pysidtracker/player.py" in n for n in trace.names)
@@ -230,7 +230,9 @@ def test_py_generic_list_alias_sites():
         == trace.labels[sites[0, 0]].split(" -> ")[0]
     )
     assert sites[0, 1] == -1
-    assert trace.names[sites[1, 1]].endswith(f"Aliased.play_frame:{then}")
+    assert (
+        trace.names[sites[1, 1]] == f"store:1:{paths.source_of(__file__).where(then)}"
+    )
     assert trace.reads[0].size == 0
     assert {n for n in trace.names if n.startswith("edge:")} <= set(
         paths.py_universe(trace.roots)

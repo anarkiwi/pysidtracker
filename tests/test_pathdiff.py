@@ -192,7 +192,7 @@ def test_6502_pair_end_to_end(corpus, tmp_path, capsys):
     assert top.n_tunes == len(FAILING) and len(an.fixes) == 1
     assert top.key[0] == "value"
     assert top.key[1].startswith("6502:store:0:")
-    assert top.key[2].startswith("python:store:0:players.py:Toy._late:")
+    assert top.key[2].startswith("python:store:0:Toy._late:")
     assert top.labels[0].endswith("STA $d400 -> v1_freq_lo")
     assert top.labels[1].endswith(f"{BUG} -> v1_freq_lo")
     rep = an.tune(top.representative)
