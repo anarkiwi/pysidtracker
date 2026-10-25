@@ -1,5 +1,6 @@
 """Tests for the generic ``pysidtracker`` CLI and its format registry."""
 
+import dataclasses
 import hashlib
 
 import numpy as np
@@ -340,5 +341,18 @@ def test_render_plays_the_one_based_song(monkeypatch):
     monkeypatch.setattr(formats_mod, "discover_formats", lambda: [_subtune_format()])
     psid = build_psid(_SIMPLE, load=0x1000, init=0x1000, songs=3)
     grid, info = formats_mod.render("auto", psid, 3, 4)
-    assert info == {"format": "sub"} and grid.dtype == np.int16
+    assert info["format"] == "sub" and {"rsid", "trigger", "speed", "dynamic"} <= set(
+        info
+    )
+    assert grid.dtype == np.int16
     assert grid.shape == (4, 25) and (grid == 2).all()
+
+
+def test_render_gates_a_named_format_on_recognition(monkeypatch):
+    fmt = dataclasses.replace(_subtune_format(), survey=lambda *_: {"extra": 1})
+    monkeypatch.setattr(formats_mod, "discover_formats", lambda: [fmt])
+    psid = build_psid(_SIMPLE, load=0x1000, init=0x1000, songs=3)
+    assert formats_mod.render("sub", psid, 1, 2)[1]["extra"] == 1
+    monkeypatch.setattr(_SubtuneParser, "recognize", lambda self, image: False)
+    with pytest.raises(SidParseError, match="does not recognise"):
+        formats_mod.render("sub", psid, 1, 2)
