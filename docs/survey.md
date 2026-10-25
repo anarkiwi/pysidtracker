@@ -17,6 +17,7 @@ python -m pysidtracker.survey diff $HVSC tunes.csv <md5>_<song> --work .hvsc-sur
 python -m pysidtracker.survey leads $HVSC tunes.csv <md5>_<song> --work .hvsc-survey
 python -m pysidtracker.survey leads $HVSC tunes.csv --verdict differs --work .hvsc-survey
 python -m pysidtracker.survey variants build1.sid build2.sid --ref base.sid --out variants.csv
+pysidtracker variant census .hvsc-survey/results.csv --sample 3 --out census.csv
 python -m pysidtracker.survey file scripts/oracle_hvsc.py native.prg --frames 3000
 python -m pysidtracker.survey file --format auto tune.sid --frames 3000
 ```
@@ -262,3 +263,15 @@ pysidid tune.sid -m                 # every matching player (SIDId -m)
 
 `identify(data)` / `identify_all(data)` return the first / every matching
 player name for bytes, using the bundled signatures unless `sigs` are passed.
+
+## `pysidtracker variant census`
+
+Groups tunes by their `Variant.as_info()` vector and counts the survey verdicts
+in each class, with a tqdm progress bar when it reads tunes. The input is a
+survey `results.csv` (its `info` and `verdict` columns), or `.sid`/`.prg` files,
+directories and `find` CSVs (`--hvsc` roots the CSV paths), which the installed
+format recognising each tune classes (no verdict). The class is every `info`
+field except the `.src` provenance strings and the cadence fields; `--keys a,b`
+picks the fields. `--sample N` draws up to N tunes per class (seeded by
+`--seed`, so repeatable), and `--out census.csv` writes `class`, `count`,
+`verdicts` and `sample` columns.
