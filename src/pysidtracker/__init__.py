@@ -76,6 +76,13 @@ from .facets import (
     probe_detector,
     reference_detector,
 )
+from .locate import (
+    Located,
+    Rejection,
+    Strategy,
+    locate,
+    variant_facet,
+)
 from .formats import (
     FormatCommand,
     SidFormat,
@@ -391,6 +398,11 @@ __all__ = [
     "default_cache",
     "default_tune_cache",
     "detect_playroutine",
+    "Located",
+    "Rejection",
+    "Strategy",
+    "locate",
+    "variant_facet",
     "disassemble",
     "init_diff",
     "init_effects",
