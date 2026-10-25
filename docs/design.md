@@ -319,3 +319,16 @@ dataclass for attribute access; `Variant.as_info()` flattens values plus a
 sites), `reference_detector` (reference -> value table) and `probe_detector`
 (format-local behavioural probe). Named `facets` because `pysidtracker.variants`
 already clusters builds by execution fingerprint.
+
+## Layout strategies (`pysidtracker.locate`)
+
+A format supplies ordered `Strategy(name, stage, decode, candidates)` objects:
+`candidates(image)` yields candidate layouts (default: one `None` candidate) and
+`decode(image, candidate)` returns the layout or raises `SidParseError` / returns
+`None` to reject. `locate(image, strategies, init=, subtune=, frames=)` runs them
+`static` -> `after-init` -> `run-player`, emulating each stage at most once and
+sharing the image between that stage's strategies. It returns a `Located` with the
+layout, the winning `strategy`/`stage`, the decoded `image`, a `variant` facet
+`Entry` (`Located.variant`; `variant_facet(strategies)` declares the facet), a
+`Detection` classification (`detect_playroutine`'s kinds) and the full
+`(strategy, candidate, reason)` rejection log (`describe()`, `require()`).
