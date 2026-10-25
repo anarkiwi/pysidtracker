@@ -63,6 +63,18 @@ reported as `SiteMatch.alt`), `[ … ]` optional groups, `??{lo,hi}` bounded gap
 and capture equality (a repeated `{name}` must equal its first occurrence).
 `first=` and `span="code"|"image"` are the match policy.
 
+### `reference` — patterns from assembled reference players
+
+`reference_pattern(Reference(name, code, org, labels, data=..., facets=...))`
+derives a `CodePattern` from a player assembled with `asm6502.assemble`:
+relocated absolute operands (targets inside the player), zero-page operands,
+self-modified operands and declared data ranges are wildcarded; hardware
+absolutes and branches stay literal. `match_at` validates that every relocated
+operand points at the same offset in the matched copy and recovers the label
+bases (`ReferenceMatch.bases`); `find_reference` / `best_reference` order
+code-identical references at one address by how many data bytes agree, and
+`ReferenceMatch.facets` maps the matched name to `variant` facets.
+
 ### `registers` — hardware register map
 
 Documented C64 hardware addresses (SID `$D400`–`$D418` mirrored every `$20`;
