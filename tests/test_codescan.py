@@ -201,7 +201,7 @@ def test_site_bad_span():
 def test_routine_chain():
     from pysidtracker import ChainError, RoutineChain
 
-    payload = bytearray(0x1100)
+    payload = bytearray(0x100)
     payload[0:3] = b"\x4c\x00\x11"  # $1000 JMP $1100
     payload += b"\xa2\x07\xd0\x02\xa9\x00"  # $1100 LDX #7; BNE +2; LDA #0
     payload += b"\x8d\x00\xd4\xea\xea\x60"  # $1106 STA $D400; NOP; NOP; RTS
