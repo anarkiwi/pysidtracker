@@ -13,8 +13,9 @@ import sys
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
+from .formats import find_format
 from .errors import EmulatorUnavailable, SidParseError
 from .image import SidImage
 
@@ -427,6 +428,28 @@ def cluster(
     return assign, [len(m) for m in clusters]
 
 
+def cluster_facets(
+    assign: Sequence[int], infos: Sequence[Mapping[str, Any]]
+) -> Dict[int, Dict[str, List[Any]]]:
+    """Per cluster, the facets whose value differs between its members.
+
+    ``infos[i]`` is tune ``i``'s :meth:`~pysidtracker.facets.Variant.as_info`; a
+    cluster that fingerprints alike but differs in a facet exposes a build
+    difference the fingerprint does not model.  ``<facet>.src`` keys are skipped.
+    Returns ``{cluster: {facet: sorted distinct values}}`` for differing facets only.
+    """
+    seen: Dict[int, Dict[str, set]] = {}
+    for ci, info in zip(assign, infos):
+        for name, value in info.items():
+            if not name.endswith(".src"):
+                seen.setdefault(ci, {}).setdefault(name, set()).add(value)
+    return {
+        ci: {n: sorted(v, key=repr) for n, v in facets.items() if len(v) > 1}
+        for ci, facets in seen.items()
+        if any(len(v) > 1 for v in facets.values())
+    }
+
+
 def nearest_ref(
     sig: Signature, refs: Sequence[Signature]
 ) -> Tuple[Optional[int], float]:
@@ -558,6 +581,15 @@ def _tunes_from_paths(
     return tunes
 
 
+def _facet_info(data: bytes) -> Dict[str, Any]:
+    """The facets of the installed format recognising ``data`` (empty if none does)."""
+    try:
+        fmt = find_format(data)
+        return fmt.variant_info(fmt.load(data))
+    except Exception:  # pylint: disable=broad-except
+        return {}
+
+
 def variants_cli(
     paths: Sequence[Union[str, Path]],
     refs: Sequence[Union[str, Path]] = (),
@@ -586,6 +618,14 @@ def variants_cli(
         f"{len(tunes)} tunes, {len(sizes)} cluster(s): "
         + ", ".join(f"c{c}={n}" for c, n in enumerate(sizes))
     ]
+    differing = cluster_facets(
+        [row["cluster"] for row in rows], [_facet_info(data) for _, data in tunes]
+    )
+    for ci, facets in sorted(differing.items()):
+        lines.append(
+            f"  c{ci} facets differ: "
+            + ", ".join(f"{n}={'|'.join(map(str, v))}" for n, v in facets.items())
+        )
     for row in rows:
         lines.append(
             f"  c{row['cluster']} {row['name']}: {row['n_blocks']} blocks, "
@@ -620,6 +660,7 @@ __all__ = [
     "Signature",
     "build_signature",
     "cluster",
+    "cluster_facets",
     "diff_signatures",
     "executed_offsets",
     "format_diff",

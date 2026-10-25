@@ -220,3 +220,14 @@ def test_decode_lengths_and_zero_page_operands():
     assert _decode(mem, 0x1000, 0x1000, 0x1000, 0x1100) == (2, "LDA", "indy", "zp")
     assert _decode(mem, 0x1002, 0x1000, 0x1000, 0x1100) == (2, "LDA", "zp", "zp")
     assert _decode(mem, 0x1004, 0x1000, 0x1000, 0x1100) == (3, "LDA", "abs", "rel:0")
+
+
+def test_cluster_facets_reports_only_differing_facets():
+    from pysidtracker.variants import cluster_facets
+
+    infos = [
+        {"driver": 1, "driver.src": "default", "speed": 2},
+        {"driver": 1, "driver.src": "detected@$1000", "speed": 3},
+        {"driver": 9, "speed": 5},
+    ]
+    assert cluster_facets([0, 0, 1], infos) == {0: {"speed": [2, 3]}}
