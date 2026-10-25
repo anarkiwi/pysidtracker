@@ -38,7 +38,7 @@ _RELEASED_POS = 0x56
 _STR_LEN = 0x20
 _FLAGS_POS = 0x76
 _SECOND_SID_POS = 0x7A  # v3+: address byte of the 2nd SID (0 => single SID)
-_THIRD_SID_POS = 0x7C  # v4+: address byte of the 3rd SID
+_THIRD_SID_POS = 0x7B  # v4+: address byte of the 3rd SID
 _V2_HEADER_LEN = 0x7C  # PSID/RSID v2 header size (data follows immediately)
 
 

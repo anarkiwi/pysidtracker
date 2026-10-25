@@ -57,6 +57,12 @@ pymusicassembler's `re` capture groups (`BD {lo:w} 85 FA …`), pyjch's
 `prefix<operand>suffix` idioms, and JCH/defMON SID-store signatures. The
 literal/wildcard prefilter is numpy-accelerated with a pure-stdlib fallback.
 
+`SitePattern` adds the variable-length dialect for on/off build sites, compiled
+to a bytes regex: `( on: A9 01 | off: A9 00 )` alternation (the matched label is
+reported as `SiteMatch.alt`), `[ … ]` optional groups, `??{lo,hi}` bounded gaps,
+and capture equality (a repeated `{name}` must equal its first occurrence).
+`first=` and `span="code"|"image"` are the match policy.
+
 ### `reference` — patterns from assembled reference players
 
 `reference_pattern(Reference(name, code, org, labels, data=..., facets=...))`

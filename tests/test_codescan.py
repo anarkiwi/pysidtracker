@@ -2,7 +2,13 @@
 
 import pytest
 
-from pysidtracker import CodePattern, SidImage, find_code_all, find_code_first
+from pysidtracker import (
+    CodePattern,
+    SidImage,
+    SitePattern,
+    find_code_all,
+    find_code_first,
+)
 
 
 def _image(payload, load=0x1000):
@@ -110,3 +116,83 @@ def test_reexpress_jch_immediate_idiom():
     # pyjch _one_operand(LDA #imm, STA $D405): A9 <imm> 8D 05 D4.
     img = _image([0xA9, 0x11, 0x8D, 0x05, 0xD4])
     assert find_code_first(img, "A9 {ad} 8D 05 D4").captures == {"ad": 0x11}
+
+
+def test_site_alternation_reports_label_and_captures():
+    img = _image([0xA9, 0x01, 0x8D, 0x00, 0x20, 0xA9, 0x00, 0x8D, 0x00, 0x30])
+    pat = SitePattern("( on: A9 01 | off: A9 00 ) 8D {dst:w}")
+    found = pat.find_all(img)
+    assert len(found) == 2
+    on, off = found[0], found[1]
+    assert (on.addr, on.alt, on.alts, on.length) == (0x1000, "on", ("on",), 5)
+    assert on.captures == {"dst": 0x2000}
+    assert (off.addr, off.alt, off.captures) == (0x1005, "off", {"dst": 0x3000})
+    assert pat.any(img)
+
+
+def test_site_unlabelled_alternatives_use_index():
+    pat = SitePattern("(A9 | A2) {v}")
+    match = pat.find_first(bytes([0x00, 0xA2, 0x07]))
+    assert (match.addr, match.alt, match.captures) == (1, "1", {"v": 7})
+
+
+def test_site_optional_group_and_gap():
+    pat = SitePattern("A9 {v} [ 18 ] 8D ??{1,3} EA")
+    assert pat.find_first(bytes([0xA9, 5, 0x18, 0x8D, 1, 2, 0xEA])).captures == {"v": 5}
+    assert pat.find_first(bytes([0xA9, 5, 0x8D, 1, 0xEA])) is not None
+    assert pat.find_first(bytes([0xA9, 5, 0x8D, 0xEA])) is None
+    exact = SitePattern("A9 ??{2} EA")
+    assert exact.any(bytes([0xA9, 0, 0, 0xEA]))
+    assert not exact.any(bytes([0xA9, 0, 0xEA]))
+
+
+def test_site_capture_equality_and_word_backref():
+    pat = SitePattern("A5 {z} 85 {z} AD {w:w} 8D {w:w}")
+    assert pat.any(bytes([0xA5, 3, 0x85, 3, 0xAD, 1, 2, 0x8D, 1, 2]))
+    assert not pat.any(bytes([0xA5, 3, 0x85, 4, 0xAD, 1, 2, 0x8D, 1, 2]))
+    assert not pat.any(bytes([0xA5, 3, 0x85, 3, 0xAD, 1, 2, 0x8D, 1, 3]))
+
+
+def test_site_policy_first_and_span():
+    img = _image([0xEA, 0xEA, 0xEA])
+    assert len(SitePattern("EA EA").find_all(img)) == 2
+    assert len(SitePattern("EA EA", first=True).find_all(img)) == 1
+    img.mem[0x2000:0x2002] = bytes([0xEA, 0xEA])
+    assert len(SitePattern("EA EA").find_all(img)) == 2
+    assert len(SitePattern("EA EA", span="image").find_all(img)) == 3
+    assert len(SitePattern("EA EA").find_all(img, start=0x1001, end=0x1003)) == 1
+
+
+def test_site_no_alternation_has_no_alt():
+    match = SitePattern("EA").find_first(bytes([0xEA]))
+    assert (match.alt, match.alts) == (None, ())
+
+
+def test_site_optional_group_capture_scope():
+    pat = SitePattern("[ A9 {v} ] 8D")
+    assert pat.find_first(bytes([0xA9, 9, 0x8D])).captures == {"v": 9}
+    assert pat.find_first(bytes([0x8D])).captures == {}
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "",
+        "ZZ",
+        "( A9",
+        "A9 )",
+        "[ A9",
+        "( A9 | )",
+        "A9 ??{3,1}",
+        "{v} {v:w}",
+        "A9 ]",
+    ],
+)
+def test_site_bad_spec(spec):
+    with pytest.raises(ValueError):
+        SitePattern(spec)
+
+
+def test_site_bad_span():
+    with pytest.raises(ValueError):
+        SitePattern("A9", span="rom")
