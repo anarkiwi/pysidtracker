@@ -37,7 +37,7 @@ from .codescan import (
     SitePattern,
     find_code_all,
     find_code_first,
-    match_at,
+    code_match_at,
 )
 from .disasm import disassemble, entry_labels, image_after_init
 from .editorio import editor_io
@@ -429,7 +429,7 @@ __all__ = [
     "RoutineChain",
     "called_x_values",
     "follow_jmp",
-    "match_at",
+    "code_match_at",
     "track_x",
     "walk_calls",
     "find_code_all",

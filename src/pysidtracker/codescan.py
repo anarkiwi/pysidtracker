@@ -431,7 +431,9 @@ class ChainError(ValueError):
         self.addr = addr
 
 
-def match_at(image: CodeBuffer, pattern: CodePattern, addr: int) -> Optional[Match]:
+def code_match_at(
+    image: CodeBuffer, pattern: CodePattern, addr: int
+) -> Optional[Match]:
     """The match of ``pattern`` starting exactly at ``addr``, or ``None``."""
     hit = find_code_all(image, pattern, start=addr, end=addr + pattern.length)
     return hit[0] if hit and hit[0].addr == addr else None
@@ -473,7 +475,7 @@ class RoutineChain:
             if name not in found:
                 raise ChainError(name, -1)
             addr = follow_jmp(image, found[name])
-            hit = match_at(image, pattern, addr)
+            hit = code_match_at(image, pattern, addr)
             if hit is None:
                 raise ChainError(name, addr)
             for cap, offset, _ in pattern.captures:
