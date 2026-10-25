@@ -165,25 +165,25 @@ def test_py_memplayer_arcs_sites_and_grid(backend):
     if backend == "monitoring" and not hasattr(sys, "monitoring"):
         pytest.skip("sys.monitoring needs Python 3.12")
     trace = paths.py_paths(lambda: ToyMem(b"\x0f", 0x1000), 4, backend=backend)
-    rel = "tests/test_paths.py"
+    src = paths.source_of(__file__)
     head = _line(ToyMem._frame, "if self.cnt")
-    odd = f"edge:{rel}:ToyMem._frame:{head}>{head + 1}"
-    even = f"edge:{rel}:ToyMem._frame:{head}>{head + 3}"
+    odd = src.arc_key(head, head + 1)
+    even = src.arc_key(head, head + 3)
     names = [{trace.names[i] for i in f} for f in trace.frames]
     assert even in names[0] and odd not in names[0]
     assert odd in names[1] and even not in names[1]
     assert np.array_equal(
         trace.grid, np.asarray(ToyMem(b"\x0f", 0x1000).render_grid(4))
     )
-    assert trace.names[trace.sites[0, 0]] == f"store:0:{rel}:ToyMem._frame:{head + 3}"
+    assert trace.names[trace.sites[0, 0]] == f"store:0:{src.where(head + 3)}"
     vol = _line(ToyMem._volume, "self._wr")
-    assert trace.names[trace.sites[1, 24]] == f"store:24:{rel}:ToyMem._volume:{vol}"
+    assert trace.names[trace.sites[1, 24]] == f"store:24:{src.where(vol)}"
     assert trace.sites[0, 1] == -1 and trace.sites[1, 0] == -1
     assert trace.reads[0].tolist() == [0x1000]
     assert [trace.names[i] for i in trace.sequence(0)] == [
         even,
-        f"store:0:{rel}:ToyMem._frame:{head + 3}",
-        f"store:24:{rel}:ToyMem._volume:{vol}",
+        f"store:0:{src.where(head + 3)}",
+        f"store:24:{src.where(vol)}",
     ]
     assert trace.side == "python"
     assert not any("pysidtracker/player.py" in n for n in trace.names)
@@ -230,7 +230,9 @@ def test_py_generic_list_alias_sites():
         == trace.labels[sites[0, 0]].split(" -> ")[0]
     )
     assert sites[0, 1] == -1
-    assert trace.names[sites[1, 1]].endswith(f"Aliased.play_frame:{then}")
+    assert (
+        trace.names[sites[1, 1]] == f"store:1:{paths.source_of(__file__).where(then)}"
+    )
     assert trace.reads[0].size == 0
     assert {n for n in trace.names if n.startswith("edge:")} <= set(
         paths.py_universe(trace.roots)
@@ -335,10 +337,27 @@ def test_py_bare_callable_and_explicit_roots(tmp_path):
     (tmp_path / "ok.py").write_text(
         "def f(a):\n    if a:\n        return 1\n    return 2\n"
     )
-    assert paths.py_universe([str(tmp_path)]) == [
-        "edge:ok.py:f:2>3",
-        "edge:ok.py:f:2>4",
-    ]
+    src = paths.source_of(str(tmp_path / "ok.py"))
+    assert paths.py_universe([str(tmp_path)]) == sorted(
+        [src.arc_key(2, 3), src.arc_key(2, 4)]
+    )
+
+
+def test_py_keys_survive_line_shifts_not_edits(tmp_path):
+    code = "def f(a):\n    if a:\n        return 1\n    return 2\n"
+    plain = tmp_path / "a" / "m.py"
+    shifted = tmp_path / "b" / "n.py"
+    edited = tmp_path / "c" / "m.py"
+    for path, text in (
+        (plain, code),
+        (shifted, "# top\n\nimport os\n\n" + code.replace("(a)", "( a )")),
+        (edited, code.replace("if a:", "if a > 1:")),
+    ):
+        path.parent.mkdir()
+        path.write_text(text)
+    keys = [paths.py_universe([str(p)]) for p in (plain, shifted, edited)]
+    assert keys[0] == keys[1] and all(k.startswith("edge:f:") for k in keys[0])
+    assert set(keys[0]) & set(keys[2]) == set()
 
 
 HVSC_TUNE = "/scratch/datasets/hvsc/C64Music/DEMOS/0-9/2hero.sid"

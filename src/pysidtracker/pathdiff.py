@@ -10,11 +10,13 @@ fixes; ``xfails`` writes each fix's representative as a strict xfail case that
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 from collections import Counter
 from dataclasses import dataclass
@@ -937,6 +939,60 @@ def verify_case(an: Analysis, entry: dict, check: Callable[[dict], None]) -> boo
     return entry["key"] in {repr(k) for k in an.keys_of(rec, key)}
 
 
+def rekey(
+    an: Analysis, cases: Dict[str, dict], *, check: Callable, real: Callable
+) -> Dict[str, dict]:
+    """``cases`` with each stale case re-keyed; one whose key mentions a feature
+    absent from the current corpus is reported on stderr.
+
+    A stale case that still fails (:func:`verify_case` without the key test) takes
+    the highest ranked fix among its fresh record's candidates, with the new ``id``;
+    one with none is kept as it is.
+    """
+    ranked = {repr(f.key): f for f in an.fixes}
+    out: Dict[str, dict] = {}
+    for cid, case in cases.items():
+        try:
+            names = fl.key_names(ast.literal_eval(case["key"]))
+        except (ValueError, SyntaxError):
+            names = ()
+        absent = [n for n in names if n not in an.spec.index]
+        if not absent:
+            out[cid] = case
+            continue
+        print(f"{cid}: {len(absent)} keys absent, e.g. {absent[0]}", file=sys.stderr)
+        entry = real(case)
+        try:
+            check(entry)
+            out[cid] = case
+            continue
+        except AssertionError:
+            pass
+        data = apply_patch(
+            (Path(an.meta["hvsc"]) / entry["relpath"]).read_bytes(), entry.get("patch")
+        )
+        rec = record(
+            data,
+            entry["song"],
+            entry["left"],
+            entry["right"],
+            entry["compare"],
+            entry["frames"],
+        )
+        key = f"{entry['md5']}_{entry['song']}"
+        fresh = [
+            f for k in an.keys_of(rec, key) if (f := ranked.get(repr(k))) is not None
+        ]
+        if not fresh:
+            out[cid] = case
+            continue
+        best = min(fresh, key=lambda f: an.fixes.index(f))
+        new = dict(case, id=fix_id(best.key), key=repr(best.key), kind=best.key[0])
+        print(f"{cid}: re-keyed to {new['id']}", file=sys.stderr)
+        out[new["id"]] = new
+    return out
+
+
 def xfails(
     an: Analysis,
     manifest,
@@ -962,6 +1018,8 @@ def xfails(
         return dict(case, **{s: alias.get(case[s], case[s]) for s in ("left", "right")})
 
     cases = {c["id"]: c for c in load_manifest(manifest)}
+    if check is not None:
+        cases = rekey(an, cases, check=check, real=real)
     if prune and check is not None:
         for cid, case in tqdm(list(cases.items()), desc="prune", unit="case"):
             try:

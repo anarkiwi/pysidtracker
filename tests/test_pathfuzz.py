@@ -109,8 +109,9 @@ def test_py_arcs_key_like_the_universe():
     arcs = pf.py_arcs(trace.roots, trace.sources)
     assert sorted(arcs) == paths.py_universe(trace.roots, trace.sources)
     head = inspect.getsourcelines(Toy._frame)[1] + 1
-    where = arcs[f"edge:tests/test_pathfuzz.py:Toy._frame:{head}>{head + 1}"]
-    assert where == f"tests/test_pathfuzz.py:Toy._frame:{head}"
+    src = paths.source_of(__file__)
+    where = arcs[src.arc_key(head, head + 1)]
+    assert where == src.where(head) and where.startswith("Toy._frame:")
     generated = {"<gen>": "def f(a):\n    if a:\n        return 1\n    return 2\n"}
     assert pf.py_arcs(["<gen>"], generated) == {
         "edge:<gen>:f:if a:>return #": "<gen>:f:if a:",
@@ -135,7 +136,7 @@ def test_baseline_targets_and_data_bytes():
     assert cpu.pc == LAB["play"] + 5 and cpu.frame == 0 and cpu.member.all()
     assert cpu.label == f"${cpu.pc:04X} BCS ${LAB['hi']:04x} -> ${LAB['hi']:04X}"
     (py,) = base.targets("python")
-    assert py.name.startswith("edge:tests/test_pathfuzz.py:Toy._frame:")
+    assert py.name.startswith("edge:Toy._frame:")
     assert np.flatnonzero(base.data_mask).tolist() == [LAB["pad"] + i for i in range(4)]
     assert base.run.verdict["ok"] and base.universe("6502") == paths.cpu_universe(SID)
 
