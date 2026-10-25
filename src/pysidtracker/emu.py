@@ -164,9 +164,37 @@ def wire_mpu(
     return mpu, mem
 
 
+def run_to_rts_until(mpu, mem, pc: int, acc: int, pcs, max_cycles: int) -> bool:
+    """Call ``pc`` with ``A = acc`` like :func:`run_to_rts`, stopping on entering ``pcs``.
+
+    ``pcs`` is a collection of addresses; the check is made before each
+    instruction, so the stop is *at* the instruction about to run and a ``pc``
+    already in ``pcs`` stops at once. True if one was entered, False if the
+    routine returned or ``max_cycles`` ran out first.
+    """
+    start_sp = mpu.sp
+    for byte in (0x00, 0x01):
+        mem[0x0100 + mpu.sp] = byte
+        mpu.sp = (mpu.sp - 1) & 0xFF
+    mpu.a, mpu.pc = acc & 0xFF, pc
+    start = mpu.processorCycles
+    while mpu.sp < start_sp and mpu.processorCycles - start <= max_cycles:
+        if mpu.pc in pcs:
+            return True
+        mpu.step()
+    return False
+
+
 def set_iomap(mpu, value: int) -> None:
     """Write the C64 ``$01`` bank port on ``mpu``'s bus, remapping the ROM/RAM windows."""
     mpu.memory[1] = value
 
 
-__all__ = ["SidReads", "observe_data_access", "wire_mpu", "run_to_rts", "set_iomap"]
+__all__ = [
+    "SidReads",
+    "observe_data_access",
+    "wire_mpu",
+    "run_to_rts",
+    "run_to_rts_until",
+    "set_iomap",
+]

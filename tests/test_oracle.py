@@ -12,6 +12,7 @@ from pysidtracker import (
     grid_from_writes,
     read_sidwr,
     register_grid,
+    run_until,
 )
 from pysidtracker.emu import observe_data_access
 from pysidtracker.image import SidImage
@@ -257,3 +258,39 @@ def test_emuplayer_calls_play_a_period_apart():
     assert len({row[0] for row in paced.render_grid(4)}) == 1
     free = EmuPlayer(image, load=0x1000, init=0x1000, play=0x1006)
     assert len({row[0] for row in free.render_grid(100)}) > 1
+
+
+def test_boot_flat_init_run_replaces_the_init_call():
+    image = SidImage.from_bytes(
+        build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
+    )
+    calls = []
+    subject, *_ = boot_flat(image, init_run=lambda *args: calls.append(args[2:]))
+    assert calls == [(0x1000, 0, 8_000_000)] and subject[0xD400] == 0
+
+
+def _simple_image():
+    return SidImage.from_bytes(
+        build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
+    )
+
+
+def test_run_until_stops_in_init_before_the_instruction():
+    entry = run_until(_simple_image(), [0x1002])
+    assert (entry.pc, entry.a, entry.phase, entry.call) == (0x1002, 0x0A, "init", 0)
+    assert entry.memory[0xD400] == 0 and entry.memory[0x1000] == 0xA9
+
+
+def test_run_until_finds_play_and_skips_snapshot():
+    entry = run_until(_simple_image(), {0x1008}, play_calls=2, snapshot=False)
+    assert (entry.pc, entry.phase, entry.call, entry.memory) == (
+        0x1008,
+        "play",
+        1,
+        None,
+    )
+
+
+def test_run_until_none_when_never_entered():
+    assert run_until(_simple_image(), [0x3000], play_calls=2) is None
+    assert run_until(_simple_image(), [0x1008]) is None

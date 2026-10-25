@@ -115,7 +115,12 @@ Without the synthetic reads an init that raster-syncs never reaches its
 `$DC04`/`$DC05` writes and its cadence silently falls back to the video frame.
 The `illegal_opcodes` flag is kept for API compatibility only (jennings is always
 native). `run_to_rts(mpu, mem, pc, acc, max_cycles)` (vagrant-moses `cpu`) is the
-shared push-a-return-address-and-step mechanic. The flat boot
+shared push-a-return-address-and-step mechanic; `run_to_rts_until` is the same
+call that stops on entering a set of addresses, and `oracle.run_until(image, pcs,
+snapshot=True)` boots a tune like `boot_flat` and returns the registers (and a
+memory copy) at the first such entry in init or the first `play_calls` play calls.
+`boot_flat(setup=, init_run=)` hooks the boot before init and replaces its
+`run_to_rts`. The flat boot
 paths seed `$01` the way the PSID driver does (`poweron.psid_init_bank`) so a tune
 that reads KERNAL/BASIC sees the oracle's ROMs, not the RAM.
 

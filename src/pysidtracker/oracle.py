@@ -38,7 +38,7 @@ from vagrant_moses import memmap as mm
 
 from . import registers as reg
 from .cadence import playroutine_cadence
-from .emu import run_to_rts, set_iomap, wire_mpu
+from .emu import run_to_rts, run_to_rts_until, set_iomap, wire_mpu
 from .errors import SidError, SidParseError
 from .image import SidImage
 from .player import MemPlayer
@@ -89,6 +89,7 @@ def boot_flat(
     max_cycles: int = 8_000_000,
     illegal_opcodes: bool = True,
     setup=None,
+    init_run=None,
 ):
     """``(subject, mpu, mem, play)``: ``image`` booted on jennings, ``init`` run, ready to play.
 
@@ -99,6 +100,8 @@ def boot_flat(
     the PSID driver does.
     ``setup(mpu, subject)``, if given, runs before ``init`` (e.g. to install a
     :func:`~pysidtracker.emu.observe_data_access` observer that sees init too).
+    ``init_run(mpu, mem, init, subtune, max_cycles)``, if given, runs ``init`` in
+    place of :func:`~pysidtracker.emu.run_to_rts` (e.g. to stop it part way).
     """
     subject = power_on_ram()
     subject[PAL_FLAG] = int(not image.header.is_ntsc)
@@ -111,10 +114,83 @@ def boot_flat(
     )
     if setup is not None:
         setup(mpu, subject)
-    run_to_rts(mpu, mem, init, subtune, max_cycles)
+    (init_run or run_to_rts)(mpu, mem, init, subtune, max_cycles)
     play = image.header.play_address or init
     set_iomap(mpu, psid_play_bank(play))
     return subject, mpu, mem, play
+
+
+class Entry(NamedTuple):
+    """The machine state at the instruction :func:`run_until` stopped before."""
+
+    pc: int
+    a: int
+    x: int
+    y: int
+    sp: int
+    p: int
+    cycles: int
+    phase: str  # "init", or "play" for the play call it entered in
+    call: int  # 0 for init, else the 1-based play call
+    memory: Optional[bytes]  # the 64K RAM image, or None without ``snapshot``
+
+
+def run_until(
+    image: SidImage,
+    pcs: Iterable[int],
+    *,
+    subtune: int = 0,
+    play_calls: int = 0,
+    snapshot: bool = True,
+    max_cycles: int = 8_000_000,
+    illegal_opcodes: bool = True,
+    setup=None,
+) -> Optional[Entry]:
+    """Step ``image``'s ``init`` (then up to ``play_calls`` ``play`` calls, booted as
+    :func:`boot_flat` does) until execution enters an address in ``pcs``.
+
+    Returns the :class:`Entry` -- registers at the instruction about to run, plus
+    a copy of memory when ``snapshot`` -- or ``None`` if none is entered.
+    """
+    targets = frozenset(pcs)
+    found: List[Entry] = []
+
+    def stop(mpu, subject, phase, call):
+        found.append(
+            Entry(
+                mpu.pc,
+                mpu.a,
+                mpu.x,
+                mpu.y,
+                mpu.sp,
+                mpu.p,
+                mpu.processorCycles,
+                phase,
+                call,
+                bytes(subject) if snapshot else None,
+            )
+        )
+
+    subject_box: List[bytearray] = []
+
+    def init_run(mpu, mem, init, tune, cycles):
+        if run_to_rts_until(mpu, mem, init, tune, targets, cycles):
+            stop(mpu, subject_box[0], "init", 0)
+
+    def wrapped_setup(mpu, subject):
+        subject_box.append(subject)
+        if setup is not None:
+            setup(mpu, subject)
+
+    subject, mpu, mem, play = boot_flat(
+        image, subtune, max_cycles, illegal_opcodes, wrapped_setup, init_run
+    )
+    for call in range(1, play_calls + 1):
+        if found:
+            break
+        if run_to_rts_until(mpu, mem, play, 0, targets, max_cycles):
+            stop(mpu, subject, "play", call)
+    return found[0] if found else None
 
 
 def register_grid(
