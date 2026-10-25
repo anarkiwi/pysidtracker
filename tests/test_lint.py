@@ -99,7 +99,13 @@ def test_run_lint_raises_on_problems(tmp_path, capsys):
 
 
 # Public API kept for downstream format packages (nothing in-repo reads them).
-_PUBLIC = ["notefreq", "SID_FILTER_LO", "SID_FILTER_HI", "SID_RES_FILT"]
+_PUBLIC = [
+    "notefreq",
+    "FIDELITY_FIELDS",
+    "SID_FILTER_LO",
+    "SID_FILTER_HI",
+    "SID_RES_FILT",
+]
 
 
 def test_own_package_is_lint_clean():
