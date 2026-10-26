@@ -238,3 +238,50 @@ def test_cluster_facets_reports_only_differing_facets():
         {"driver": 9, "speed": 5},
     ]
     assert cluster_facets([0, 0, 1], infos) == {0: {"speed": [2, 3]}}
+
+
+_DATA_SRC = """
+init: RTS
+play: LDX #$00
+  LDA tab,X
+  STA $D400
+  LDA tab2,X
+  STA $D401
+  RTS
+{pad}tab: .byte 1,2,3,4
+tab2: .byte 5,6,7,8
+"""
+
+
+def _data_player(pad: int, edit: bool = False) -> bytes:
+    src = _DATA_SRC.format(pad="  .byte 0\n" * pad)
+    if edit:
+        src = src.replace("play: LDX #$00", "play: LDX #$01")
+    return _build(src, 0x3000)
+
+
+def test_data_placement_does_not_change_signature():
+    a = build_signature(_data_player(0), nframes=4)
+    b = build_signature(_data_player(37), nframes=4)
+    assert a.key == b.key
+    assert a.jaccard(b) == 1.0
+    assert diff_signatures(b, a) == []
+
+
+def test_code_edit_still_differs_with_data_normalised():
+    a = build_signature(_data_player(0), nframes=4)
+    b = build_signature(_data_player(37, edit=True), nframes=4)
+    assert a.jaccard(b) < 1.0
+    ops = diff_signatures(b, a)
+    assert [op[0] for op in ops] == ["changed"]
+
+
+def test_op_class_data_numbered_by_first_use():
+    base, lo, hi = 0x3000, 0x3000, 0x3100
+    code = {0x3000, 0x3001}
+    ids = {}
+    assert _op_class(0x3000, base, lo, hi, code, ids) == "rel:0"
+    assert _op_class(0x3050, base, lo, hi, code, ids) == "data:0"
+    assert _op_class(0x3060, base, lo, hi, code, ids) == "data:1"
+    assert _op_class(0x3050, base, lo, hi, code, ids) == "data:0"
+    assert _op_class(0x3050, base, lo, hi, code) == "data"

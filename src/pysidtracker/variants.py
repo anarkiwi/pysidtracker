@@ -13,7 +13,18 @@ import sys
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
+from typing import (
+    Any,
+    Container,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
 from .formats import find_format
 from .errors import EmulatorUnavailable, SidParseError
@@ -75,13 +86,29 @@ def _io_name(addr: int) -> str:
     return f"IO_{addr:04X}"
 
 
-def _op_class(addr: int, base: int, lo: int, hi: int) -> str:
-    """The relocation-invariant operand class of an address operand."""
+def _op_class(
+    addr: int,
+    base: int,
+    lo: int,
+    hi: int,
+    code: Optional[Container[int]] = None,
+    data_ids: Optional[Dict[int, int]] = None,
+) -> str:
+    """The relocation-invariant operand class of an address operand.
+
+    With ``code`` (the executed span bytes), an in-span operand outside it is
+    data the player reads: it becomes ``data`` (``data:N`` numbered by first use
+    in ``data_ids``), so builds differing only in data placement hash alike.
+    """
     addr &= 0xFFFF
     if addr <= 0xFF:
         return "zp"
     if lo <= addr < hi:
-        return f"rel:{addr - base}"
+        if code is None or addr in code:
+            return f"rel:{addr - base}"
+        if data_ids is None:
+            return "data"
+        return f"data:{data_ids.setdefault(addr, len(data_ids))}"
     if _IO_PAGE_LO <= addr <= _IO_PAGE_HI:
         return "io:" + _io_name(addr)
     if addr in _VECTOR_NAMES:
@@ -91,7 +118,15 @@ def _op_class(addr: int, base: int, lo: int, hi: int) -> str:
     return f"ext:{addr}"
 
 
-def _decode(mem, pc: int, base: int, lo: int, hi: int) -> Tuple[int, str, str, str]:
+def _decode(
+    mem,
+    pc: int,
+    base: int,
+    lo: int,
+    hi: int,
+    code: Optional[Container[int]] = None,
+    data_ids: Optional[Dict[int, int]] = None,
+) -> Tuple[int, str, str, str]:
     """``(length, mnemonic, mode, operand)`` of the instruction at ``pc``."""
     from jennings.opcodes import OPCODES
 
@@ -109,7 +144,7 @@ def _decode(mem, pc: int, base: int, lo: int, hi: int) -> Tuple[int, str, str, s
         operand = "zp"
     else:
         addr = (mem[pc + 1] & 0xFF) | ((mem[pc + 2] & 0xFF) << 8)
-        operand = _op_class(addr, base, lo, hi)
+        operand = _op_class(addr, base, lo, hi, code, data_ids)
     return length, mnemonic, mode, operand
 
 
@@ -337,12 +372,20 @@ def build_signature(
         )
 
     disasm = _disassembler(image)
+    code = set()
+    for offset in set(ordered):
+        pc = base + offset
+        length = _decode(image.mem, pc, base, image.load, hi)[0]
+        code.update(range(pc, pc + length))
+    data_ids: Dict[int, int] = {}
     info: Dict[int, NormInsn] = {}
     for offset in ordered:
         if offset in info:
             continue
         pc = base + offset
-        _, mn, mode, operand = _decode(image.mem, pc, base, image.load, hi)
+        _, mn, mode, operand = _decode(
+            image.mem, pc, base, image.load, hi, code, data_ids
+        )
         try:
             text = disasm.instruction_at(pc)[1]
         except Exception:  # pylint: disable=broad-except
