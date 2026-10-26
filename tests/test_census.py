@@ -53,3 +53,32 @@ def test_cli_writes_csv(tmp_path, capsys):
     assert "2 tunes, 2 class(es)" in capsys.readouterr().out
     with open(out, newline="", encoding="utf-8") as f:
         assert len(list(csv.DictReader(f))) == 2
+
+
+def test_cluster_unrecognised_classes_by_variants(monkeypatch):
+    import importlib
+
+    variants_mod = importlib.import_module("pysidtracker.variants")
+
+    monkeypatch.setattr(
+        variants_mod,
+        "build_signature",
+        lambda data: data,
+    )
+    monkeypatch.setattr(
+        variants_mod,
+        "cluster",
+        lambda sigs, threshold: ([0 if s == b"a" else 1 for s in sigs], [1, 1]),
+    )
+    recs = [
+        {"name": "x", "verdict": "unrecognised", "info": {}, "data": b"a"},
+        {"name": "y", "verdict": "unrecognised", "info": {}, "data": b"b"},
+        {"name": "z", "verdict": "", "info": {"format": "f"}},
+    ]
+    out = census.cluster_unrecognised(recs)
+    assert [r["info"] for r in out] == [
+        {"variant": "c0"},
+        {"variant": "c1"},
+        {"format": "f"},
+    ]
+    assert all("data" not in r for r in out)

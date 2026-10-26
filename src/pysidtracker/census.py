@@ -88,7 +88,41 @@ def tune_records(
             verdict = ""
         except SidError:
             info, verdict = {}, "unrecognised"
+            yield {"name": name, "verdict": verdict, "info": info, "data": data}
+            continue
         yield {"name": name, "verdict": verdict, "info": info}
+
+
+def cluster_unrecognised(
+    records: Iterable[Record], threshold: float = 0.8
+) -> List[Record]:
+    """``records`` with each unrecognised tune classed by its ``variants`` cluster.
+
+    A tune no installed format recognises gets ``info["variant"] = "c<N>"`` (the
+    :func:`~pysidtracker.variants.cluster` id among the unrecognised tunes), so
+    the residue groups by player build; one that cannot be fingerprinted keeps
+    an empty class.
+    """
+    from .variants import (
+        build_signature,
+        cluster,
+    )  # pylint: disable=import-outside-toplevel
+
+    recs = list(records)
+    sigs, owners = [], []
+    for rec in recs:
+        data = rec.pop("data", None)
+        if rec["verdict"] != "unrecognised" or data is None:
+            continue
+        try:
+            sigs.append(build_signature(data))
+        except (SidError, ValueError, ImportError):
+            continue
+        owners.append(rec)
+    assign, _ = cluster(sigs, threshold)
+    for rec, ci in zip(owners, assign):
+        rec["info"] = {"variant": f"c{ci}"}
+    return recs
 
 
 def census(
@@ -152,7 +186,9 @@ def census_cli(args) -> None:
     if len(sources) == 1 and sources[0].name == "results.csv":
         records = results_records(sources[0])
     else:
-        records = tune_records(tune_paths(sources, args.hvsc), args.formats)
+        records = cluster_unrecognised(
+            tune_records(tune_paths(sources, args.hvsc), args.formats)
+        )
     classes = census(records, keys)
     sample = stratified_sample(classes, args.sample, args.seed) if args.sample else {}
     rows = census_rows(classes, sample)
@@ -190,6 +226,7 @@ __all__ = [
     "census",
     "census_cli",
     "census_rows",
+    "cluster_unrecognised",
     "results_records",
     "stratified_sample",
     "tune_paths",

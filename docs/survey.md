@@ -96,8 +96,10 @@ format's decompiler has not transcribed — by the code that actually runs
 a direct `play` routine, the `irqhost` C64 for an IRQ tune) and the executed
 instructions in the loaded span are kept; data and never-run code drop out.
 Every instruction is normalised to a relocation-invariant form (immediates
-kept; absolute operands in the span become offsets from the load address;
-zero-page and I/O operands become symbolic classes) and hashed per basic block
+kept; absolute operands in executed code become offsets from the load address,
+and ones in the span but outside executed code (data the player reads) become
+`data:N`, numbered by first use, so builds differing only in data placement hash
+alike; zero-page and I/O operands become symbolic classes) and hashed per basic block
 and per JSR-routine. Tunes whose hash sets are identical are one cluster, and
 near-identical ones (one added or moved instruction) are matched by Jaccard
 over those sets (`--threshold`, default 0.8). Each tune's nearest `--ref`
@@ -276,6 +278,7 @@ survey `results.csv` (its `info` and `verdict` columns), or `.sid`/`.prg` files,
 directories and `find` CSVs (`--hvsc` roots the CSV paths), which the installed
 format recognising each tune classes (no verdict). The class is every `info`
 field except the `.src` provenance strings and the cadence fields; `--keys a,b`
-picks the fields. `--sample N` draws up to N tunes per class (seeded by
+picks the fields. A tune no format recognises is classed `variant: cN`, its
+`variants` cluster among the unrecognised tunes. `--sample N` draws up to N tunes per class (seeded by
 `--seed`, so repeatable), and `--out census.csv` writes `class`, `count`,
 `verdicts` and `sample` columns.
