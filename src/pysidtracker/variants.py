@@ -551,14 +551,15 @@ def variants(
         }
         if refsigs:
             ri, distance = nearest_ref(sig, [sig2 for _, sig2 in refsigs])
-            name = refsigs[ri][0]
-            ops = diff_signatures(sig, refmap[name])
-            row.update(
-                nearest_ref=name,
-                distance=f"{distance:.4f}",
-                ndiff=len(ops),
-                _diff=format_diff(sig, refmap[name]),
-            )
+            if ri is not None:
+                name = refsigs[ri][0]
+                ops = diff_signatures(sig, refmap[name])
+                row.update(
+                    nearest_ref=name,
+                    distance=f"{distance:.4f}",
+                    ndiff=len(ops),
+                    _diff=format_diff(sig, refmap[name]),
+                )
         rows.append(row)
     return rows, sizes
 
