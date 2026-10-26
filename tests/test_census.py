@@ -56,7 +56,6 @@ def test_cli_writes_csv(tmp_path, capsys):
 
 
 def test_cluster_unrecognised_classes_by_variants(monkeypatch):
-    from pysidtracker import census as census_mod
     import importlib
 
     variants_mod = importlib.import_module("pysidtracker.variants")
@@ -76,7 +75,7 @@ def test_cluster_unrecognised_classes_by_variants(monkeypatch):
         {"name": "y", "verdict": "unrecognised", "info": {}, "data": b"b"},
         {"name": "z", "verdict": "", "info": {"format": "f"}},
     ]
-    out = census_mod.cluster_unrecognised(recs)
+    out = census.cluster_unrecognised(recs)
     assert [r["info"] for r in out] == [
         {"variant": "c0"},
         {"variant": "c1"},
