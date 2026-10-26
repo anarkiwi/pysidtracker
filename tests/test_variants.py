@@ -153,6 +153,13 @@ def test_variants_without_refs_leaves_nearest_ref_empty():
     assert all(r["nearest_ref"] == "" and r["ndiff"] == "" for r in rows)
 
 
+def test_variants_disjoint_ref_leaves_nearest_ref_empty():
+    other = _build("init: LDX #$05\n  RTS\nplay: DEX\n  RTS\n", 0x3000)
+    rows, _ = variants([_players()["base"]], [("OTHER", other)], names=["a"], nframes=4)
+    assert len(rows) == 1
+    assert rows[0]["nearest_ref"] == "" and rows[0]["ndiff"] == ""
+
+
 def test_irq_path_fingerprints_and_diffs():
     import tests.irqhost_tunes as itunes
 
