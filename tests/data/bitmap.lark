@@ -1,0 +1,26 @@
+// A test grammar of bitmap-selected fields: a low bitmap whose bits 6,7,5..1
+// select one byte each, then a high bitmap whose bits 7..4 select one byte and
+// bit 3 two bytes, then pad. The postlexer splices a T_* tag before each value.
+
+row: low high _TAIL?
+low: LOWMAP wgh? wgl? ad? sr? tr? af? pw?
+high: HIGHMAP ps? re? fv? cp? acid?
+
+wgh: T_WGH BYTE -> field
+wgl: T_WGL BYTE -> field
+ad: T_AD BYTE -> field
+sr: T_SR BYTE -> field
+tr: T_TR BYTE -> field
+af: T_AF BYTE -> field
+pw: T_PW BYTE -> field
+ps: T_PS BYTE -> field
+re: T_RE BYTE -> field
+fv: T_FV BYTE -> field
+cp: T_CP BYTE -> field
+acid: T_ACID BYTE BYTE -> field
+
+LOWMAP: /[\x00-\xff]/
+HIGHMAP: /[\x00-\xff]/
+
+%declare T_WGH T_WGL T_AD T_SR T_TR T_AF T_PW T_PS T_RE T_FV T_CP T_ACID
+%import bytes (BYTE, _TAIL)

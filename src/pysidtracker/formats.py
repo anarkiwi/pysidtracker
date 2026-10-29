@@ -17,6 +17,7 @@ from typing import (
     Callable,
     Dict,
     Iterable,
+    Iterator,
     List,
     Mapping,
     Optional,
@@ -27,12 +28,14 @@ from typing import (
 import numpy as np
 
 from .base import BaseSidParser
+from .bytegrammar import ByteGrammar, Stream
 from .cadence import cadence_info
-from .errors import SidParseError
+from .errors import SidFormatError, SidParseError
 from .image import SidImage
 from .player import MemPlayer
 
 ENTRY_POINT_GROUP = "pysidtracker.formats"
+CANONICAL = "canonical"
 
 # (name, author, released, load, init, play) shown by the shared info block.
 Metadata = Callable[[Any], Sequence]
@@ -77,6 +80,9 @@ class SidFormat:
     song)``, the format-specific fields the survey renderer reports.
     ``probes`` maps a name to ``probe(model)``, a derived artifact (a rebuilt
     image, an export) whose digest :mod:`pysidtracker.snapshot` records.
+    ``grammar`` and ``streams(model)`` (``(name, model, rule)`` triples) back
+    the ``grammar`` command; ``canonical(model)`` is a text that is equal for
+    two models exactly when they play the same (the ``equiv`` command).
     """
 
     name: str
@@ -89,6 +95,39 @@ class SidFormat:
     facet_sites: Optional[Callable[[Any], Mapping[int, str]]] = None
     survey: Optional[Callable[[Any, bytes, int], Mapping[str, Any]]] = None
     probes: Mapping[str, Callable[[Any], Any]] = field(default_factory=dict)
+    grammar: Optional[ByteGrammar] = None
+    streams: Optional[Callable[[Any], Iterable[Stream]]] = None
+    canonical: Optional[Callable[[Any], str]] = None
+
+    def listing(self, model: Any) -> Iterator[str]:
+        """The :meth:`ByteGrammar.listing` of ``model``'s streams.
+
+        Raises:
+          SidFormatError: the format has no ``grammar`` / ``streams`` hook.
+        """
+        if self.grammar is None or self.streams is None:
+            raise SidFormatError(f"format {self.name!r} has no byte grammar")
+        return self.grammar.listing(self.streams(model))
+
+    def canonical_text(self, model: Any) -> str:
+        """``model``'s canonical text.
+
+        Raises:
+          SidFormatError: the format has no ``canonical`` hook.
+        """
+        if self.canonical is None:
+            raise SidFormatError(f"format {self.name!r} has no canonical text")
+        return self.canonical(model)
+
+    def snapshot_probes(self) -> Dict[str, Callable[[Any], Any]]:
+        """``probes``, plus the UTF-8 canonical text as :data:`CANONICAL` unless
+        ``probes`` names one."""
+        if self.canonical is None:
+            return dict(self.probes)
+        return {
+            CANONICAL: lambda model: self.canonical_text(model).encode(),
+            **self.probes,
+        }
 
     def variant_info(self, model: Any) -> Dict[str, Any]:
         """``model``'s :meth:`Variant.as_info` (empty without a ``variant`` hook)."""

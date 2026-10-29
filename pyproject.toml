@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.39.0"
+version = "0.40.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -56,6 +56,8 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4",
     "pytest-xdist>=3",
+    # Property tests of the program-table automata.
+    "hypothesis>=6",
     # Decompress the sidtrace oracle's zstd CSV traces (oracle comparison tests).
     "zstandard>=0.21",
     "tqdm>=4",

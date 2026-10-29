@@ -150,7 +150,9 @@ API.
   entry-point group and runs against each format's parser + player, plus any
   subcommands it contributes (a name several formats contribute, such as
   `export`, runs the command of the format recognising the tune). A format package registers a `SidFormat` instead
-  of shipping its own CLI; `find_format(data, name)` and `SidFormat.play(data,
+  of shipping its own CLI; its optional `grammar` / `streams` and `canonical`
+  hooks back `pysidtracker grammar` and `pysidtracker equiv A B`
+  ([docs/formats.md](docs/formats.md)); `find_format(data, name)` and `SidFormat.play(data,
   subtune)` play a tune's subtune (default its start song) on the installed
   format, as `survey --format` and `whydiff --format` do. `cli` holds the underlying argparse scaffold
   (`run_cli`, `print_info`, `add_reglog_command`, `add_wav_command`,
@@ -160,11 +162,17 @@ API.
 - `bytegrammar` — song byte streams as Lark grammars: `ByteGrammar`
   (`parse_prefix` / `parse_exact` / `tree`, pointer-table `entry` / `stored`
   reads, the `check` round trip and `listing`), `Parsed`, `select_rule`, and the
-  shared `%import bytes (BYTE, _TAIL)` fragment; `SidImage.window` / `put_ptr`,
+  shared `%import bytes (BYTE, _TAIL)` fragment, `BitmapPostLex` / `BitField`
+  bitmap-selected fields; `SidImage.window` / `put_ptr`,
   `reraise_as`, `require_ram`, `load_prefix`, the `address` argparse type and
   `add_grammar_command` ([docs/bytegrammar.md](docs/bytegrammar.md)).
 - `relocate` — `walk_code` (recursive-descent 6502 code walk) and
   `relocate_operands` (move, remap or refuse each absolute operand).
+- `automaton` — program tables as functional graphs: `minimise`, `number_chains`
+  and `layout_chains` ([docs/automaton.md](docs/automaton.md)).
+- `editor` — `run_editor` / `editor_replay` run an editor's own LOAD decoder and
+  live player on its RAM image; `trace_init_argument` / `init_arguments` trace
+  the argument each subtune's init hands the player ([docs/editor.md](docs/editor.md)).
 - `snapshot` — corpus digests of each tune's model and `SidFormat.probes` and
   their diff (`pysidtracker snapshot build|diff`), proving a refactor
   behaviour-preserving.

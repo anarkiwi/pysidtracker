@@ -21,12 +21,12 @@ with :func:`run_init`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Tuple
 
 from vagrant_moses import memmap as mm
 
 from . import registers as reg
-from .emu import run_to_rts, set_iomap, wire_mpu
+from .emu import run_to_rts, run_to_rts_until, set_iomap, wire_mpu
 from .errors import SidParseError
 from .poweron import psid_init_bank, psid_play_bank
 from .registers import sid_model_for_flags
@@ -179,3 +179,46 @@ def trace_init(
                 cia2_rewritten = play_cia2
 
     return _build_trace(writes, cia1_rewritten, cia2_rewritten)
+
+
+def _init_address(image: SidImage, init: Optional[int]) -> int:
+    if init is not None:
+        return init
+    if image.header is None:
+        raise SidParseError("no init address: the image has no SID header")
+    return image.header.init_address or image.header.real_load_address
+
+
+def trace_init_argument(
+    image: SidImage,
+    init: Optional[int],
+    entry: int,
+    subtune: int = 0,
+    max_cycles: int = 1_000_000,
+) -> Optional[int]:
+    """``A`` when ``image``'s init, called with ``A = subtune``, first reaches ``entry``.
+
+    ``init`` defaults to the header's; ``None`` if init returns or ``max_cycles``
+    run out first. E.g. the player base behind a ``TAX / LDA table,X / JMP base``.
+    """
+    init = _init_address(image, init)
+    subject = bytearray(image.mem)
+    subject[mm.CPU_PORT] = psid_init_bank(init)
+    mpu, mem = wire_mpu(subject)
+    if run_to_rts_until(mpu, mem, init, subtune, {entry}, max_cycles):
+        return mpu.a
+    return None
+
+
+def init_arguments(
+    image: SidImage,
+    entry: int,
+    init: Optional[int] = None,
+    max_cycles: int = 1_000_000,
+) -> Tuple[Optional[int], ...]:
+    """:func:`trace_init_argument` of every 0-based subtune the header lists."""
+    songs = (image.header.songs if image.header is not None else 0) or 1
+    return tuple(
+        trace_init_argument(image, init, entry, subtune, max_cycles)
+        for subtune in range(songs)
+    )

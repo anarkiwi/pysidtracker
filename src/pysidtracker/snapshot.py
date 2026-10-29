@@ -46,11 +46,13 @@ def load_spec(spec: str) -> Any:
     return obj
 
 
-def resolve_format(data: bytes, spec: str = "auto") -> SidFormat:
+def resolve_format(
+    data: bytes, spec: str = "auto", formats: Optional[Iterable[SidFormat]] = None
+) -> SidFormat:
     """The format ``spec`` names: ``module:attr`` (a :class:`SidFormat` or a
-    factory of one), else an installed format name or ``auto``."""
+    factory of one), else a name among ``formats`` (default: installed) or ``auto``."""
     if ":" not in spec:
-        return find_format(data, spec)
+        return find_format(data, spec, formats)
     obj = load_spec(spec)
     return obj if isinstance(obj, SidFormat) else obj()
 
@@ -69,14 +71,15 @@ def _digest_of(probe: Probe, model: Any) -> str:
 def fingerprint(
     data: bytes, fmt: SidFormat, probes: Optional[Mapping[str, Probe]] = None
 ) -> Dict[str, str]:
-    """``{key: digest}`` of ``data``'s model and every probe of it (``fmt.probes``
-    then ``probes``); a key whose step raised holds ``!Error: message``."""
+    """``{key: digest}`` of ``data``'s model and every probe of it
+    (:meth:`SidFormat.snapshot_probes` then ``probes``); a key whose step raised
+    holds ``!Error: message``."""
     try:
         model = fmt.load(data)
     except Exception as exc:  # pylint: disable=broad-except
         return {MODEL: _failed(exc)}
     out = {MODEL: digest(model)}
-    for name, probe in {**fmt.probes, **(probes or {})}.items():
+    for name, probe in {**fmt.snapshot_probes(), **(probes or {})}.items():
         out[name] = _digest_of(probe, model)
     return out
 

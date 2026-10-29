@@ -67,10 +67,64 @@ Validation and printing:
 - `GRAMMAR.listing(streams)` yields `name:` and the indented `render(tree)` of
   each stream, one `TERMINAL=$xx` item per byte. `add_grammar_command(commands,
   handler, song_help=...)` adds the `grammar SONG [--subtune N]` subcommand that
-  prints it.
+  prints it; a format whose `SidFormat` sets `grammar` and `streams(model)`
+  (its `(name, model, rule)` triples) gets it from the main CLI, `pysidtracker
+  grammar SONG [--subtune N] [--format NAME]` (see [formats.md](formats.md)).
 - `select_rule(variant, ((facet, rule), ...), default)` picks the start rule of
   the first facet the build's `Variant` (or a mapping, or a resolved variant's
   attributes) sets, e.g. the orderlist rule with a build's extra commands.
+
+## Bitmap-selected fields
+
+Some records are a bitmap byte followed by one value per set bit, in a fixed
+order (defMON's sidTAB rows: low bits 6, 7, 5, 4, 3, 2, 1 select WGh, WGl, AD,
+SR, TR, AF, PW; then a high bitmap whose bits 7-4 select a byte each and bit 3
+a 2-byte ACID). An LALR grammar could only enumerate one terminal class per
+bitmap value. Instead, `bitmaps` names each bitmap terminal and its
+`BitField(bit, tag, width=1)` items in value order:
+
+```python
+ROWS = ByteGrammar(__package__, "sidtab.lark", ("row",), ToRow(), bitmaps={
+    "LOWMAP": ((6, "T_WGH", 1), (7, "T_WGL", 1), (5, "T_AD", 1), ...),
+    "HIGHMAP": (..., (3, "T_ACID", 2)),
+})
+```
+
+```
+row: low high _TAIL?
+low: LOWMAP wgh? wgl? ad? sr? tr? af? pw?
+high: HIGHMAP ps? re? fv? cp? acid?
+wgh: T_WGH BYTE
+acid: T_ACID BYTE BYTE
+LOWMAP: /[\x00-\xff]/
+HIGHMAP: /[\x00-\xff]/
+%declare T_WGH T_WGL T_AD T_SR T_TR T_AF T_PW T_PS T_RE T_FV T_CP T_ACID
+```
+
+`BitmapPostLex` (a Lark postlexer, usable on any Lark parser) passes the bitmap
+token through, then for each set bit yields a zero-width tag token followed by
+the `width` value tokens, lexed lazily in the parser's state after the tag.
+Bits without a `BitField` select nothing. Tags carry no byte, so `size`, token
+`end_pos` and error offsets still count raw bytes, a stream truncated inside
+the values reads as having no terminator, and `render` prints a tag by name.
+
+## An LALR pitfall: `_TAIL` after a repeated rule
+
+When `_TAIL` can follow a repeated rule, LALR merges the lookaheads of every
+repetition, so the contextual lexer accepts `_TAIL` after the first step and
+swallows the rest of the stream as tail:
+
+```
+packed: step~0..31 alt _TAIL?          // _TAIL is lexed after step 1
+```
+
+Give the final position its own rule, so only it is followed by `_TAIL`:
+
+```
+packed: step~0..31 alt _TAIL?
+      | step~31 last _TAIL?
+last: ...                              // the same expansions as step
+```
 
 ## Writers' helpers
 
@@ -105,8 +159,9 @@ pysidtracker snapshot build CORPUS... -o before.json \
 pysidtracker snapshot diff before.json after.json   # exit 1 on any difference
 ```
 
-Probes come from the format's `SidFormat.probes` (`{name: callable(model)}`)
-plus `--probe`; `--format` is an installed format name, `auto`, or a
+Probes come from the format's `SidFormat.probes` (`{name: callable(model)}`),
+plus its canonical text as `canonical` when the format sets the `canonical`
+hook and `probes` has no `canonical` ([formats.md](formats.md)), plus `--probe`; `--format` is an installed format name, `auto`, or a
 `module:attr` naming a `SidFormat` or a factory of one. Inputs are files,
 directories and `find` CSVs as for `variant census`. Models are digested by
 `repr`, `bytes` results by content (BLAKE2b-128). Python API: `fingerprint(data,

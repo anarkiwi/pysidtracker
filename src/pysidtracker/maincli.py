@@ -1,7 +1,8 @@
 """The generic ``pysidtracker`` command-line tool.
 
 Discovers every installed SID format (:mod:`pysidtracker.formats`) and offers
-the shared ``info`` / ``reglog`` / ``wav`` / ``disasm`` commands -- plus any
+the shared ``info`` / ``reglog`` / ``wav`` / ``disasm`` / ``grammar`` / ``equiv``
+commands -- plus any
 format-specific subcommands each format contributes -- so a dependent package
 registers a :class:`~pysidtracker.formats.SidFormat` instead of shipping its
 own CLI.
@@ -14,6 +15,8 @@ model and player.
 from __future__ import annotations
 
 import argparse
+import difflib
+import sys
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from vagrant_moses.memmap import PAL
@@ -21,7 +24,7 @@ from vagrant_moses.memmap import PAL
 from .audio import CHIP_MODELS, render_player_wav, seconds_to_frames
 from .cadence import playroutine_cadence
 from .census import add_census_arguments
-from .cli import print_info, run_cli
+from .cli import add_grammar_command, print_info, run_cli
 from .d64 import add_media_commands
 from .disasm import disassemble, entry_labels, image_after_init
 from .editorio import editor_io
@@ -31,7 +34,7 @@ from .formats import FormatCommand, SidFormat, discover_formats, recognize_forma
 from .image import SidImage
 from .lint import add_lint_arguments, run_lint
 from .reglog import register_writes_from_player, write_reglog
-from .snapshot import add_snapshot_commands
+from .snapshot import add_snapshot_commands, resolve_format
 from .source import read_bytes
 
 
@@ -92,6 +95,33 @@ def _wav(args, formats: Sequence[SidFormat]) -> None:
     print(f"wrote {args.output}")
 
 
+def _model(song, spec: str, subtune, formats: Sequence[SidFormat]):
+    """``(format, model)`` of ``song``'s ``subtune`` on the format ``spec`` names."""
+    data = read_bytes(song)
+    fmt = resolve_format(data, spec, formats)
+    return fmt, fmt.load(data, subtune)
+
+
+def _grammar(args, formats: Sequence[SidFormat]) -> None:
+    fmt, model = _model(args.song, args.format, args.subtune, formats)
+    for line in fmt.listing(model):
+        print(line)
+
+
+def _equiv(args, formats: Sequence[SidFormat]) -> None:
+    texts = [
+        fmt.canonical_text(model).splitlines()
+        for fmt, model in (
+            _model(song, args.format, args.subtune, formats) for song in args.songs
+        )
+    ]
+    lines = list(difflib.unified_diff(*texts, *map(str, args.songs), lineterm=""))
+    for line in lines:
+        print(line)
+    if lines:
+        sys.exit(1)
+
+
 def _disasm(args) -> None:
     image = SidImage.from_bytes(read_bytes(args.song))
     if args.after_init:
@@ -121,6 +151,9 @@ def _hex_addr(value: str) -> int:
         ) from exc
 
 
+_FORMAT_HELP = "installed format name, module:attr, or auto (the recognising format)"
+
+
 def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
     """The ``pysidtracker`` argument parser for the given registered ``formats``."""
     parser = argparse.ArgumentParser(
@@ -144,6 +177,20 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
     wav.add_argument("--seconds", type=float, default=60.0)
     wav.add_argument("--model", choices=CHIP_MODELS, default="8580")
     wav.set_defaults(func=lambda args: _wav(args, formats))
+
+    grammar = add_grammar_command(
+        subparsers, lambda args: _grammar(args, formats), song_help="input tune"
+    )
+    grammar.add_argument("--format", default="auto", help=_FORMAT_HELP)
+
+    equiv = subparsers.add_parser(
+        "equiv",
+        help="exit 0 if two tunes play the same, else diff their canonical text",
+    )
+    equiv.add_argument("songs", nargs=2, metavar="SONG", help="input tunes")
+    equiv.add_argument("--subtune", type=int, default=None, help="0-based subtune")
+    equiv.add_argument("--format", default="auto", help=_FORMAT_HELP)
+    equiv.set_defaults(func=lambda args: _equiv(args, formats))
 
     disasm = subparsers.add_parser(
         "disasm", help="disassemble a range of the loaded .sid/.prg image"
@@ -237,12 +284,15 @@ def _dispatch(name: str, owners: Sequence[Tuple[SidFormat, FormatCommand]], args
 
 def _add_format_commands(subparsers, formats: Sequence[SidFormat]) -> None:
     """Add every contributed subcommand; a name several formats share dispatches
-    on the tune's format, so each format keeps its own arguments."""
+    on the tune's format, so each format keeps its own arguments, and a shared
+    command's name stays the shared command."""
     owners: Dict[str, List[Tuple[SidFormat, FormatCommand]]] = {}
     for fmt in formats:
         for command in fmt.commands:
             owners.setdefault(command.name, []).append((fmt, command))
     for name, pairs in owners.items():
+        if name in subparsers.choices:
+            continue
         if len(pairs) == 1:
             fmt, command = pairs[0]
             sub = subparsers.add_parser(name, help=command.help)
