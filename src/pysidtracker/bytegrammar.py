@@ -3,7 +3,8 @@
 A :class:`ByteGrammar` wraps a package's ``.lark`` resource (LALR, contextual
 lexer, several start rules) and an inline transformer whose start rules return
 :class:`Parsed`. Grammars ``%import bytes (BYTE, _TAIL)`` from
-``pysidtracker/grammars/bytes.lark``.
+``pysidtracker/grammars/bytes.lark``; :class:`BitmapPostLex` turns a bitmap
+byte's set bits into presence tokens ahead of the values they select.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import (
 )
 
 from lark import Lark, Token, Transformer, Tree
+from lark.lark import PostLex
 from lark.exceptions import LarkError, UnexpectedInput, UnexpectedToken
 from lark.load_grammar import FromPackageLoader
 
@@ -52,8 +54,47 @@ def _describe(exc: LarkError, data: bytes, rule: str) -> str:
     return f"{rule} does not parse: {exc}"
 
 
+class BitField(NamedTuple):
+    """A bitmap bit that selects a ``width``-byte value, announced by ``tag``."""
+
+    bit: int
+    tag: str
+    width: int = 1
+
+
+class BitmapPostLex(PostLex):
+    """Lark postlexer expanding each bitmap terminal into presence tags.
+
+    ``bitmaps`` maps a terminal to its :class:`BitField` items in value order;
+    after that terminal each set bit yields a zero-width ``tag`` token, then
+    the ``width`` value tokens that follow, lexed in the parser's state.
+    """
+
+    def __init__(self, bitmaps: Mapping[str, Sequence[Tuple[int, str, int]]]):
+        self.bitmaps = {
+            name: tuple(BitField(*field) for field in fields)
+            for name, fields in bitmaps.items()
+        }
+
+    def process(self, stream: Iterator[Token]) -> Iterator[Token]:
+        """``stream`` with the tags and values of every bitmap token spliced in."""
+        for token in stream:
+            yield token
+            pos = token.end_pos
+            for field in self.bitmaps.get(token.type, ()):
+                if not ord(token) >> field.bit & 1:
+                    continue
+                yield Token(field.tag, "", start_pos=pos, end_pos=pos)
+                for _ in range(field.width):
+                    value = next(stream, None)
+                    if value is None:
+                        return
+                    yield value
+                    pos = value.end_pos
+
+
 def _byte(token: Token) -> str:
-    return f"{token.type}=${ord(token):02x}"
+    return f"{token.type}=${ord(token):02x}" if token else token.type
 
 
 def render(node: Tree, depth: int = 0) -> Iterator[str]:
@@ -76,6 +117,7 @@ class ByteGrammar:
 
     ``transformer`` builds each start rule's :class:`Parsed` while parsing;
     a stream that does not parse raises ``error`` (a :class:`SidParseError`).
+    ``bitmaps`` configures a :class:`BitmapPostLex`; the grammar declares its tags.
     """
 
     def __init__(
@@ -85,12 +127,14 @@ class ByteGrammar:
         start: Sequence[str],
         transformer: Optional[Transformer] = None,
         error: type = SidParseError,
+        bitmaps: Optional[Mapping[str, Sequence[Tuple[int, str, int]]]] = None,
     ):
         self.package = package
         self.resource = resource
         self.start = tuple(start)
         self.transformer = transformer
         self.error = error
+        self.postlex = BitmapPostLex(bitmaps) if bitmaps else None
         self._lark: Dict[bool, Lark] = {}
 
     def parser(self, trees: bool = False) -> Lark:
@@ -104,6 +148,7 @@ class ByteGrammar:
                 start=list(self.start),
                 transformer=None if trees else self.transformer,
                 import_paths=[FRAGMENTS],
+                postlex=self.postlex,
             )
         return self._lark[trees]
 
@@ -221,6 +266,8 @@ def select_rule(variant: Any, rules: Sequence[Tuple[str, str]], default: str) ->
 
 
 __all__ = [
+    "BitField",
+    "BitmapPostLex",
     "ByteGrammar",
     "FRAGMENTS",
     "Parsed",

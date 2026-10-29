@@ -27,7 +27,14 @@ from .cadence import (
     cadence_info,
     playroutine_cadence,
 )
-from .bytegrammar import REACH, ByteGrammar, Parsed, select_rule
+from .bytegrammar import (
+    REACH,
+    BitField,
+    BitmapPostLex,
+    ByteGrammar,
+    Parsed,
+    select_rule,
+)
 from .cli import (
     add_grammar_command,
     add_reglog_command,
@@ -95,7 +102,10 @@ from .locate import (
     locate,
     variant_facet,
 )
+from .automaton import layout_chains, minimise, number_chains
+from .editor import editor_replay, ram_image, run_editor
 from .formats import (
+    CANONICAL,
     FormatCommand,
     SidFormat,
     discover_formats,
@@ -280,7 +290,7 @@ from .testing import (
     oracle_grid,
     resolve_tune,
 )
-from .trace import InitTrace, trace_init
+from .trace import InitTrace, init_arguments, trace_init, trace_init_argument
 from .whydiff import (
     Divergence,
     PyTrace,
@@ -293,10 +303,12 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.39.0"
+__version__ = "0.40.0"
 
 __all__ = [
     "REACH",
+    "BitField",
+    "BitmapPostLex",
     "ByteGrammar",
     "Parsed",
     "select_rule",
@@ -535,6 +547,15 @@ __all__ = [
     "sustain_release",
     "sys_addr",
     "trace_init",
+    "trace_init_argument",
+    "init_arguments",
+    "layout_chains",
+    "minimise",
+    "number_chains",
+    "editor_replay",
+    "ram_image",
+    "run_editor",
+    "CANONICAL",
     "walk_until",
     "wire_mpu",
     "write_psid",
