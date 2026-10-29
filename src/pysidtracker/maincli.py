@@ -32,6 +32,7 @@ from .errors import SidError, SidParseError
 from .fixtures import add_fixtures_commands
 from .formats import FormatCommand, SidFormat, discover_formats, recognize_format
 from .image import SidImage
+from .grammardiff import add_grammardiff_arguments
 from .lint import add_lint_arguments, run_lint
 from .reglog import register_writes_from_player, write_reglog
 from .snapshot import add_snapshot_commands, resolve_format
@@ -244,6 +245,11 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
         "snapshot", help="digest a corpus's models and probes, or diff two digests"
     )
     add_snapshot_commands(snap)
+
+    gdiff = subparsers.add_parser(
+        "grammardiff", help="exit 0 if two Lark grammars are structurally equal"
+    )
+    add_grammardiff_arguments(gdiff)
 
     lint = subparsers.add_parser(
         "lint", help="find unused symbols and unresolved doc references"

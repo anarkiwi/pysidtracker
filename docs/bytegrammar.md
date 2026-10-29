@@ -134,6 +134,12 @@ last: ...                              // the same expansions as step
   the C64 I/O area (`$D000-$DFFF`).
 - `load_prefix(addr)` is a `.prg`'s two-byte load address.
 - `address` is the argparse type for `$C000` / `0xC000` / decimal addresses.
+- `fits(value, encode, decode, what, error=SidFormatError)` raises `error`
+  unless `decode(bytes(encode(value))) == value`: `"{what}: {value!r} has no
+  bytes (...)"` when encoding or decoding raises one of `CODEC_ERRORS`
+  (`ValueError`, `KeyError`, `TypeError`, `OverflowError` and every `SidError`,
+  so a format's own errors), else `"... reads back as {back!r}"`. It checks each
+  model element in the context its bytes are read in.
 
 ## `pysidtracker.relocate`
 
@@ -167,3 +173,19 @@ directories and `find` CSVs as for `variant census`. Models are digested by
 `repr`, `bytes` results by content (BLAKE2b-128). Python API: `fingerprint(data,
 fmt, probes)`, `snapshot(tunes, fmt, probes, workers)`, `diff(old, new)`,
 `read_snapshot` / `write_snapshot`.
+
+A committed snapshot also states a corpus test's expected outcomes:
+`expected_errors(snap)` is `{tune: message}` of the error each model raised
+(the text after `!Error: `), `None` where it decoded. In the suite,
+`testing.corpus_params(tunes, expected)` is one `pytest.param(rel, message)` per
+relative path, its id the path, and `testing.check_outcome(load, path, message,
+error_type=SidError)` asserts `load(path)` raises `error_type` with exactly that
+message, or decodes cleanly when it is `None`:
+
+```python
+EXPECTED = expected_errors(read_snapshot(SNAPSHOT))
+
+@pytest.mark.parametrize("rel,message", corpus_params(SAMPLE, EXPECTED))
+def test_corpus_tune(rel, message):
+    check_outcome(decompile, resolve_tune(rel), message, MySidParseError)
+```

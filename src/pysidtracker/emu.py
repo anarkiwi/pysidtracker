@@ -8,12 +8,13 @@ readable registers, and :func:`observe_data_access` hooks the jennings engine.
 from __future__ import annotations
 
 from array import array
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from vagrant_moses import memmap as mm
 from vagrant_moses.cpu import access_cycle, flat_mpu, run_to_rts
 
-from .errors import EmulatorUnavailable
+from .errors import EmulatorUnavailable, SidError
+from .registers import SID_REG_COUNT, is_sid_reg
 
 # osc3/env3 depend only on voice 3 and its sync/ring source, voice 2.
 _CHIP_INPUTS = range(mm.SID_BASE + 0x07, mm.SID_BASE + 0x15)
@@ -185,13 +186,69 @@ def run_to_rts_until(mpu, mem, pc: int, acc: int, pcs, max_cycles: int) -> bool:
     return False
 
 
+PLAY_CYCLES = 200_000
+
+SidWrite = Tuple[int, Optional[int], int, int]
+
+
+class SidWriteLog:
+    """Each play call's SID writes, ``(register, address read last, pc, value)``.
+
+    Attaches to ``mpu`` with :func:`observe_data_access`; ``mirrors`` also logs
+    the ``$20``-mirrored band, else only ``$D400-$D418``. :meth:`start` opens a call.
+    """
+
+    def __init__(self, mpu, mirrors: bool = True):
+        top = mm.SID_BASE + (0x400 if mirrors else SID_REG_COUNT)
+        self.registers = {
+            addr: (addr - mm.SID_BASE) & 0x1F
+            for addr in range(mm.SID_BASE, top)
+            if is_sid_reg(addr)
+        }
+        self.calls: List[List[SidWrite]] = []
+        self.mpu, self._last = mpu, None
+        observe_data_access(mpu, on_read=self._read, on_write=self._write)
+
+    def _read(self, addr: int) -> None:
+        self._last = addr
+
+    def _write(self, addr: int, value: int) -> None:
+        register = self.registers.get(addr)
+        if register is not None and self.calls:
+            self.calls[-1].append((register, self._last, self.mpu.pc, value))
+
+    def start(self) -> List[SidWrite]:
+        """Open a new call's write list and return it."""
+        self.calls.append([])
+        return self.calls[-1]
+
+    def call(self, mem, play: int, max_cycles: int = PLAY_CYCLES, error=SidError):
+        """One :func:`call_play` of ``play`` logged as a new call; its writes."""
+        writes = self.start()
+        call_play(self.mpu, mem, play, max_cycles, error)
+        return writes
+
+
+def call_play(
+    mpu, mem, play: int, max_cycles: int = PLAY_CYCLES, error: type = SidError
+) -> None:
+    """Run one call of ``play`` (``A = 0``); raise ``error`` if it does not return."""
+    depth = mpu.sp
+    run_to_rts(mpu, mem, play, 0, max_cycles)
+    if mpu.sp < depth:
+        raise error("play call did not return")
+
+
 def set_iomap(mpu, value: int) -> None:
     """Write the C64 ``$01`` bank port on ``mpu``'s bus, remapping the ROM/RAM windows."""
     mpu.memory[1] = value
 
 
 __all__ = [
+    "PLAY_CYCLES",
     "SidReads",
+    "SidWriteLog",
+    "call_play",
     "observe_data_access",
     "wire_mpu",
     "run_to_rts",

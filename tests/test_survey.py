@@ -3,6 +3,7 @@
 import csv
 import hashlib
 import json
+import multiprocessing
 import os
 import subprocess
 
@@ -876,3 +877,35 @@ def test_compare_without_baseline_only_tallies(tmp_path, capsys):
     assert not survey.compare_results(new, [keys])
     out = capsys.readouterr().out
     assert "exact -> non-exact" not in out and "{'exact': 1}" in out
+
+
+def _clear_cache(work, barrier, queue):
+    barrier.wait()
+    try:
+        survey.oracle_cache(work)
+        queue.put(None)
+    except Exception as exc:  # pylint: disable=broad-except
+        queue.put(repr(exc))
+
+
+def test_oracle_cache_concurrent_clear(tmp_path, monkeypatch):
+    work, workers = tmp_path / "work", 8
+    stale = work / "oracle"
+    stale.mkdir(parents=True)
+    for k in range(500):
+        (stale / f"{k}_1.csv.zst").write_bytes(b"")
+    monkeypatch.setattr(survey, "sidtrace_image_id", lambda: "sha256:new")
+    ctx = multiprocessing.get_context("fork")
+    barrier, queue = ctx.Barrier(workers), ctx.Queue()
+    procs = [
+        ctx.Process(target=_clear_cache, args=(work, barrier, queue))
+        for _ in range(workers)
+    ]
+    for proc in procs:
+        proc.start()
+    errors = [queue.get(timeout=60) for _ in procs]
+    for proc in procs:
+        proc.join()
+    assert errors == [None] * workers
+    assert sorted(p.name for p in stale.iterdir()) == ["STAMP"]
+    assert json.loads((stale / "STAMP").read_text("utf-8"))["image"] == "sha256:new"

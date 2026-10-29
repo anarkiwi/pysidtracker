@@ -1,0 +1,14 @@
+// A toy table program in the shared text terminals (tests/toytext.py).
+start: entry*
+entry: INT ":" _op
+_op: stop | jump | wave_note | step | named
+stop: "Stop"
+jump: "Jump" "(" INT ")"
+wave_note: "WaveNote" "(" INT ("," RELATIVE)? ")"
+step: "Step" "(" (jump | none) "," (wave_note | none) ")"
+named: "Named" "(" STRING ")"
+none: "none"
+RELATIVE: "relative"
+%import text (INT, STRING, COMMENT, WS)
+%ignore WS
+%ignore COMMENT

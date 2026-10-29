@@ -19,6 +19,7 @@ import multiprocessing
 import os
 import re
 import sys
+import tempfile
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import nullcontext
@@ -206,7 +207,8 @@ def _err(exc):
 def oracle_cache(work):
     """``work/oracle``, emptied when its traces came from another sidtrace setup.
 
-    The stamp holds the image id, the arguments and the logged row kinds.
+    The stamp holds the image id, the arguments and the logged row kinds; it is
+    replaced atomically, so concurrent callers each see a whole stamp.
     """
     cache = Path(work) / "oracle"
     cache.mkdir(parents=True, exist_ok=True)
@@ -219,8 +221,12 @@ def oracle_cache(work):
     if stale:
         print(f"oracle: re-rendering {len(stale)} stale traces", file=sys.stderr)
     for path in stale:
-        path.unlink()
-    stamp.write_text(want, "utf-8")
+        path.unlink(missing_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=cache, prefix=".STAMP.", delete=False
+    ) as tmp:
+        tmp.write(want)
+    os.replace(tmp.name, stamp)
     return cache
 
 

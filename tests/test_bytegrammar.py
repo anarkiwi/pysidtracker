@@ -1,5 +1,6 @@
 """Tests for the byte-stream grammar runtime (pysidtracker.bytegrammar)."""
 
+import re
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -13,7 +14,9 @@ from pysidtracker import (
     Facet,
     Parsed,
     SidImage,
+    SidFormatError,
     SidParseError,
+    fits,
     make_package_errors,
     select_rule,
 )
@@ -202,3 +205,39 @@ def test_select_rule_on_variants_mappings_and_attributes():
     assert select_rule({"tempo": 1, "jumps": 1}, rules, "seq") == "seq_tempo"
     assert select_rule(_Resolved(jumps=True), rules, "seq") == "seq_jump"
     assert select_rule(object(), rules, "seq") == "seq"
+
+
+class _Codec:
+    """A one-byte field: values 0-255 fit, ``-1`` wraps and others overflow."""
+
+    @staticmethod
+    def encode(value):
+        if value == "bad":
+            raise SidParseError("no such value")
+        return [value & 0xFF] if value == -1 else [value]
+
+    @staticmethod
+    def decode(raw):
+        return raw[0]
+
+
+@pytest.mark.parametrize(
+    "value,message",
+    [
+        (5, None),
+        (256, "has no bytes (bytes must be in range(0, 256))"),
+        (-1, "reads back as 255"),
+        ("bad", "has no bytes (no such value)"),
+    ],
+)
+def test_fits(value, message):
+    if message is None:
+        fits(value, _Codec.encode, _Codec.decode, "byte")
+        return
+    with pytest.raises(SidFormatError, match=re.escape(f"byte: {value!r} {message}")):
+        fits(value, _Codec.encode, _Codec.decode, "byte")
+
+
+def test_fits_raises_the_given_error():
+    with pytest.raises(ToyValidationError, match=r"^key: 1 has no bytes \(1\)$"):
+        fits(1, lambda v: {}[v], _Codec.decode, "key", ToyValidationError)
