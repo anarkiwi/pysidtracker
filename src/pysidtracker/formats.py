@@ -75,6 +75,8 @@ class SidFormat:
     ``{addr: facet}``, the code address each facet was detected at.  ``survey``
     optionally replaces the facet part of :meth:`info` with ``survey(model, data,
     song)``, the format-specific fields the survey renderer reports.
+    ``probes`` maps a name to ``probe(model)``, a derived artifact (a rebuilt
+    image, an export) whose digest :mod:`pysidtracker.snapshot` records.
     """
 
     name: str
@@ -86,6 +88,7 @@ class SidFormat:
     variant: Optional[Callable[[Any], Any]] = None
     facet_sites: Optional[Callable[[Any], Mapping[int, str]]] = None
     survey: Optional[Callable[[Any, bytes, int], Mapping[str, Any]]] = None
+    probes: Mapping[str, Callable[[Any], Any]] = field(default_factory=dict)
 
     def variant_info(self, model: Any) -> Dict[str, Any]:
         """``model``'s :meth:`Variant.as_info` (empty without a ``variant`` hook)."""

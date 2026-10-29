@@ -33,6 +33,7 @@ classifiers = [
 # host and release-media readers; its cpu extra is the jennings-backed flat host.
 # numpy: sample buffers and the image anchor scan. tqdm: the whydiff CLI's progress.
 # networkx: post-dominators for pathdiff's control dependence (relevance).
+# lark: the LALR parsers of tracker byte-stream grammars (bytegrammar).
 dependencies = [
   "jennings>=0.2.0",
   "pydexomizer>=0.1",
@@ -43,6 +44,7 @@ dependencies = [
   "networkx>=3",
   "coverage>=7.4",
   "tqdm>=4",
+  "lark>=1.1",
 ]
 
 [project.optional-dependencies]
@@ -89,7 +91,7 @@ Issues = "https://github.com/anarkiwi/pysidtracker/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pysidtracker = ["data/*"]
+pysidtracker = ["data/*", "grammars/*.lark"]
 
 [tool.setuptools]
 # The pytest plugin is a standalone top-level module (see [pytest11] above).

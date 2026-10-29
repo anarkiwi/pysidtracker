@@ -31,6 +31,7 @@ from .formats import FormatCommand, SidFormat, discover_formats, recognize_forma
 from .image import SidImage
 from .lint import add_lint_arguments, run_lint
 from .reglog import register_writes_from_player, write_reglog
+from .snapshot import add_snapshot_commands
 from .source import read_bytes
 
 
@@ -191,6 +192,11 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
         "media", help="extract PRGs from release media (zip/gz, d64/d71/d81, t64)"
     )
     add_media_commands(media)
+
+    snap = subparsers.add_parser(
+        "snapshot", help="digest a corpus's models and probes, or diff two digests"
+    )
+    add_snapshot_commands(snap)
 
     lint = subparsers.add_parser(
         "lint", help="find unused symbols and unresolved doc references"

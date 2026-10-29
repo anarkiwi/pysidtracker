@@ -11,11 +11,28 @@ from __future__ import annotations
 import struct
 from typing import List, Optional, Tuple
 
+from vagrant_moses.memmap import IO_BASE, IO_LAST
+
 from . import _scan
 from .errors import SidParseError
 from .header import SidHeader, parse_sid_header
 
 MEM_SIZE = 0x10000
+
+
+def load_prefix(addr: int) -> bytes:
+    """The two-byte little-endian load address a ``.prg`` starts with."""
+    return struct.pack("<H", addr & 0xFFFF)
+
+
+def require_ram(start: int, length: int, what: str, error: type = SidParseError):
+    """Raise ``error`` when ``what`` at ``[start, start+length)`` reaches the C64
+    I/O area, where a C64 reads the VIC/SID/CIA chips instead of RAM."""
+    if start <= IO_LAST and start + length > IO_BASE:
+        raise error(
+            f"{what} [{start:#06x},{start + length:#06x}) reaches the C64 I/O area "
+            f"{IO_BASE:#06x}-{IO_LAST:#06x}, where the player reads live chips, not RAM"
+        )
 
 
 def parse_prg(raw: bytes, expected_load: Optional[int] = None) -> Tuple[int, bytes]:
@@ -129,6 +146,15 @@ class SidImage:
         """Read a split-pointer-table entry (``lo[index]`` + ``hi[index]<<8``)."""
         return self.peek(lo_base + index) | (self.peek(hi_base + index) << 8)
 
+    def window(self, addr: int, size: int) -> bytes:
+        """The ``size`` bytes a cursor reads from ``addr``, zero past ``$FFFF``."""
+        return bytes(self.mem[addr : addr + size]).ljust(size, b"\0")
+
+    def put_ptr(self, lo_base: int, hi_base: int, index: int, addr: int) -> None:
+        """Point split-pointer-table entry ``index`` at ``addr`` (see :meth:`poke`)."""
+        self.poke(lo_base + index, addr)
+        self.poke(hi_base + index, addr >> 8)
+
     def contains(self, addr: int) -> bool:
         """True if ``addr`` lies within the loaded region (``load <= addr < end``)."""
         return self.load <= addr < self.end
@@ -162,9 +188,7 @@ class SidImage:
 
     def to_prg(self) -> bytes:
         """Serialise to a bare ``.prg`` (LE load address + loaded image body)."""
-        return struct.pack("<H", self.load & 0xFFFF) + bytes(
-            self.mem[self.load : self.end]
-        )
+        return load_prefix(self.load) + bytes(self.mem[self.load : self.end])
 
     def find(self, needle: bytes, start: Optional[int] = None) -> int:
         """First address of ``needle`` in the image, or ``-1``.
