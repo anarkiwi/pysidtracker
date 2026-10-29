@@ -9,6 +9,7 @@ from pysidtracker import (
     find_code_all,
     find_code_first,
 )
+from pysidtracker.codescan import jump_table, play_entries
 
 
 def _image(payload, load=0x1000):
@@ -222,3 +223,28 @@ def test_routine_chain():
         RoutineChain([("entry", "FF FF")]).discover(image, 0x1000)
     with pytest.raises(ChainError):
         RoutineChain([("entry", "A2 {x}"), ("nope", "EA")]).discover(image, 0x1000)
+
+
+def _jumps(*targets):
+    return b"".join(bytes([0x4C, t & 0xFF, t >> 8]) for t in targets)
+
+
+# $1000: a stray pair aiming outside its player, a NOP; $1007: init/play/volume
+# table; $1010: player code; $1013: data
+_PLAYER = (
+    _jumps(0x3000, 0x4000) + b"\xea" + _jumps(0x1010, 0x1011, 0x1012) + b"\x60" * 3
+)
+
+
+@pytest.mark.parametrize("source", [_image(_PLAYER), bytes(0x1000) + _PLAYER])
+def test_jump_table_walks_back_to_the_first_entry(source):
+    assert jump_table(source, 0x1013) == 0x1007
+    assert jump_table(source, 0x1011) is None
+    assert play_entries(source, 0x1007) == {0x100A, 0x1011}
+    assert play_entries(source, 0x100D) == {0x1010}
+
+
+def test_jump_table_takes_the_last_player():
+    image = _image(_PLAYER + _jumps(0x1019, 0x101A) + b"\x60\x60")
+    assert jump_table(image, 0x101B) == 0x1013
+    assert play_entries(image, 0x1013) == {0x1016, 0x101A}

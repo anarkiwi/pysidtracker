@@ -140,6 +140,15 @@ def diff(old: Snapshot, new: Snapshot) -> List[Tuple[str, str, str, str]]:
     return rows
 
 
+def expected_errors(snap: Snapshot) -> Dict[str, Optional[str]]:
+    """``{tune: message}`` of the error each tune's model raised, None where it decoded."""
+    out: Dict[str, Optional[str]] = {}
+    for name, fp in snap.items():
+        model = fp.get(MODEL, "")
+        out[name] = model.partition(": ")[2] if model.startswith("!") else None
+    return out
+
+
 def write_snapshot(snap: Snapshot, out) -> Path:
     """Write ``snap`` to ``out`` as JSON."""
     path = Path(out)

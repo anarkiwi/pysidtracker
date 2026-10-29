@@ -33,6 +33,7 @@ from .bytegrammar import (
     BitmapPostLex,
     ByteGrammar,
     Parsed,
+    fits,
     select_rule,
 )
 from .cli import (
@@ -303,7 +304,7 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.40.0"
+__version__ = "0.41.0"
 
 __all__ = [
     "REACH",
@@ -311,6 +312,7 @@ __all__ = [
     "BitmapPostLex",
     "ByteGrammar",
     "Parsed",
+    "fits",
     "select_rule",
     "add_grammar_command",
     "address",

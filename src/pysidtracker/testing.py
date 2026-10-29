@@ -43,7 +43,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Mapping, Optional, Tuple
 
 from .d64 import D64File, read_d64
 from .errors import SidError
@@ -746,6 +746,29 @@ def make_oracle_fixtures(
         return _match
 
     return tune_id, oracle_match
+
+
+def corpus_params(tunes: Iterable, expected: Mapping[str, Optional[str]]) -> list:
+    """One ``pytest.param(rel, expected.get(rel))`` per relative path of ``tunes``,
+    its id the path; the message is the error a tune raises (None: it decodes),
+    as :func:`~pysidtracker.snapshot.expected_errors` reads them."""
+    import pytest  # lazy: pytest is only a dev dependency
+
+    rels = (PurePosixPath(rel).as_posix() for rel in tunes)
+    return [pytest.param(rel, expected.get(rel), id=rel) for rel in rels]
+
+
+def check_outcome(load, path, expected: Optional[str], error_type: type = SidError):
+    """``load(path)``, asserting it raises ``error_type`` with exactly the message
+    ``expected``, or (``expected`` None) returns cleanly; the model, else None."""
+    if expected is None:
+        return load(path)
+    try:
+        load(path)
+    except error_type as exc:
+        assert str(exc) == expected, f"{path}: raised {exc!r}, not {expected!r}"
+        return None
+    raise AssertionError(f"{path}: decoded, expected {expected!r}")
 
 
 def main(argv=None) -> int:

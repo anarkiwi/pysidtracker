@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from .image import MEM_SIZE, SidImage
-from .mos6502 import follow_jmp, s8
+from .mos6502 import OP_JMP, follow_jmp, s8
 
 CodeBuffer = Union[SidImage, bytes, bytearray, memoryview]
 
@@ -487,3 +487,33 @@ class RoutineChain:
                 found[cap] = value
             found[f"{name}_end"] = addr + pattern.length
         return found
+
+
+_JUMP_PAIR = CodePattern("4C ?? ?? 4C {target:w}")
+
+
+def jump_table(image: CodeBuffer, end: int) -> Optional[int]:
+    """The first entry of the last run of ``JMP abs`` before ``end`` whose second
+    entry's target lies in ``[run, end)``: the init/play table of the player
+    code between them (a three-entry table's play entry is its second); None."""
+    starts = {
+        m.addr
+        for m in find_code_all(image, _JUMP_PAIR, end=end)
+        if m.addr <= m.captures["target"] < end
+    }
+    if not starts:
+        return None
+    base = max(starts)
+    while base - 3 in starts:
+        base -= 3
+    return base
+
+
+def play_entries(image: CodeBuffer, base: int) -> frozenset:
+    """The play entries of the jump table at ``base``: its second entry, and
+    where that entry's ``JMP`` leads."""
+    buf, _, _ = _buffer_and_range(image, 0, None)
+    play = base + 3
+    if buf[play] != OP_JMP:
+        return frozenset({play})
+    return frozenset({play, buf[play + 1] | buf[play + 2] << 8})

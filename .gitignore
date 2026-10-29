@@ -233,3 +233,6 @@ __marimo__/
 # process core dumps
 core.[0-9]*
 /core
+
+# Claude Code worktrees (never committed)
+.claude/worktrees/

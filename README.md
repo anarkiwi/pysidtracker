@@ -161,7 +161,8 @@ API.
   `attack_decay` / `sustain_release` ADSR nibble packers.
 - `bytegrammar` — song byte streams as Lark grammars: `ByteGrammar`
   (`parse_prefix` / `parse_exact` / `tree`, pointer-table `entry` / `stored`
-  reads, the `check` round trip and `listing`), `Parsed`, `select_rule`, and the
+  reads, the `check` round trip and `listing`), `Parsed`, `select_rule`, the
+  per-element `fits` codec round trip, and the
   shared `%import bytes (BYTE, _TAIL)` fragment, `BitmapPostLex` / `BitField`
   bitmap-selected fields; `SidImage.window` / `put_ptr`,
   `reraise_as`, `require_ram`, `load_prefix`, the `address` argparse type and
@@ -175,7 +176,16 @@ API.
   the argument each subtune's init hands the player ([docs/editor.md](docs/editor.md)).
 - `snapshot` — corpus digests of each tune's model and `SidFormat.probes` and
   their diff (`pysidtracker snapshot build|diff`), proving a refactor
-  behaviour-preserving.
+  behaviour-preserving; `expected_errors` with `testing.corpus_params` /
+  `check_outcome` turn one into exact-outcome corpus test cases.
+- `wrap` — a tune's own play routine run around a native player tick:
+  `measure_wrap` / `Wrap`, `Wrapped` (a `MemPlayer`), `count_entries`, with
+  `codescan.jump_table` / `play_entries` and `emu.SidWriteLog` / `call_play`
+  ([docs/wrap.md](docs/wrap.md)).
+- `textgrammar` — typed dataclass models as text: `ModelTransformer`,
+  `classes`, `term`, `seq`, `TextGrammar` and the `%import text` fragment;
+  `pysidtracker grammardiff A.lark B.lark` compares two grammars structurally
+  ([docs/textgrammar.md](docs/textgrammar.md)).
 - `resolve_entry_points` / `is_jmp_vector`, `cadence_from_latch`, and the
   `ByteCursor` / `check` / `byte_range` parse helpers.
 

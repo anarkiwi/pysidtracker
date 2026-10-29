@@ -63,6 +63,10 @@ reported as `SiteMatch.alt`), `[ … ]` optional groups, `??{lo,hi}` bounded gap
 and capture equality (a repeated `{name}` must equal its first occurrence).
 `first=` and `span="code"|"image"` are the match policy.
 
+`jump_table(image, end)` finds a player's `JMP` init/play table ahead of its
+code and `play_entries(image, base)` its play entries, the inputs of the native
+play wrappers ([wrap.md](wrap.md)).
+
 ### `reference` — patterns from assembled reference players
 
 `reference_pattern(Reference(name, code, org, labels, data=..., facets=...))`

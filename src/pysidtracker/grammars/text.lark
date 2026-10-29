@@ -1,0 +1,14 @@
+// Terminals shared by text grammars of typed song models
+// (pysidtracker.textgrammar). A format grammar takes them with:
+//
+//     %import text (INT, STRING, COMMENT, WS)
+//     %ignore WS
+//     %ignore COMMENT
+//
+// INT is hex ($1F) or decimal, either optionally negative; STRING is a JSON
+// string; COMMENT runs from # to the end of the line.
+
+INT: /-?(\$[0-9A-Fa-f]+|[0-9]+)/
+STRING: /"(\\.|[^"\\])*"/
+COMMENT: /#[^\n]*/
+WS: /[ \t\f\r\n]+/

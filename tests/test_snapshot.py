@@ -6,10 +6,12 @@ import pytest
 
 from pysidtracker import BaseSidParser, SidFormat, SidImage, SidParseError
 from pysidtracker.maincli import main
+from pysidtracker.testing import check_outcome, corpus_params
 from pysidtracker.snapshot import (
     MISSING,
     diff,
     digest,
+    expected_errors,
     fingerprint,
     load_spec,
     parse_probes,
@@ -143,3 +145,29 @@ def test_cli_build_and_diff(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "a.prg  model:" in out and "a.prg  rebuild:" in out
     assert "1 of 2 tunes differ" in out
+
+
+def test_corpus_cases_from_a_snapshot(tmp_path):
+    tunes = {"A/good.sid": b"\x00\x10TOY1", "B/bad.sid": b"\x00\x10BAD"}
+    snap = {rel: fingerprint(data, TOY) for rel, data in tunes.items()}
+    expected = expected_errors(snap)
+    assert expected == {"A/good.sid": None, "B/bad.sid": "unsupported toy"}
+    params = corpus_params(tunes, expected)
+    assert [(p.id, p.values) for p in params] == [
+        ("A/good.sid", ("A/good.sid", None)),
+        ("B/bad.sid", ("B/bad.sid", "unsupported toy")),
+    ]
+    for rel, data in tunes.items():
+        (tmp_path / rel.replace("/", "_")).write_bytes(data)
+
+    def load(rel):
+        return TOY.load((tmp_path / rel.replace("/", "_")).read_bytes())
+
+    assert check_outcome(load, "A/good.sid", None) == ("toy", 0, b"TOY1")
+    assert check_outcome(load, "B/bad.sid", "unsupported toy", SidParseError) is None
+    with pytest.raises(AssertionError, match="not 'other'"):
+        check_outcome(load, "B/bad.sid", "other")
+    with pytest.raises(AssertionError, match="decoded, expected"):
+        check_outcome(load, "A/good.sid", "unsupported toy")
+    with pytest.raises(SidParseError):
+        check_outcome(load, "B/bad.sid", None)

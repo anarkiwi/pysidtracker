@@ -27,7 +27,7 @@ from lark.lark import PostLex
 from lark.exceptions import LarkError, UnexpectedInput, UnexpectedToken
 from lark.load_grammar import FromPackageLoader
 
-from .errors import SidParseError
+from .errors import SidError, SidFormatError, SidParseError
 from .facets import Variant
 from .image import SidImage
 
@@ -250,6 +250,20 @@ class ByteGrammar:
                 yield "  " + line
 
 
+CODEC_ERRORS = (ValueError, KeyError, TypeError, OverflowError, SidError)
+
+
+def fits(value: Any, encode, decode, what: str, error: type = SidFormatError) -> None:
+    """Raise ``error`` unless ``decode(bytes(encode(value))) == value``: every
+    field of ``value`` fits its width in the context ``encode``/``decode`` read it."""
+    try:
+        back = decode(bytes(encode(value)))
+    except CODEC_ERRORS as exc:
+        raise error(f"{what}: {value!r} has no bytes ({exc})") from exc
+    if back != value:
+        raise error(f"{what}: {value!r} reads back as {back!r}")
+
+
 def _facet(variant: Any, name: str) -> Any:
     if isinstance(variant, (Variant, Mapping)):
         return variant[name] if name in variant else None
@@ -269,9 +283,11 @@ __all__ = [
     "BitField",
     "BitmapPostLex",
     "ByteGrammar",
+    "CODEC_ERRORS",
     "FRAGMENTS",
     "Parsed",
     "REACH",
+    "fits",
     "render",
     "select_rule",
 ]
