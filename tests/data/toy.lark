@@ -1,0 +1,21 @@
+// A test grammar: (id, value) item streams ended by $FF, or by a $FE n jump
+// in the jump build; and $00-terminated event runs.
+
+seq: item* END _TAIL?
+seq_jump: item_jump* (END | jump) _TAIL?
+events: EVENT* EVENT_END _TAIL?
+small: SMALL* END
+
+item: ITEM BYTE
+item_jump: ITEM_JUMP BYTE -> item
+jump: JUMP BYTE
+
+ITEM: /[\x00-\xfe]/
+ITEM_JUMP: /[\x00-\xfd]/
+JUMP: /\xfe/
+END: /\xff/
+EVENT: /[\x01-\xff]/
+EVENT_END: /\x00/
+SMALL: /[\x00-\x7f]/
+
+%import bytes (BYTE, _TAIL)

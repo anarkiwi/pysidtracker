@@ -153,23 +153,36 @@ API.
   of shipping its own CLI; `find_format(data, name)` and `SidFormat.play(data,
   subtune)` play a tune's subtune (default its start song) on the installed
   format, as `survey --format` and `whydiff --format` do. `cli` holds the underlying argparse scaffold
-  (`run_cli`, `print_info`, `add_reglog_command`, `add_wav_command`).
+  (`run_cli`, `print_info`, `add_reglog_command`, `add_wav_command`,
+  `add_grammar_command`, `address`).
 - `registers` additions — `SID_VOICES`, voice/global register indices, and the
   `attack_decay` / `sustain_release` ADSR nibble packers.
+- `bytegrammar` — song byte streams as Lark grammars: `ByteGrammar`
+  (`parse_prefix` / `parse_exact` / `tree`, pointer-table `entry` / `stored`
+  reads, the `check` round trip and `listing`), `Parsed`, `select_rule`, and the
+  shared `%import bytes (BYTE, _TAIL)` fragment; `SidImage.window` / `put_ptr`,
+  `reraise_as`, `require_ram`, `load_prefix`, the `address` argparse type and
+  `add_grammar_command` ([docs/bytegrammar.md](docs/bytegrammar.md)).
+- `relocate` — `walk_code` (recursive-descent 6502 code walk) and
+  `relocate_operands` (move, remap or refuse each absolute operand).
+- `snapshot` — corpus digests of each tune's model and `SidFormat.probes` and
+  their diff (`pysidtracker snapshot build|diff`), proving a refactor
+  behaviour-preserving.
 - `resolve_entry_points` / `is_jmp_vector`, `cadence_from_latch`, and the
   `ByteCursor` / `check` / `byte_range` parse helpers.
 
 ## Install
 
 ```bash
-pip install pysidtracker   # core: jennings (init emulation), numpy, pyresidfp (WAV render)
+pip install pysidtracker   # core: jennings (init emulation), numpy, pyresidfp (WAV render), lark
 ```
 
 All dependencies are core: jennings (detection runs a tune's 6502 init), pydexomizer
 (`native_decrunch` unpacks exomizer-packed images natively), pyresidfp (the
 emulated SID the WAV render drives), vagrant-moses (the C64 machine model: memory
 map, banked bus, ROMs, the cycle-exact machine, the KERNAL host and media
-readers), and numpy (sample buffers and the image anchor scan).
+readers), numpy (sample buffers and the image anchor scan), and lark (the
+byte-stream grammar parsers).
 
 ## Usage
 

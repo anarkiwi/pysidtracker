@@ -156,7 +156,9 @@ A parser subclasses `BaseSidParser`, implements `parse(data) -> model`, and
 optionally overrides `recognize(image) -> anchor` to opt into detection. It
 inherits `read`, `load_image`, and `detect`. Format-specific error classes
 subclass `SidError` (or `SidParseError`) so `except SidError` works across all
-of them.
+of them. Song streams are read, checked and printed through a `ByteGrammar`
+over the format's `.lark` grammar, and editor-layout relocation goes through
+`relocate` ([bytegrammar.md](bytegrammar.md)).
 
 ## 0.3.0 shared player/validation surfaces
 

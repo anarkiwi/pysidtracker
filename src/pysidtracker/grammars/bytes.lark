@@ -1,0 +1,11 @@
+// Terminals shared by byte-stream grammars (one latin-1 character per byte).
+// A tracker grammar loaded through pysidtracker.bytegrammar.ByteGrammar takes
+// them with:
+//
+//     %import bytes (BYTE, _TAIL)
+//
+// BYTE is any one byte; _TAIL is the run of bytes stored after a stream's
+// terminator, which the player never reads through that stream's pointer.
+
+BYTE: /[\x00-\xff]/
+_TAIL: /[\x00-\xff]+/

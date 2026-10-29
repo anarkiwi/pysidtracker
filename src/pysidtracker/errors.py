@@ -6,7 +6,8 @@ their own format-specific names (e.g. a GoatTracker ``SngParseError``) while
 staying catchable through the shared base.
 """
 
-from typing import NamedTuple
+from contextlib import contextmanager
+from typing import Iterator, NamedTuple
 
 from vagrant_moses import kernal as _kernal
 
@@ -76,3 +77,16 @@ def make_package_errors(prefix: str) -> "PackageErrors":
         {"__doc__": f"{prefix} format error."},
     )
     return PackageErrors(root, parse_error, format_error)
+
+
+@contextmanager
+def reraise_as(error: type, catch: type = SidParseError) -> Iterator[None]:
+    """Re-raise a ``catch`` raised in the block as ``error`` (same message).
+
+    A writer re-reading its own output wraps the reads so a parse error
+    surfaces as its validation error: ``with reraise_as(SongValidationError):``.
+    """
+    try:
+        yield
+    except catch as exc:
+        raise error(str(exc)) from exc

@@ -2,9 +2,10 @@
 
 Each leaf CLI dispatches ``args.func(args)`` and wraps its own parse error plus
 ``OSError`` into an ``error: ...``/exit-1 message; :func:`run_cli` owns that
-loop, and :func:`add_reglog_command`/:func:`add_wav_command`/:func:`print_info`
-establish the shared ``song``/``--seconds``/``--model`` arguments and metadata
-printout every tool repeats.
+loop, and :func:`add_reglog_command`/:func:`add_wav_command`/
+:func:`add_grammar_command`/:func:`print_info` establish the shared ``song``/
+``--seconds``/``--model``/``--subtune`` arguments and metadata printout every
+tool repeats; :func:`address` is the C64 address argument type.
 """
 
 from __future__ import annotations
@@ -58,6 +59,29 @@ def add_wav_command(subparsers, handler: Handler, *, song_help: str = "input tun
     parser.add_argument("--model", choices=CHIP_MODELS, default="8580")
     parser.set_defaults(func=handler)
     return parser
+
+
+def add_grammar_command(subparsers, handler: Handler, *, song_help: str = "input tune"):
+    """Add the shared ``grammar`` subcommand (``song --subtune``), which prints
+    each song stream's parse tree (:meth:`ByteGrammar.listing`)."""
+    parser = subparsers.add_parser(
+        "grammar", help="print the parse tree of every song stream"
+    )
+    parser.add_argument("song", help=song_help)
+    parser.add_argument("--subtune", type=int, default=0, help="0-based subtune")
+    parser.set_defaults(func=handler)
+    return parser
+
+
+def address(text: str) -> int:
+    """A C64 address argument: ``$C000``, ``0xC000`` or decimal, ``0``-``$FFFF``."""
+    try:
+        value = int(text.replace("$", "0x", 1) if text[:1] == "$" else text, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a C64 address: {text!r}") from exc
+    if not 0 <= value <= 0xFFFF:
+        raise argparse.ArgumentTypeError(f"C64 address out of range: {text!r}")
+    return value
 
 
 def print_info(

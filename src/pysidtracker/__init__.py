@@ -27,7 +27,15 @@ from .cadence import (
     cadence_info,
     playroutine_cadence,
 )
-from .cli import add_reglog_command, add_wav_command, print_info, run_cli
+from .bytegrammar import REACH, ByteGrammar, Parsed, select_rule
+from .cli import (
+    add_grammar_command,
+    add_reglog_command,
+    add_wav_command,
+    address,
+    print_info,
+    run_cli,
+)
 from .codescan import (
     ChainError,
     CodePattern,
@@ -68,6 +76,7 @@ from .errors import (
     SidFormatError,
     SidParseError,
     make_package_errors,
+    reraise_as,
 )
 from .facets import (
     Facet,
@@ -119,7 +128,7 @@ from .header import (
     parse_sid_header,
     write_psid,
 )
-from .image import MEM_SIZE, SidImage, parse_prg
+from .image import MEM_SIZE, SidImage, load_prefix, parse_prg, require_ram
 from .io import ByteCursor, byte_range, check
 from .kernalhost import KernalHost, sys_addr
 from .loader import (
@@ -238,6 +247,7 @@ from .roms import (
     rom_image,
     roms_available,
 )
+from .relocate import relocate_operands, walk_code
 from .source import Source, read_bytes
 from .variants import (
     Block,
@@ -283,9 +293,20 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.38.0"
+__version__ = "0.39.0"
 
 __all__ = [
+    "REACH",
+    "ByteGrammar",
+    "Parsed",
+    "select_rule",
+    "add_grammar_command",
+    "address",
+    "reraise_as",
+    "load_prefix",
+    "require_ram",
+    "relocate_operands",
+    "walk_code",
     "AudioUnavailable",
     "BASIC_BOOT",
     "BASIC_RUN",
