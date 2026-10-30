@@ -32,8 +32,9 @@ def test_frequency_matches_the_grammar_package():
             assert frequency(note, clock) == notes.frequency(note, clock)
 
 
-def test_table_parts_and_negative_notes():
-    words = [0, frequency(0, PAL), frequency(1, PAL)]
+def test_table_parts_and_notes_below_c0():
+    words = [frequency(-1, PAL), frequency(0, PAL), frequency(1, PAL)]
+    assert 0 < words[0] < words[1]
     assert table(PAL, 2, -1, 3) == tuple(words)
     assert table(PAL, 0, -1, 3) == tuple(w & 255 for w in words)
     assert table(PAL, 1, -1, 3) == tuple(w >> 8 for w in words)
@@ -117,7 +118,7 @@ def test_native_mode_reads_memory(x):
 def test_standard_mode_answers_the_standard_word(clock, x):
     got = regs_of(parse(SPEC), [x, x, x], notes=clock)
     assert got["f"] == frequency(x, clock)
-    assert got["g"] == (frequency(x - 1, clock) if x else 0)
+    assert got["g"] == frequency(x - 1, clock)
     assert got["w"] == frequency(x + 3, clock)
     assert got["raw"] == NATIVE[x] & 255
 

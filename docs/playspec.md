@@ -216,8 +216,8 @@ C0, 24 is C2, 57 is A4.
 
 `SpecPlayer(..., notes=clock_hz)` (or `elaborate(..., standard=clock_hz)`) lowers each
 read of a declared cell to a lookup op that `pyexec` compiles to a precomputed table
-index. Any index is answered, past the native table's end included, and an index whose
-note is negative answers 0. Memory is never written, so the data overrun indexes reach
+index. Any index is answered, past the native table's end included, and an index below C0
+answers its note's word too. Memory is never written, so the data overrun indexes reach
 is intact. Without `notes` the declaration changes nothing: `elaborate`, `pyexec`,
 `smt`, `tv` and `unnative` see native memory. `smt` refuses a program lowered with
 `standard`. `native` blocks and the tune's own 6502 code still read the native table,
