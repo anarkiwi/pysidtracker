@@ -2,7 +2,7 @@
 
 ``find`` lists tunes by SIDId signature, ``run`` compares every subtune's oracle
 and ``module:function`` renderer grids, ``scope`` renders them without the oracle,
-``report`` tallies, ``compare`` moves verdicts against a baseline, ``diff`` shows
+``report`` tallies, ``changes`` lists moved verdicts, ``compare`` moves verdicts against a baseline, ``diff`` shows
 frames, ``triage`` classifies first differences and renderer ``info`` exact rates,
 ``leads`` tabulates every alignment lead's mismatches, ``file`` compares native
 files (bare PRGs wrapped as PSID) with their own player.
@@ -34,6 +34,7 @@ from .disasm import entry_labels
 from .errors import SidParseError
 from .formats import render as format_render
 from .jobs import deadline, results
+from .rendercache import CachedRender
 from .gridcmp import (  # the shared grid-diff core, re-exported for the survey API
     LEAD,
     NEAR,
@@ -106,6 +107,7 @@ RESULT_FIELDS = [
     "oracle_gated",
     "library_gated",
     "error",
+    "cache",
 ]
 FILE_FIELDS = RESULT_FIELDS + ["oracle"]
 FIDELITY_FIELDS = ["fidelity", "fidelity_first", "fidelity_regs", "fidelity_error"]
@@ -345,7 +347,8 @@ def check(job):
     except (SidtraceUnavailable, OSError, ValueError) as e:
         return dict(row, verdict="oracle_error", error=_err(e))
     data = Path(sid_path).read_bytes()
-    return library_row(row, oracle, render, data, song, timeout=timeout, lcsv=lcsv)
+    row = library_row(row, oracle, render, data, song, timeout=timeout, lcsv=lcsv)
+    return dict(row, cache=getattr(render, "last", ""))
 
 
 def as_sid(data, init=None, play=None):
@@ -562,12 +565,18 @@ def run(
     jobs=None,
     timeout=600,
 ):
-    """Compare every subtune; write ``results.csv`` under ``work``, return tallies."""
+    """Compare every subtune; write ``results.csv`` under ``work``, return tallies.
+
+    A ``--format`` renderer reuses ``work/render``: a subtune whose decoded model,
+    subtune and player code are unchanged since an earlier run (or ``snapshot build
+    --work``) is not rendered again."""
     work = Path(work)
     oracle_cache(work)
+    if isinstance(render, functools.partial) and render.func is format_render:
+        render = CachedRender(render.args[0], work / "render")
     tunes = player_tunes(tunes_csv, player)
     jobs_ = list(jobs_for(hvsc, tunes[:limit], work, render, timeout))
-    tally = Counter()
+    tally, seen = Counter(), Counter()
     with open(work / "results.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, RESULT_FIELDS)
         w.writeheader()
@@ -575,7 +584,8 @@ def run(
         for row in bar:
             w.writerow(row)
             tally[row["verdict"]] += 1
-            bar.set_postfix(tally)
+            seen[row.get("cache", "")] += 1
+            bar.set_postfix(dict(tally, rendered=seen["miss"], reused=seen["hit"]))
     return tally
 
 
@@ -847,6 +857,37 @@ def transitions(base, rows):
         if k in base and base[k]["verdict"] == "exact" and r["verdict"] != "exact"
     )
     return moves, lost
+
+
+def changes(base, head):
+    """``(key, before, after, first_before, first_after)`` of every subtune whose
+    verdict or first-divergence frame differs between two ``results.csv`` row maps
+    (:func:`read_results`); a key one side lacks reads ``missing``."""
+    out = []
+    for key in sorted(base.keys() | head.keys()):
+        old, new = base.get(key, {}), head.get(key, {})
+        move = (
+            old.get("verdict", "missing"),
+            new.get("verdict", "missing"),
+            old.get("first_diff", ""),
+            new.get("first_diff", ""),
+        )
+        if move[0] != move[1] or move[2] != move[3]:
+            out.append((key, *move))
+    return out
+
+
+def changes_cli(base, head):
+    """Print the subtunes whose verdict or first-divergence frame moved from the
+    BASE to the HEAD ``results.csv``; returns the changes."""
+    old, new = read_results(base), read_results(head)
+    rows = changes(old, new)
+    for key, before, after, first_before, first_after in rows:
+        path = (new.get(key) or old.get(key))["path"]
+        moved = f" first_diff {first_before or '-'} -> {first_after or '-'}"
+        print(f"{key} {path}: {before} -> {after}{moved if before == after else ''}")
+    print(f"{len(rows)} of {len(old.keys() | new.keys())} subtunes changed")
+    return rows
 
 
 def compare_results(results_csv, keylists=(), base=None, near=NEAR):
@@ -1127,7 +1168,7 @@ def triage(work, jobs=None, top=15, max_values=20, near=NEAR):
 
 def main(argv=None):
     """``python -m pysidtracker.survey``:
-    ``find run scope report diff triage leads explain match variants file``."""
+    ``find run scope report changes diff triage leads explain match variants file``."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("find", help=find.__doc__)
@@ -1243,6 +1284,9 @@ def main(argv=None):
     p.add_argument("results")
     p.add_argument("keylists", nargs="*", help="files of <md5>_<song> keys")
     p.add_argument("--base", help="baseline results.csv to compare verdicts with")
+    p = sub.add_parser("changes", help=changes_cli.__doc__)
+    p.add_argument("base", help="baseline results.csv")
+    p.add_argument("head", help="results.csv to compare with it")
     p = sub.add_parser("triage", help=triage.__doc__)
     p.add_argument("work")
     p.add_argument("--jobs", type=int, default=os.cpu_count())
@@ -1313,6 +1357,8 @@ def main(argv=None):
         )
     elif a.cmd == "triage":
         triage(a.work, a.jobs, a.top, near=a.near)
+    elif a.cmd == "changes":
+        changes_cli(a.base, a.head)
     elif a.cmd == "compare":
         compare_results(a.results, a.keylists, a.base, a.near)
     elif a.cmd == "match":
