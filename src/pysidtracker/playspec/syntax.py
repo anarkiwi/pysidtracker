@@ -222,6 +222,15 @@ class _ToAst(Transformer):
     def stream(self, meta, c):
         return self._n("stream", meta, str(c[0]), c[1], c[2], c[3:])
 
+    def native(self, meta, c):
+        return self._n(
+            "native", meta, c[0], [a for a in c[1:-1] if a is not None], c[-1]
+        )
+
+    def narg(self, meta, c):
+        del meta
+        return str(c[0]), c[1]
+
     def gsel(self, meta, c):
         del meta
         return str(c[0])[1:-1], c[1] if len(c) > 1 else None

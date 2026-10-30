@@ -14,6 +14,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import z3
 from tqdm import tqdm
 
+from ..errors import SidError
 from .ir import K, Program, Rd, V
 
 BV16 = z3.BitVecSort(16)
@@ -165,6 +166,8 @@ class Executor:
                 self.branch(s, st, guard)
             elif tag == "loop":
                 self.loop(s, st, guard)
+            elif tag == "native":
+                raise SidError("native 6502 code is opaque to the solver")
             elif tag == "assert":
                 cond = self.expr(s[1], st)
                 st.obligations.append((_and(guard, z3.Not(cond)), s[2]))

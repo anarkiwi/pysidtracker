@@ -24,6 +24,10 @@ _FLAGS = {"c": 0x01, "z": 0x02, "i": 0x04, "d": 0x08, "v": 0x40, "n": 0x80}
 Binder = Callable[[bytes, int], dict]
 
 
+class NativeEscape(Exception):
+    """A ``native`` block left the spec: the CPU ran the rest of the call."""
+
+
 class SpecPlayer(EmuPlayer):
     """A :class:`~pysidtracker.oracle.EmuPlayer` whose play calls run ``spec``.
 
@@ -56,6 +60,8 @@ class SpecPlayer(EmuPlayer):
         self._compiled: Dict[Tuple[int, int], tuple] = {}
         self._entry_sets: Dict[int, frozenset] = {}
         self.validator = StreamValidator() if validate else None
+        self._native_state: Optional[dict] = None
+        self._in_call = False
         self.entry: Optional[int] = None
         kwargs.setdefault("max_cycles", MAX_CYCLES)
         super().__init__(image, load, init, play, subtune, **kwargs)
@@ -120,7 +126,48 @@ class SpecPlayer(EmuPlayer):
         mpu.pc, mpu.sp, mpu.a, mpu.x, mpu.y, mpu.p, mpu.processorCycles = regs
         return entry
 
-    def _run(self, entry: int) -> None:
+    def _native(self, addr: int, regs: dict, resume: int) -> None:
+        """Run the tune's 6502 code from ``addr`` until it reaches ``resume``; if
+        the call returns first, the CPU has finished it and the spec is over."""
+        mpu = self._mpu
+        mine = self._native_state
+        if mine["saved"] is None:
+            mine["saved"] = (mpu.pc, mpu.sp, mpu.a, mpu.x, mpu.y, mpu.p)
+            if mine["base"] is None:  # the spec runs at the play call: give it a caller
+                for byte in (0x00, 0x01):
+                    self._obs[0x0100 + mpu.sp] = byte
+                    mpu.sp = (mpu.sp - 1) & 0xFF
+                mine["base"] = mpu.sp
+        for reg, value in regs.items():
+            setattr(mpu, reg, value)
+        mpu.pc = addr
+        start = mpu.processorCycles
+        while mpu.pc != resume:
+            if mpu.sp > mine["base"]:
+                raise NativeEscape()
+            if mpu.processorCycles - start >= self._max_cycles:
+                raise SidParseError(
+                    f"native code at ${addr:04x} never reaches ${resume:04x}"
+                )
+            mpu.step()
+
+    def _run(self, entry: int) -> bool:
+        """Run the spec at ``entry``; True if native code left it and the CPU finished the call."""
+        mpu = self._mpu
+        self._native_state = {"base": mpu.sp if self._in_call else None, "saved": None}
+        try:
+            self._frame_of(entry)
+        except NativeEscape:
+            saved = self._native_state["saved"]
+            if not self._in_call:
+                mpu.pc, mpu.sp, mpu.a, mpu.x, mpu.y, mpu.p = saved
+            return True
+        saved = self._native_state["saved"]
+        if saved is not None:  # resumed: the spec models no register outputs
+            mpu.pc, mpu.sp, mpu.a, mpu.x, mpu.y, mpu.p = saved
+        return False
+
+    def _frame_of(self, entry: int) -> None:
         program, frame, state = self._instance(entry)
         hook = None
         if self.validator is not None:
@@ -128,7 +175,7 @@ class SpecPlayer(EmuPlayer):
         mpu = self._mpu
         regs = {"a": mpu.a, "x": mpu.x, "y": mpu.y}
         regs.update((f, bool(mpu.p & bit)) for f, bit in _FLAGS.items())
-        frame(self._bus.__getitem__, self._store, state, hook, regs)
+        frame(self._bus.__getitem__, self._store, state, hook, regs, self._native)
 
     def _store(self, addr: int, value: int) -> None:
         """A spec store: RAM (the SID band included), and the bank port on the bus."""
@@ -138,6 +185,7 @@ class SpecPlayer(EmuPlayer):
 
     def _frame(self) -> None:
         if self._play_addr == self.entry:
+            self._in_call = False
             self._run(self.entry)
         else:
             self._call(self._play_addr)
@@ -157,7 +205,9 @@ class SpecPlayer(EmuPlayer):
                 continue
             if probe:
                 return mpu.pc
-            self._run(mpu.pc)
+            self._in_call = True
+            if self._run(mpu.pc):
+                continue
             mpu.sp = (mpu.sp + 2) & 0xFF
             ret = bus[0x00FF + mpu.sp] | (bus[0x0100 + mpu.sp] << 8)
             mpu.pc = (ret + 1) & 0xFFFF

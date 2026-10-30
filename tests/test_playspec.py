@@ -286,7 +286,7 @@ def test_schedule_order_and_signals():
 
 def test_python_source_is_one_function():
     text = python_source(lower(SCHEDULED, BIND))
-    assert text.startswith("def frame(R, W, C, G=None, P=None):")
+    assert text.startswith("def frame(R, W, C, G=None, P=None, N=None):")
     with pytest.raises(Exception, match="without a binding"):
         compile_program(lower(SCHEDULED))
 
@@ -606,3 +606,75 @@ def test_stream_grammar_rule_follows_layout():
         assert program.grammars == [
             (f"tests.test_bytegrammar:TOY:{rule}", program.grammars[0][1])
         ]
+
+
+NATIVE_SPEC = """
+spec hooked;
+layout { freq, sid, hook, tail: addr; }
+cell sid: u8[32] @ L.sid out;
+machine m {
+  cell freq: u8 @ L.freq;
+  step {
+    let v = freq;
+    native L.hook(a = v) resumes L.tail;
+    freq += 3; sid[0] := freq; sid[4] := 0x41;
+  }
+}
+schedule { m; }
+"""
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_native_hook_resumes_or_hands_the_call_to_the_cpu(wrapped):
+    code, labels = assemble(
+        """
+init:
+  lda #$10
+  sta $1300
+  rts
+play:
+  lda $1300
+  jmp hook
+tail:
+  clc
+  adc #$03
+  sta $1300
+  sta $d400
+  lda #$41
+  sta $d404
+  rts
+hook:
+  cmp #$40
+  beq away
+  jmp tail
+away:
+  lda #$00
+  sta $1300
+  sta $d400
+  rts
+wrap:
+  jsr play
+  rts
+""",
+        0x1000,
+    )
+    play = labels["wrap" if wrapped else "play"]
+    image = build_psid(code, 0x1000, init=labels["init"], play=play)[0x7C:]
+    binding = {
+        "freq": 0x1300,
+        "sid": 0xD400,
+        "hook": labels["hook"],
+        "tail": labels["tail"],
+    }
+    player = SpecPlayer(
+        parse(NATIVE_SPEC),
+        image,
+        0x1000,
+        labels["init"],
+        play,
+        bind=lambda v, e: binding,
+        entries=lambda view: {labels["play"]},
+    )
+    reference = EmuPlayer(image, 0x1000, labels["init"], play)
+    frames = whole_song(60)
+    assert player.render_grid(frames) == reference.render_grid(frames)

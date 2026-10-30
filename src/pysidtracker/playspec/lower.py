@@ -1005,6 +1005,21 @@ class Lowerer:
             out.append(("hook", len(self.grammars) - 1, V(b, 16)))
         return out
 
+    def st_native(self, node, scope):
+        """``native addr(a = e, x = e, y = e) resumes pc``: run the tune's own 6502
+        code from ``addr``; the spec goes on if it reaches ``pc``, else the CPU
+        finishes the call."""
+        _tag, line, addr, args, resume = node
+        regs = []
+        for reg, value in args:
+            if reg not in ("a", "x", "y") or any(reg == r for r, _ in regs):
+                self.error(line, "native arguments are a, x and y, each at most once")
+                continue
+            regs.append((reg, self.coerce(self.expr(value, scope), 8, line)))
+        addr_v = self.coerce(self.expr(addr, scope), 16, line)
+        resume_v = self.coerce(self.expr(resume, scope), 16, line)
+        return [("native", addr_v, tuple(regs), resume_v)]
+
     def select_grammar(self, alts, scope, line: int) -> Optional[str]:
         """The rule of the first ``"ref" if cond`` arm that holds (an arm with no
         condition always holds); ``cond`` is static, so the layout picks the rule."""
