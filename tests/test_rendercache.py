@@ -55,6 +55,23 @@ def test_player_version_follows_player_modules(tmp_path, monkeypatch):
     assert rendercache.player_version(fmt) != before
 
 
+def test_player_version_follows_package_data_files(tmp_path, monkeypatch):
+    pkg = tmp_path / "tmp_data_pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    spec = pkg / "tracker.play"
+    spec.write_text("one")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    fmt = TOY.__class__(
+        **{**TOY.__dict__, "player_modules": ("tmp_data_pkg:tracker.play",)}
+    )
+    before = rendercache.player_version(fmt)
+    assert before != rendercache.player_version(TOY)
+    spec.write_text("two")
+    rendercache._modules_digest.cache_clear()  # pylint: disable=protected-access
+    assert rendercache.player_version(fmt) != before
+
+
 def test_corrupt_entry_is_a_miss(tmp_path):
     cache = RenderCache(tmp_path)
     cache.grid(TOY, _model(), 1, 4)
