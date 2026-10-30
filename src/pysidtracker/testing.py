@@ -29,6 +29,7 @@ import argparse
 import ast
 import contextlib
 import fcntl
+import functools
 import hashlib
 import http.client
 import io
@@ -46,13 +47,15 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable, List, Mapping, Optional, Tuple
 
 from .d64 import D64File, read_d64
-from .errors import SidError
+from .errors import IncompleteComparison, SidError
+from .formats import start_subtune
 from .gridcmp import verdict_lead
 from .oracle import (
     SIDTRACE_IMAGE,
     aligned_match,
     ShortTrace,
     cached_sidtrace,
+    play_calls,
     play_seconds,
     register_grid,
     render_seconds,
@@ -465,6 +468,84 @@ def make_tune_fixtures(
     return tune_id, tune_path
 
 
+SONGLENGTHS = "DOCUMENTS/Songlengths.md5"
+
+
+def songlengths_root(hvsc=None, local_env: str = "HVSC") -> Path:
+    """An HVSC root holding :data:`SONGLENGTHS`: the local ``$HVSC`` tree (via
+    ``local_env``) when it has one, else ``hvsc`` (default
+    :func:`default_tune_cache`), fetched there from the mirror when missing."""
+    local = os.environ.get(local_env) if local_env else None
+    if local and (Path(local) / SONGLENGTHS).is_file():
+        return Path(local)
+    root = Path(hvsc if hvsc is not None else default_tune_cache())
+    dest = root / SONGLENGTHS
+    if not dest.is_file():
+        _atomic_write(dest, _download(f"{_mirror(DEFAULT_MIRROR)}/{SONGLENGTHS}"))
+    return root
+
+
+@functools.lru_cache(maxsize=4)
+def _songlengths(root: str, _mtime: int) -> Mapping[str, List[float]]:
+    from .survey import songlengths  # survey imports this module
+
+    return songlengths(root)
+
+
+def song_length(
+    tune, song: Optional[int] = 1, *, hvsc=None, local_env: str = "HVSC"
+) -> float:
+    """The seconds of 1-based ``song`` (``None``: the start song) of ``tune`` (a path
+    or bytes): HVSC's ``Songlengths.md5`` entry for the file's MD5 (see
+    :func:`songlengths_root` for ``hvsc``/``local_env``), else
+    :data:`~pysidtracker.oracle.DEFAULT_SECONDS`."""
+    from .survey import song_seconds
+
+    data = (
+        bytes(tune) if isinstance(tune, (bytes, bytearray)) else Path(tune).read_bytes()
+    )
+    if song is None:
+        song = start_subtune(data) + 1
+    root = songlengths_root(hvsc, local_env)
+    table = _songlengths(str(root), (root / SONGLENGTHS).stat().st_mtime_ns)
+    return song_seconds(table.get(hashlib.md5(data).hexdigest(), []), song)
+
+
+def song_frames(
+    tune, song: Optional[int] = 1, *, hvsc=None, local_env: str = "HVSC"
+) -> int:
+    """The play calls of 1-based ``song`` (``None``: the start song) of ``tune``
+    (a path or bytes) over its whole :func:`song_length`, at the tune's
+    :func:`~pysidtracker.cadence.playroutine_cadence`
+    (:func:`~pysidtracker.oracle.play_calls`). Every render comparison covers this.
+    """
+    data = (
+        bytes(tune) if isinstance(tune, (bytes, bytearray)) else Path(tune).read_bytes()
+    )
+    seconds = song_length(data, song, hvsc=hvsc, local_env=local_env)
+    return play_calls(data, seconds, song)
+
+
+def whole_song(length):
+    """``length`` (frames or seconds), declared the whole length of a synthetic
+    test song.
+
+    The one way a test gives a render or comparison a literal length that
+    :func:`pysidtracker.lint.truncated_comparisons` accepts: the number is the
+    song's length, never a sampling window of a longer one.
+    """
+    return length
+
+
+def require_whole(grid, frames: int, what: str = "reference") -> None:
+    """Raise :class:`~pysidtracker.errors.IncompleteComparison` unless ``grid``
+    covers ``frames`` (a song's whole length)."""
+    if len(grid) < frames:
+        raise IncompleteComparison(
+            f"{what} covers {len(grid)} of the song's {frames} frames"
+        )
+
+
 def oracle_grid(
     tune_path,
     *,
@@ -477,16 +558,19 @@ def oracle_grid(
     cycles_per_frame: Optional[int] = None,
     force: bool = False,
     song: Optional[int] = None,
+    hvsc=None,
+    local_env: str = "HVSC",
 ):
     """Per-frame reference grid for ``tune_path`` from the sidtrace oracle.
 
     ``song`` is 1-based; ``None`` plays the header's start song. The CSV is
     cached at ``oracle_cache/<stem>.csv.zst`` (default ``default_cache("csv")``) (``<stem>_<song>`` for a given
     ``song``) while present (``force`` re-renders). ``cycles_per_frame`` fixes
-    the cadence. Returns the first ``frames`` rows (all when ``None``), the last
-    write repeated through the play calls after it. ``seconds`` defaults to the
-    ``frames`` play calls at the tune's :func:`~pysidtracker.cadence.playroutine_cadence`
-    (60 without ``frames``); a cached trace covering fewer calls is re-rendered and
+    the cadence. Returns ``frames`` rows, by default the song's whole length
+    (:func:`song_frames` with ``hvsc``/``local_env``), the last write repeated
+    through the play calls after it. ``seconds`` defaults to the ``frames`` play
+    calls at the tune's :func:`~pysidtracker.cadence.playroutine_cadence`; a cached
+    trace covering fewer calls is re-rendered and
     :class:`~pysidtracker.oracle.ShortTrace` raised if it still falls short.
     """
     tune_path = Path(tune_path)
@@ -494,14 +578,14 @@ def oracle_grid(
     extra = {} if song is None else {"song": song}
     oracle_cache = oracle_cache if oracle_cache is not None else default_cache("csv")
     csv_path = Path(oracle_cache) / f"{stem}.csv.zst"
+    if frames is None:
+        frames = song_frames(tune_path, song, hvsc=hvsc, local_env=local_env)
     if seconds is None:
-        seconds = (
-            render_seconds(play_seconds(tune_path, frames, song)) if frames else 60
-        )
+        seconds = render_seconds(play_seconds(tune_path, frames, song))
     rows = cached_sidtrace(
         tune_path,
         csv_path,
-        calls=frames or 0,
+        calls=frames,
         force=force,
         seconds=seconds,
         image=image,
@@ -513,8 +597,6 @@ def oracle_grid(
         reg_count=reg_count,
         cycles_per_frame=cycles_per_frame,
     )
-    if not frames:
-        return grid
     have = sidtrace_calls(rows, chip=chip, cycles_per_frame=cycles_per_frame)
     if have < frames:
         raise ShortTrace(
@@ -523,35 +605,37 @@ def oracle_grid(
     return grid[:frames] + [grid[-1][:] for _ in range(frames - len(grid))]
 
 
+def _register_render(data, nframes, song):
+    return register_grid(data, nframes, subtune=song - 1)
+
+
 def decode_fidelity(
     original,
     rebuilt,
     *,
     render=None,
-    frames: int = 250,
     song: int = 1,
     max_lead: int = 0,
+    hvsc=None,
+    local_env: str = "HVSC",
 ):
     """The :class:`~pysidtracker.gridcmp.Verdict` of ``rebuilt``'s replay against ``original``'s.
 
     For formats whose playback emulates the tune's own code, the sidtrace oracle
     never exercises the decoded model: a wrong decode still renders exact. Rebuild
     a playable image from the decoded model (the format's writer, or the tracker's
-    own packer under emulation) and pass both images here: each is rendered for
-    ``frames`` frames of 1-based ``song`` and the grids compared, the rebuilt one
-    allowed up to ``max_lead`` frames of silent lead-in. ``render`` is
-    ``render(data, nframes, song) -> grid`` (default
+    own packer under emulation) and pass both images here: each is rendered over
+    1-based ``song``'s whole length (:func:`song_frames` of ``original``) and the
+    grids compared, the rebuilt one allowed up to ``max_lead`` frames of silent
+    lead-in. ``render`` is ``render(data, nframes, song) -> grid`` (default
     :func:`~pysidtracker.oracle.register_grid` on the image, so both sides run their
     own code).
     """
-    if render is None:
-
-        def render(data, nframes, song):
-            return register_grid(data, nframes, subtune=song - 1)
-
-    want = render(original, frames + max_lead, song)
+    render = render or _register_render
+    frames = song_frames(original, song, hvsc=hvsc, local_env=local_env)
+    want = render(original, frames, song)
     got = render(rebuilt, frames + max_lead, song)
-    return verdict_lead(want[:frames], got, max_lead=max_lead)
+    return verdict_lead(want, got, max_lead=max_lead, whole=frames)
 
 
 def assert_decode_fidelity(
@@ -559,23 +643,25 @@ def assert_decode_fidelity(
     rebuild,
     *,
     render=None,
-    frames: int = 250,
     song: int = 1,
     max_lead: int = 0,
     name: str = "",
+    hvsc=None,
+    local_env: str = "HVSC",
 ) -> None:
     """Assert the model decoded from ``data`` rebuilds an image that replays as ``data`` does.
 
     ``rebuild(data) -> bytes`` decodes ``data`` and writes the playable image back
-    out; see :func:`decode_fidelity` for the comparison and ``render``.
+    out; see :func:`decode_fidelity` for the whole-song comparison and ``render``.
     """
     verdict = decode_fidelity(
         data,
         rebuild(data),
         render=render,
-        frames=frames,
         song=song,
         max_lead=max_lead,
+        hvsc=hvsc,
+        local_env=local_env,
     )
     if not verdict.ok:
         raise AssertionError(
@@ -593,9 +679,13 @@ def assert_matches(
     max_lead: int = 0,
     name: str = "",
     report_dir=None,
+    hvsc=None,
+    local_env: str = "HVSC",
 ) -> None:
     """Assert ``make_player(data)`` renders ``reference``; else fail with the explanation.
 
+    ``reference`` (``None``: jennings' render) must cover the song's whole length
+    (:func:`song_frames`), else :class:`~pysidtracker.errors.IncompleteComparison`.
     The failure message is :meth:`~pysidtracker.whydiff.Divergence.text`: both sides'
     dataflow of the first diverging cell, the state it read chased to where it parted,
     and full traced histories; saved to ``report_dir/<name>.txt``/``.json`` when given.
@@ -603,12 +693,16 @@ def assert_matches(
     from .whydiff import explain_divergence
 
     name = name or "tune"
+    frames = song_frames(data, song, hvsc=hvsc, local_env=local_env)
+    if reference is not None:
+        require_whole(reference, frames)
     why = explain_divergence(
         data,
         make_player,
         reference,
         song=song,
         max_lead=max_lead,
+        frames=frames,
         name=name,
         state=True,
     )
@@ -630,14 +724,13 @@ def assert_oracle_match(
     *,
     hvsc_cache=None,
     oracle_cache=None,
-    frames: int = 250,
     song: int = 1,
-    seconds=None,
     max_lead: int = 0,
     local_env: str = "HVSC",
     report_dir=None,
 ) -> None:
-    """:func:`assert_matches` of an HVSC tune against its sidtrace oracle grid.
+    """:func:`assert_matches` of an HVSC tune's whole ``song`` against its sidtrace
+    oracle grid.
 
     ``make_player(data)`` returns the library's
     :class:`~pysidtracker.player.MemPlayer` for the tune's bytes.
@@ -648,9 +741,9 @@ def assert_oracle_match(
     expected = oracle_grid(
         path,
         oracle_cache=oracle_cache,
-        seconds=seconds,
-        frames=frames,
         song=song,
+        hvsc=hvsc_cache,
+        local_env=local_env,
     )
     assert_matches(
         Path(path).read_bytes(),
@@ -660,6 +753,8 @@ def assert_oracle_match(
         max_lead=max_lead,
         name=relpath,
         report_dir=report_dir,
+        hvsc=hvsc_cache,
+        local_env=local_env,
     )
 
 
@@ -669,8 +764,6 @@ def make_oracle_fixtures(
     hvsc_cache=None,
     oracle_cache=None,
     render=register_grid,
-    frames: int = 250,
-    seconds=None,
     image: str = SIDTRACE_IMAGE,
     local_env: str = "HVSC",
     chip: int = 0,
@@ -684,8 +777,9 @@ def make_oracle_fixtures(
     ``tunes`` maps a tune id to its HVSC relative path. For each tune the
     ``oracle_match`` fixture resolves the ``.sid`` (local ``$HVSC`` tree, else
     ``hvsc_cache``, else download -- see :func:`resolve_tune`), renders the
-    sidtrace oracle grid (cached in ``oracle_cache``), and returns a zero-arg
-    callable that renders the library's player and asserts a frame-exact match::
+    sidtrace oracle grid of the start song's whole length (:func:`song_frames`,
+    cached in ``oracle_cache``), and returns a zero-arg callable that renders the
+    library's player and asserts a frame-exact match::
 
         tune_id, oracle_match = make_oracle_fixtures(
             TUNES, hvsc_cache=HVSC, oracle_cache=CSV, render=my_render)
@@ -701,8 +795,7 @@ def make_oracle_fixtures(
     These tests are never skipped: an unavailable tune raises
     :class:`TuneFetchError` and a missing/failed oracle raises
     :class:`~pysidtracker.oracle.SidtraceUnavailable`, so a broken download or
-    oracle fails the test rather than hiding a regression. ``seconds`` defaults
-    to ``frames`` play calls at the tune's cadence (see :func:`oracle_grid`).
+    oracle fails the test rather than hiding a regression.
     """
     import pytest  # lazy: pytest is only a dev dependency
 
@@ -717,10 +810,11 @@ def make_oracle_fixtures(
         path = resolve_tune(tunes[tune_id], cache_dir=hvsc_cache, local_env=local_env)
         if path is None:
             raise TuneFetchError(f"tune {tune_id} unavailable (offline, not cached)")
+        data = Path(path).read_bytes()
+        frames = song_frames(data, None, hvsc=hvsc_cache, local_env=local_env)
         expected = oracle_grid(
             path,
             oracle_cache=oracle_cache,
-            seconds=seconds,
             frames=frames,
             image=image,
             chip=chip,
@@ -729,16 +823,21 @@ def make_oracle_fixtures(
 
         def _match():
             if player is not None:
+                song = start_subtune(data) + 1
                 assert_matches(
-                    Path(path).read_bytes(),
+                    data,
                     player,
                     expected,
+                    song=song,
                     max_lead=max_lead,
                     name=tunes[tune_id],
                     report_dir=report_dir,
+                    hvsc=hvsc_cache,
+                    local_env=local_env,
                 )
                 return
-            rendered = render(Path(path).read_bytes(), len(expected))
+            rendered = render(data, frames + max_lead)
+            require_whole(rendered, frames + max_lead, "render")
             assert aligned_match(
                 expected, rendered, max_lead=max_lead
             ), f"tune {tune_id}: player render does not match the sidtrace oracle"

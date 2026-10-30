@@ -2,7 +2,7 @@
 
 Marked ``oracle`` (Docker + network, run by the CI oracle job): every synthetic
 tune in :mod:`tests.irqhost_tunes` and real HVSC RSIDs whose digis run from
-NMIs or main loops must log exactly the rows sidplayfp logs.
+NMIs or main loops must log exactly the rows sidplayfp logs, over the whole song.
 """
 
 import os
@@ -12,7 +12,7 @@ import pytest
 from pysidtracker.irqhost import InterruptHost
 from pysidtracker.oracle import cached_sidtrace
 from pysidtracker.survey import ORACLE_ARGS
-from pysidtracker.testing import default_cache, resolve_tune
+from pysidtracker.testing import default_cache, resolve_tune, song_length, whole_song
 
 from . import irqhost_tunes as tunes
 
@@ -25,7 +25,7 @@ HVSC_RSIDS = {
 
 
 def _assert_same_trace(sid, seconds, song=1, name=None):
-    trace = _CACHE / f"{name or sid.stem}_{song}.csv.zst"
+    trace = _CACHE / f"{name or sid.stem}_{song}_{seconds:g}s.csv.zst"
     user = f"{os.getuid()}:{os.getgid()}"
     want = cached_sidtrace(
         sid, trace, seconds=seconds + 1, song=song, user=user, extra_args=ORACLE_ARGS
@@ -45,7 +45,7 @@ def test_synthetic_trace_matches_sidtrace(name):
     sid = _CACHE / f"{name}.sid"
     sid.parent.mkdir(parents=True, exist_ok=True)
     sid.write_bytes(tunes.build(name))
-    _assert_same_trace(sid, 2)
+    _assert_same_trace(sid, whole_song(2))
 
 
 @pytest.mark.oracle
@@ -54,4 +54,4 @@ def test_hvsc_rsid_trace_matches_sidtrace(name):
     relpath, song = HVSC_RSIDS[name]
     sid = resolve_tune(relpath)
     assert sid is not None, f"{relpath} unreachable"
-    _assert_same_trace(sid, 10, song, name)
+    _assert_same_trace(sid, song_length(sid, song), song, name)

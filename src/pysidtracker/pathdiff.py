@@ -253,7 +253,7 @@ def _unique_rows(mat: sparse.csr_matrix, fail: bool):
     return mat[first], count
 
 
-def record(data, song, left, right, mode="lead", nframes=250, ocsv=None) -> dict:
+def record(data, song, left, right, mode, nframes, ocsv=None) -> dict:
     """Both sides' paths over ``nframes`` aligned frames up to their first divergence.
 
     ``names``/``labels`` are prefixed feature names and texts; ``indptr``/``indices``

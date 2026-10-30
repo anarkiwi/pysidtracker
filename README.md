@@ -66,7 +66,8 @@ API.
   pin raises `ChecksumMismatch`), and
   `make_oracle_fixtures` / `oracle_grid` — a reusable byte-exact player-vs-`sidtrace`-oracle test
   ([docs/oracle-testing.md](docs/oracle-testing.md)); `assert_matches` /
-  `assert_oracle_match` fail with the `whydiff` explanation.
+  `assert_oracle_match` fail with the `whydiff` explanation. Comparisons cover whole
+  songs (`song_frames`); shorter ones raise `IncompleteComparison`.
 - `whydiff` — why a `MemPlayer` render diverges: the player's traced Python lines
   (values read, branches, assignments) beside the jennings 6502 history, with each
   side's backward dataflow of the diverging value, and the state behind it chased to
@@ -174,7 +175,7 @@ API.
 - `editor` — `run_editor` / `editor_replay` run an editor's own LOAD decoder and
   live player on its RAM image; `trace_init_argument` / `init_arguments` trace
   the argument each subtune's init hands the player ([docs/editor.md](docs/editor.md)).
-- `snapshot` — corpus digests of each tune's model and `SidFormat.probes` and
+- `snapshot` — corpus digests of each tune's model, whole-song render and `SidFormat.probes` and
   their diff (`pysidtracker snapshot build|diff`), proving a refactor
   behaviour-preserving; `expected_errors` with `testing.corpus_params` /
   `check_outcome` turn one into exact-outcome corpus test cases.
@@ -226,7 +227,7 @@ pip install -e ".[dev]"
 pytest --cov=pysidtracker
 ```
 
-Dead-symbol / doc-reference lint for dependents: [docs/lint.md](docs/lint.md).
+Dead-symbol / doc-reference / truncated-comparison lint for dependents: [docs/lint.md](docs/lint.md).
 
 See [docs/design.md](docs/design.md) for the detection model and shared
 primitives.

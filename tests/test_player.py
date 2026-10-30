@@ -2,6 +2,7 @@
 
 from pysidtracker import MemPlayer, register_writes_from_player
 from pysidtracker.registers import PW_HI_REGS, SID_BASE, SID_REG_COUNT
+from pysidtracker.testing import whole_song
 
 
 class _CountPlayer(MemPlayer):
@@ -34,14 +35,14 @@ def test_first_frame_emits_all_then_diffs():
 
 def test_render_grid():
     player = _CountPlayer(b"", 0x1000)
-    grid = player.render_grid(3)
+    grid = player.render_grid(whole_song(3))
     assert [row[0] for row in grid] == [0x11, 0x12, 0x13]
     assert all(len(row) == SID_REG_COUNT for row in grid)
 
 
 def test_iter_frames_bounded():
     player = _CountPlayer(b"", 0x1000)
-    frames = list(player.iter_frames(max_frames=2))
+    frames = list(player.iter_frames(max_frames=whole_song(2)))
     assert len(frames) == 2
 
 

@@ -37,7 +37,7 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple, 
 from vagrant_moses import memmap as mm
 
 from . import registers as reg
-from .cadence import playroutine_cadence
+from .cadence import cadence_from_latch, playroutine_cadence
 from .emu import run_to_rts, run_to_rts_until, set_iomap, wire_mpu
 from .errors import SidError, SidParseError
 from .image import SidImage
@@ -49,6 +49,8 @@ _SIDWR_REC = struct.Struct("<qHBB")
 
 # The published ``sidplayfp`` register-trace oracle (deterministic power-on delay).
 SIDTRACE_IMAGE = "anarkiwi/sidtrace:latest"
+# Seconds of a song HVSC lists no length for.
+DEFAULT_SECONDS = 180
 
 # The ``.csv`` column order emitted by the sidtrace oracle.
 SIDTRACE_COLUMNS = (
@@ -634,17 +636,30 @@ def render_seconds(seconds: float) -> int:
     return math.ceil(seconds) + 1
 
 
-def play_seconds(tune, calls: int, song: Optional[int] = None) -> float:
-    """Seconds ``calls`` play calls of 1-based ``song`` (default the header's start
-    song) of ``tune`` (a path or bytes) span at its :func:`playroutine_cadence`."""
+def _calls_per_second(tune, song: Optional[int]) -> float:
+    """The play-call rate of 1-based ``song`` (default the header's start song) of
+    ``tune`` (a path or bytes) at its :func:`playroutine_cadence`; a headerless
+    image plays once a PAL frame."""
     data = (
         bytes(tune) if isinstance(tune, (bytes, bytearray)) else Path(tune).read_bytes()
     )
     image = SidImage.from_bytes(data)
-    if song is None:
-        song = image.header.start_song if image.header is not None else 1
-    cadence = playroutine_cadence(image, subtune=max(song, 1) - 1)
-    return calls / cadence.calls_per_second
+    if image.header is None:
+        return cadence_from_latch(None).calls_per_second
+    song = image.header.start_song if song is None else song
+    return playroutine_cadence(image, subtune=max(song, 1) - 1).calls_per_second
+
+
+def play_seconds(tune, calls: int, song: Optional[int] = None) -> float:
+    """Seconds ``calls`` play calls of 1-based ``song`` (default the header's start
+    song) of ``tune`` (a path or bytes) span at its :func:`playroutine_cadence`."""
+    return calls / _calls_per_second(tune, song)
+
+
+def play_calls(tune, seconds: float, song: Optional[int] = None) -> int:
+    """The whole play calls of ``song`` of ``tune`` in ``seconds``: the inverse of
+    :func:`play_seconds`."""
+    return int(seconds * _calls_per_second(tune, song))
 
 
 def cached_sidtrace(

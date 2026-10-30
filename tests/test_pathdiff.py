@@ -24,6 +24,7 @@ from pysidtracker.oracle import (
 )
 from pysidtracker.registers import PAL_CYCLES_PER_FRAME
 from pysidtracker.paths import PySubject
+from pysidtracker.testing import whole_song
 
 from .helpers import DATA_OFFSET, build_psid, fake_sidtrace
 
@@ -387,7 +388,9 @@ def test_sides_and_comparisons(corpus, monkeypatch):
     monkeypatch.setattr(pd, "find_format", lambda d, name: Fmt)
     fmt = pd.subject("format:toyfmt", data, 1)
     assert fmt.label == "toyfmt"
-    assert fmt.make().render_grid(4) == native.make().render_grid(4)
+    assert fmt.make().render_grid(whole_song(4)) == native.make().render_grid(
+        whole_song(4)
+    )
 
     assert pd.prefixes("python", "python") == ("python-left:", "python-right:")
     assert pd.slug("format:goattracker2") == "format.goattracker2"

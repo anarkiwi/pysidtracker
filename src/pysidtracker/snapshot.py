@@ -1,7 +1,8 @@
 """Corpus snapshots: digests of what a format makes of every tune, and their diff.
 
-A snapshot maps each tune to the digest of its decoded model and of every probe
-(``SidFormat.probes`` plus ``name=module:attr`` specs), or the error raised, so
+A snapshot maps each tune to the digest of its decoded model, of its start song's
+whole-length render (:data:`RENDER`) and of every probe (``SidFormat.probes`` plus
+``name=module:attr`` specs), or the error raised, so
 two snapshots taken around a refactor show exactly which tunes it changed
 (``pysidtracker snapshot build|diff``).
 """
@@ -15,14 +16,17 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
+import numpy as np
 from tqdm import tqdm
 
 from . import jobs
 from .census import tune_paths
 from .formats import SidFormat, find_format
 from .source import read_bytes
+from .testing import song_frames
 
 MODEL = "model"
+RENDER = "render"
 MISSING = "*"
 
 Probe = Callable[[Any], Any]
@@ -68,17 +72,27 @@ def _digest_of(probe: Probe, model: Any) -> str:
         return _failed(exc)
 
 
+def _render(data: bytes, fmt: SidFormat) -> Probe:
+    def render(model: Any) -> bytes:
+        frames = song_frames(data, None)
+        return np.asarray(fmt.player(model).render_grid(frames), np.uint8).tobytes()
+
+    return render
+
+
 def fingerprint(
     data: bytes, fmt: SidFormat, probes: Optional[Mapping[str, Probe]] = None
 ) -> Dict[str, str]:
-    """``{key: digest}`` of ``data``'s model and every probe of it
-    (:meth:`SidFormat.snapshot_probes` then ``probes``); a key whose step raised
-    holds ``!Error: message``."""
+    """``{key: digest}`` of ``data``'s model, of :data:`RENDER` (``fmt.player(model)``
+    over the start song's whole length, :func:`~pysidtracker.testing.song_frames`)
+    and every probe of the model (:meth:`SidFormat.snapshot_probes` then
+    ``probes``); a key whose step raised holds ``!Error: message``. Probes must
+    not render a part of a song: :data:`RENDER` is the render digest."""
     try:
         model = fmt.load(data)
     except Exception as exc:  # pylint: disable=broad-except
         return {MODEL: _failed(exc)}
-    out = {MODEL: digest(model)}
+    out = {MODEL: digest(model), RENDER: _digest_of(_render(data, fmt), model)}
     for name, probe in {**fmt.snapshot_probes(), **(probes or {})}.items():
         out[name] = _digest_of(probe, model)
     return out

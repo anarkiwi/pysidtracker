@@ -11,6 +11,7 @@ The root is `$PYSID_TUNECACHE`, else `<root>/.tunecache` (`default_tune_cache`).
 | path | contents | written by |
 |---|---|---|
 | `.tunecache/<HVSC relpath>` | HVSC `.sid` tunes | `fetch_tune`, `resolve_tune`, the `hvsc` fixture, `pysid-tune-fetch` |
+| `.tunecache/DOCUMENTS/Songlengths.md5` | HVSC song lengths | `song_frames` |
 | `.tunecache/native/` | CSDB release files + `SHA256SUMS.txt` | `fetch_csdb`, `pysid-fixtures fetch`, the `native` fixture |
 | `.tunecache/archives/` | SHA-256-pinned downloads and archive members | `fetch_verified`, `fetch_archive_member` |
 | `.tunecache/disks/` | `.d64` images | `fetch_disk`, `fetch_prgs`, the `disk_prgs` fixture |

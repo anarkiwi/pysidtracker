@@ -6,12 +6,13 @@ frame and the tune's own 6502 play call on jennings, and puts them side by side.
 
 ```
 python -m pysidtracker.whydiff tune.sid --format sidwizard --state     # an installed format
-python -m pysidtracker.whydiff tune.sid mypkg.player:make --frames 250 [--reference grid.csv.zst]
+python -m pysidtracker.whydiff tune.sid mypkg.player:make [--reference grid.csv.zst]
 ```
 
 `--format NAME` (or `auto`) plays the installed format's player on `--song`
 (`SidFormat.play`); otherwise `make(tune_bytes, song) -> MemPlayer`. The reference is a `gridcmp` grid file (e.g.
-a cached sidtrace grid), or the jennings grid. `--frame`/`--register` explain a
+a cached sidtrace grid), or the jennings grid over the whole song (`song_frames`;
+`--frames N` sets the song's length). `--frame`/`--register` explain a
 chosen cell; `--json` saves the machine-readable form. In tests, use
 `assert_matches` / `assert_oracle_match` (see [oracle-testing.md](oracle-testing.md)).
 From Python:

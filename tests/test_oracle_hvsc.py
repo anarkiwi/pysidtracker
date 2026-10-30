@@ -2,7 +2,8 @@
 
 Runs need Docker and HVSC (a local ``$HVSC`` tree or cache), so the default
 suite excludes them (a CI job runs ``pytest -m oracle``) and an unavailable
-tune or render fails rather than skips. ``make_oracle_fixtures`` reuses the harness.
+tune or render fails rather than skips. ``make_oracle_fixtures`` reuses the harness
+and compares each tune's whole start song.
 """
 
 import pytest
@@ -27,11 +28,7 @@ def _render(data, nframes):
     return register_grid(data, nframes, illegal_opcodes=True)
 
 
-tune_id, oracle_match = make_oracle_fixtures(
-    TUNES,
-    render=_render,
-    frames=250,
-)
+tune_id, oracle_match = make_oracle_fixtures(TUNES, render=_render)
 
 
 @pytest.mark.oracle

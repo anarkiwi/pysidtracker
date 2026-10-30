@@ -17,6 +17,7 @@ from pysidtracker import (
 from pysidtracker.emu import observe_data_access
 from pysidtracker.image import SidImage
 from pysidtracker.oracle import _SIDWR_REC, boot_flat
+from pysidtracker.testing import whole_song
 
 from .helpers import build_prg, build_psid
 
@@ -67,7 +68,7 @@ _ILLEGAL_PLAY = bytes(
 
 def test_register_grid_from_bytes():
     tune = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
-    grid = register_grid(tune, 3)
+    grid = register_grid(tune, whole_song(3))
     assert len(grid) == 3
     for row in grid:
         assert len(row) == 25
@@ -78,7 +79,7 @@ def test_register_grid_from_bytes():
 def test_register_grid_from_image():
     tune = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
     image = SidImage.from_bytes(tune)
-    grid = register_grid(image, 1)
+    grid = register_grid(image, whole_song(1))
     assert grid[0][0] == 0x0A
 
 
@@ -100,7 +101,7 @@ def test_boot_flat_setup_sees_init():
 def test_boot_flat_sets_the_kernal_pal_flag_for_the_header_clock(flags, video):
     init = bytes([0xAD, 0xA6, 0x02, 0x8D, 0x00, 0xD4, 0x60])  # LDA $02A6/STA $D400
     tune = build_psid(init, load=0x1000, init=0x1000, play=0x1006, flags=flags)
-    assert register_grid(tune, 1)[0][0] == video
+    assert register_grid(tune, whole_song(1))[0][0] == video
 
 
 def test_boot_flat_tune_bytes_over_the_pal_flag():
@@ -125,7 +126,7 @@ def test_emuplayer_tune_bytes_over_the_pal_flag():
 def test_register_grid_illegal_opcodes():
     image = _SIMPLE[:6] + _ILLEGAL_PLAY  # init then illegal play
     tune = build_psid(image, load=0x1000, init=0x1000, play=0x1006)
-    grid = register_grid(tune, 2, illegal_opcodes=True)
+    grid = register_grid(tune, whole_song(2), illegal_opcodes=True)
     assert len(grid) == 2
     assert grid[0][0] == 0x0A
 
@@ -133,13 +134,13 @@ def test_register_grid_illegal_opcodes():
 def test_register_grid_no_header():
     image = SidImage.from_prg(build_prg(_SIMPLE, load=0x1000))
     with pytest.raises(SidParseError):
-        register_grid(image, 1)
+        register_grid(image, whole_song(1))
 
 
 def test_emuplayer_runs_tunes_own_code():
     player = EmuPlayer(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
     assert player.regs[0] == 0x0A  # init wrote $D400
-    grid = player.render_grid(3)
+    grid = player.render_grid(whole_song(3))
     assert len(grid) == 3
     for row in grid:
         assert len(row) == 25 and row[0] == 0x0A and row[1] == 0x05
@@ -148,7 +149,7 @@ def test_emuplayer_runs_tunes_own_code():
 def test_emuplayer_matches_register_grid():
     tune = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
     player = EmuPlayer(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
-    assert player.render_grid(3) == register_grid(tune, 3)
+    assert player.render_grid(whole_song(3)) == register_grid(tune, whole_song(3))
 
 
 def test_emuplayer_masks_pw_hi():
@@ -174,7 +175,7 @@ def test_emuplayer_illegal_opcodes():
         illegal_opcodes=True,
     )
     assert player.regs[0] == 0x0A
-    assert len(player.render_grid(2)) == 2
+    assert len(player.render_grid(whole_song(2))) == 2
 
 
 def test_grid_from_writes_empty():
@@ -245,7 +246,14 @@ def test_emuplayer_loses_the_interrupt_a_call_outlasts():
     player = EmuPlayer(
         _SIMPLE[:6] + play, load=0x1000, init=0x1000, play=0x1006, cycles_per_frame=1000
     )
-    assert [row[0] for row in player.render_grid(6)] == [11, 11, 12, 12, 13, 13]
+    assert [row[0] for row in player.render_grid(whole_song(6))] == [
+        11,
+        11,
+        12,
+        12,
+        13,
+        13,
+    ]
 
 
 def test_emuplayer_calls_play_a_period_apart():
@@ -255,9 +263,9 @@ def test_emuplayer_calls_play_a_period_apart():
     paced = EmuPlayer(
         image, load=0x1000, init=0x1000, play=0x1006, cycles_per_frame=19656
     )
-    assert len({row[0] for row in paced.render_grid(4)}) == 1
+    assert len({row[0] for row in paced.render_grid(whole_song(4))}) == 1
     free = EmuPlayer(image, load=0x1000, init=0x1000, play=0x1006)
-    assert len({row[0] for row in free.render_grid(100)}) > 1
+    assert len({row[0] for row in free.render_grid(whole_song(100))}) > 1
 
 
 def test_boot_flat_init_run_replaces_the_init_call():

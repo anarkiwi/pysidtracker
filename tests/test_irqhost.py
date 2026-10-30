@@ -19,6 +19,7 @@ from pysidtracker.irqhost import (
 )
 from pysidtracker.oracle import SidtraceRow, read_sidtrace, sidtrace_cadence
 from pysidtracker.oracle import register_grid, sidtrace_grid
+from pysidtracker.testing import whole_song
 
 from . import irqhost_tunes as tunes
 from .helpers import build_psid, build_psid_embedded_load
@@ -481,8 +482,8 @@ def test_frames_without_interrupts_are_unplayable():
 def test_player_renders_the_grid_then_continues_frame_by_frame():
     data = tunes.build("raster_kernal")
     player = InterruptPlayer(data)
-    grid = player.render_grid(5)
-    more = player.render_grid(3)
+    grid = player.render_grid(whole_song(5))
+    more = player.render_grid(whole_song(3))
     assert [r[0] for r in grid + more] == [r[0] for r in InterruptHost(data).grid(8)]
     fresh = InterruptPlayer(data)
     assert fresh.play_frame()[0] == (0, grid[0][0])
@@ -558,7 +559,7 @@ def test_tune_player_runs_a_play_address_on_jennings():
         bytes.fromhex("a90a8d00d460a9058d01d460"), load=0x1000, play=0x1006
     )
     player = TunePlayer(data)
-    assert player.render_grid(3) == register_grid(data, 3)
+    assert player.render_grid(whole_song(3)) == register_grid(data, whole_song(3))
     assert player.cycles_per_frame == player.cadence.cycles_per_call == PAL_FRAME
     writes = list(TunePlayer(data).register_writes(2))
     assert writes[0].clock == 0 and writes[-1].clock >= PAL_FRAME
@@ -576,8 +577,8 @@ def test_tune_player_sets_the_header_clock_flag(flags, video):
 def test_tune_player_hosts_play_address_zero(name):
     data = tunes.build(name)
     player = TunePlayer(data)
-    grid = player.render_grid(5) + player.render_grid(3)
-    assert grid == InterruptPlayer(data).render_grid(8)
+    grid = player.render_grid(whole_song(5)) + player.render_grid(whole_song(3))
+    assert grid == InterruptPlayer(data).render_grid(whole_song(8))
     fresh = TunePlayer(data)
     assert fresh.play_frame()[0] == (0, grid[0][0])
     assert fresh.snapshot() == grid[0]
@@ -586,7 +587,7 @@ def test_tune_player_hosts_play_address_zero(name):
 @pytest.mark.parametrize("src", [CIA_MASKED, QUIET + "loop: JMP loop\n"])
 def test_tune_player_without_an_entered_interrupt_is_unplayable(src):
     with pytest.raises(_TuneError, match="no interrupt"):
-        _Tune(_rsid(src)).render_grid(3)
+        _Tune(_rsid(src)).render_grid(whole_song(3))
 
 
 def test_tune_player_rejects_a_bare_prg():

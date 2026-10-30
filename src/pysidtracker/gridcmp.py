@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from . import registers as reg
+from .errors import IncompleteComparison
 
 LEAD = 8
 NEAR = 3
@@ -419,14 +420,21 @@ def verdict_onset(ours, starts, theirs, *, unit="tick", tol="carry"):
     )
 
 
-def verdict_lead(oracle, lib, *, max_lead=LEAD, unit="frame"):
+def verdict_lead(oracle, lib, *, max_lead=LEAD, unit="frame", whole=None):
     """The lead-criterion :class:`Verdict` of render ``lib`` against reference ``oracle``.
 
     ``lead`` is the latest first mismatch among the constant shifts up to
-    ``max_lead``; the ``min_*`` family is the fewest bad steps (``lib`` must
-    cover ``len(oracle) + max_lead``).
+    ``max_lead``; the ``min_*`` family is the fewest bad steps (``lib`` should
+    cover ``len(oracle) + max_lead``). Given the song's ``whole`` length,
+    ``oracle`` must cover it and ``lib`` it plus ``max_lead``, else
+    :class:`~pysidtracker.errors.IncompleteComparison`.
     """
     a, b = np.asarray(oracle, np.int16), np.asarray(lib, np.int16)
+    if whole is not None and (len(a) < whole or len(b) < whole + max_lead):
+        raise IncompleteComparison(
+            f"reference {len(a)} and render {len(b)} frames (lead {max_lead}) "
+            f"of a {whole}-frame song"
+        )
     n = min(len(a), len(b) - max_lead)
     if n < 1:
         raise ValueError(f"grids of {len(a)} and {len(b)} frames, shift {max_lead}")

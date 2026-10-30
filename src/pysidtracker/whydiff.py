@@ -1568,7 +1568,7 @@ def explain_divergence(
     *,
     song: int = 1,
     max_lead: int = 0,
-    frames: int = 250,
+    frames: Optional[int] = None,
     frame: Optional[int] = None,
     register: Optional[int] = None,
     name: str = "",
@@ -1581,18 +1581,23 @@ def explain_divergence(
 ) -> Optional[Divergence]:
     """The first divergence of ``make_player(data)``'s render from the 6502's, explained.
 
-    ``reference`` is the expected grid (default ``frames`` of jennings'), compared under
+    ``reference`` is the expected grid (default ``frames`` of jennings', by default the
+    song's whole length, :func:`~pysidtracker.testing.song_frames`), compared under
     :func:`~pysidtracker.gridcmp.verdict_lead` up to ``max_lead``; ``frame`` and
     ``register`` pick a reference cell instead of the first mismatch. None on agreement.
     ``label``/``cell``/``roots``/``sources`` are :func:`python_side`'s; ``state`` adds
     :func:`explain_state`.
     """
     data = bytes(data)
+    if reference is None and frames is None:
+        from .testing import song_frames  # testing imports this module lazily
+
+        frames = song_frames(data, song)
     nref = len(reference) if reference is not None else max(frames, (frame or 0) + 1)
     jen = np.asarray(register_grid(data, nref + max_lead, subtune=song - 1), np.int16)
     ref = jen[:nref] if reference is None else np.asarray(reference, np.int16)
     lib = np.asarray(make_player(data).render_grid(len(ref) + max_lead), np.int16)
-    found = gridcmp.verdict_lead(ref, lib, max_lead=max_lead)
+    found = gridcmp.verdict_lead(ref, lib, max_lead=max_lead, whole=frames)
     cpu = gridcmp.verdict_lead(ref, jen, max_lead=max_lead)
     if frame is None:
         if found.ok:
@@ -1651,7 +1656,9 @@ def main(argv=None) -> int:
         help="chase the state read back to where it parts",
     )
     parser.add_argument("--song", type=int, default=1)
-    parser.add_argument("--frames", type=int, default=250)
+    parser.add_argument(
+        "--frames", type=int, help="reference frames (default: the whole song)"
+    )
     parser.add_argument("--reference", type=Path, help="a gridcmp grid file")
     parser.add_argument("--max-lead", type=int, default=0)
     parser.add_argument("--frame", type=int, help="reference frame to explain")
@@ -1679,7 +1686,10 @@ def main(argv=None) -> int:
     if args.reference:
         ref = gridcmp.read_grid(args.reference, args.frames)
     else:
-        ref = register_grid(data, args.frames, subtune=args.song - 1)
+        from .testing import song_frames
+
+        frames = args.frames or song_frames(data, args.song)
+        ref = register_grid(data, frames, subtune=args.song - 1)
     why = explain_divergence(
         data,
         lambda d: make(d, args.song),
@@ -1693,7 +1703,7 @@ def main(argv=None) -> int:
         state=args.state,
     )
     if why is None:
-        print(f"verified: {args.frames} frames agree")
+        print(f"verified: {len(ref)} frames agree")
         return 0
     print(why.text(args.width))
     if args.json_path:

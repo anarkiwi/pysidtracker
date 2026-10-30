@@ -155,8 +155,10 @@ last: ...                              // the same expansions as step
 
 ## `pysidtracker.snapshot`
 
-A corpus snapshot records, per tune, the digest of the decoded model and of
-every probe of it (a rebuilt image, an export), or the error each step raised.
+A corpus snapshot records, per tune, the digest of the decoded model, of its
+`render` (`fmt.player(model)` over the start song's whole length, `song_frames`)
+and of every probe of the model (a rebuilt image, an export), or the error each
+step raised.
 Two snapshots taken before and after a refactor show which tunes it changed.
 
 ```bash
@@ -165,7 +167,8 @@ pysidtracker snapshot build CORPUS... -o before.json \
 pysidtracker snapshot diff before.json after.json   # exit 1 on any difference
 ```
 
-Probes come from the format's `SidFormat.probes` (`{name: callable(model)}`),
+The built-in `render` digest means a format needs no render probe; a probe must
+never render a part of a song. Probes come from the format's `SidFormat.probes` (`{name: callable(model)}`),
 plus its canonical text as `canonical` when the format sets the `canonical`
 hook and `probes` has no `canonical` ([formats.md](formats.md)), plus `--probe`; `--format` is an installed format name, `auto`, or a
 `module:attr` naming a `SidFormat` or a factory of one. Inputs are files,

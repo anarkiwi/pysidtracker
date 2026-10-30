@@ -21,6 +21,24 @@ Docker — frame for frame.
 The oracle is deterministic (`sidtrace` pins the simulated power-on delay), so a
 given tune renders identically every run.
 
+## Whole songs
+
+Every comparison covers the whole song: a window of its first frames hides every
+bug later in it. `song_frames(tune, song=1, *, hvsc=None, local_env="HVSC")` is the
+one source of a song's length: the seconds HVSC's `DOCUMENTS/Songlengths.md5` lists
+for the file's MD5 (a local `$HVSC` tree, else `hvsc` -- default the tune cache --
+holding a copy fetched from the HVSC mirror), else `oracle.DEFAULT_SECONDS`, as play
+calls at the tune's `playroutine_cadence` (`oracle.play_calls`; a headerless image
+plays once a PAL frame).
+
+`make_oracle_fixtures`, `assert_oracle_match`, `assert_matches`, `decode_fidelity` and
+`assert_decode_fidelity` take no frame count: they render and compare `song_frames`.
+`oracle_grid` returns the whole song unless given `frames`. A reference or render
+covering less raises `IncompleteComparison` (`assert_matches`, and
+`gridcmp.verdict_lead(..., whole=n)`). When whole songs are slow, make the render
+faster; never shorten the comparison. The [lint](lint.md) fails tests that pass a
+render or compare call a hard-coded length.
+
 ## Interrupt rows and handler nesting
 
 A sidtrace (>= v0.6.0) row with empty `chip`/`reg` is an interrupt event:

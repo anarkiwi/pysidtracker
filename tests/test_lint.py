@@ -110,3 +110,39 @@ _PUBLIC = [
 
 def test_own_package_is_lint_clean():
     assert check_project("src/pysidtracker", whitelist=_PUBLIC) == []
+
+
+def test_truncated_comparisons(tmp_path):
+    _project(
+        tmp_path,
+        pkg_S___init___D_py="",
+        tests_S_consts_D_py="FRAMES = 250\nSPAN = FRAMES * 2\n",
+        tests_S_test_x_D_py="""
+            from pysidtracker.testing import song_frames, whole_song
+            from consts import FRAMES
+
+            N = 100
+            M = song_frames(b"")
+
+            def test_a(player, data, n):
+                player.render_grid(250)
+                player.render_grid(N + 1)
+                register_grid(data, FRAMES)
+                oracle_grid(data, frames=SPAN)
+                oracle_grid(data, seconds=-2.5)
+                survey.oracle_rows(data, "o.csv", 10, 1)
+                list(player.iter_frames(max_frames=N))
+                assert_matches(data, player, None, frames=8)
+                player.render_grid(whole_song(8))
+                player.render_grid(M)
+                player.render_grid(n)
+                register_grid(data, len(data))
+                survey.oracle_rows(data, "o.csv", M, 1, calls=M)
+                other(250)
+                for k in range(3):
+                    player.render_grid(k)
+            """,
+    )
+    lines = [p.split(":")[1] for p in _check(tmp_path)]
+    assert lines == ["9", "10", "11", "12", "13", "14", "15", "16"]
+    assert all("not the whole song" in p for p in _check(tmp_path))

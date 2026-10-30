@@ -22,9 +22,9 @@ python -m pysidtracker.survey file scripts/oracle_hvsc.py native.prg --frames 30
 python -m pysidtracker.survey file --format auto tune.sid --frames 3000
 ```
 
-`run` also takes `--player REGEX`, `--limit N` (first N tunes), `--jobs`,
-`--default-seconds` (subtunes with no HVSC length) and `--timeout` (render
-seconds per subtune before it is a `library_error`, default 600; 0 for none). Player regexes
+`run` also takes `--player REGEX`, `--limit N` (first N tunes), `--jobs` and `--timeout` (render
+seconds per subtune before it is a `library_error`, default 600; 0 for none). A subtune
+with no HVSC length plays `pysidtracker.oracle.DEFAULT_SECONDS`. Player regexes
 are case-insensitive. Jobs run in `pysidtracker.jobs` workers: a job's `deadline` arms its
 parent, which kills the worker's process group at the deadline (whether the job is in Python,
 in a C extension or waiting on a child pool) and records the job's timeout row.
@@ -227,7 +227,8 @@ The renderer is the library's `oracle_hvsc.py` (its `render`, or
 `path.py:function`) or a `module:function`, called as for `run`. A PSID/RSID
 file is used as is. A bare PRG is wrapped with `header.write_psid`
 (`survey.as_sid`): `--init` defaults to its load address and `--play` to
-init+3. The oracle gives `--frames` play calls of each `--song`: `N`, `N-M`,
+init+3. The oracle gives `--frames` play calls (default the song's whole length,
+`testing.song_frames`) of each `--song`: `N`, `N-M`,
 a comma list of those, or `all` of the header's songs (default 1), one CSV
 row per subtune:
 
