@@ -183,7 +183,10 @@ class Machine6502:
             path.pc = nxt
             return [path]
         if kind == "jmp":
-            path.pc = rec["ctrl"][1]
+            target = rec["ctrl"][1]
+            if target <= path.pc and self.solver.check(path.cond) == z3.unsat:
+                return []
+            path.pc = target
             return [path]
         if kind == "jsr":
             ret = (path.pc + 2) & 0xFFFF
