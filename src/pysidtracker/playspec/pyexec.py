@@ -122,6 +122,8 @@ class _Gen:
                 self.lines.append(
                     f"{pad}N({self.ex(s[1])}, {{{regs}}}, {self.ex(s[3])})"
                 )
+            elif tag == "finish":
+                self.lines.append(f"{pad}return")
             elif tag == "hook":
                 self.lines.append(f"{pad}if G is not None:")
                 self.lines.append(f"{pad}    G({s[1]}, {self.ex(s[2])})")

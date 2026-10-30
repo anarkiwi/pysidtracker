@@ -101,6 +101,7 @@ class Lowerer:
         self.binding = binding
         self.errors: Dict[Tuple[int, str], None] = {}
         self.uid = 0
+        self.natives: list = []
         self.consts: Dict[str, K] = {}
         self.shared: Dict[str, Cell] = {}
         self.instances: Dict[str, Instance] = {}
@@ -1009,7 +1010,7 @@ class Lowerer:
         """``native addr(a = e, x = e, y = e) resumes pc``: run the tune's own 6502
         code from ``addr``; the spec goes on if it reaches ``pc``, else the CPU
         finishes the call."""
-        _tag, line, addr, args, resume = node
+        _tag, line, addr, args, resume, span = node
         regs = []
         for reg, value in args:
             if reg not in ("a", "x", "y") or any(reg == r for r, _ in regs):
@@ -1018,7 +1019,13 @@ class Lowerer:
             regs.append((reg, self.coerce(self.expr(value, scope), 8, line)))
         addr_v = self.coerce(self.expr(addr, scope), 16, line)
         resume_v = self.coerce(self.expr(resume, scope), 16, line)
+        self.natives.append((span, addr_v, resume_v))
         return [("native", addr_v, tuple(regs), resume_v)]
+
+    def st_finish(self, node, scope):
+        """``finish``: the play call ends here (the rest of the schedule is skipped)."""
+        del node, scope
+        return [("finish",)]
 
     def select_grammar(self, alts, scope, line: int) -> Optional[str]:
         """The rule of the first ``"ref" if cond`` arm that holds (an arm with no
@@ -1320,6 +1327,7 @@ def elaborate(
         notes=notes,
         order=low.order,
         inputs=low.inputs,
+        natives=low.natives,
     )
 
 

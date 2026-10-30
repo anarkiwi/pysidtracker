@@ -18,6 +18,7 @@ from .pyexec import source as python_source
 from .smt import bmc
 from .syntax import load
 from .tv import validate
+from .unnative import equivalent, unnative
 
 
 def _binding(args):
@@ -35,13 +36,13 @@ def _python(args) -> None:
     print(python_source(elaborate(load(args.spec), _binding(args))), end="")
 
 
-def _player(args) -> SpecPlayer:
+def _player(args, spec=None) -> SpecPlayer:
     data = read_bytes(args.tune)
     image = SidImage.from_bytes(data)
     header = parse_sid_header(data)
     entries = load_spec(args.entries) if args.entries else None
     return SpecPlayer(
-        load(args.spec),
+        load(args.spec) if spec is None else spec,
         image.image,
         image.load,
         header.init_address,
@@ -65,6 +66,16 @@ def _run(args) -> None:
     if player.validator is not None:
         for (ref, base), message in player.validator.failures().items():
             print(f"malformed {ref} at ${base:04x}: {message}")
+
+
+def _unnative(args) -> None:
+    old = load(args.spec)
+    player = _player(args, old)
+    binding = load_spec(args.binder)(player.view(), player.entry)
+    new = unnative(old, binding, player.view())
+    equivalent(lambda spec: _player(args, spec), old, new, args.frames)
+    Path(args.output).write_text(new.source)
+    print(f"{args.output}: native-free, same output over {args.frames} frames")
 
 
 def _bmc(args) -> None:
@@ -101,7 +112,7 @@ def _tv(args) -> None:
 
 
 def add_playspec_commands(parser) -> None:
-    """Add the ``check``/``python``/``run``/``bmc``/``tv`` subcommands."""
+    """Add the ``check``/``python``/``run``/``bmc``/``tv``/``unnative`` subcommands."""
     sub = parser.add_subparsers(dest="playspec_command", required=True)
 
     def spec_cmd(name, func, text, binding=True):
@@ -119,6 +130,7 @@ def add_playspec_commands(parser) -> None:
     for name, func, text in (
         ("run", _run, "play a tune with the spec"),
         ("tv", _tv, "validate a routine against the tune's 6502 code"),
+        ("unnative", _unnative, "replace native hooks with spec statements"),
     ):
         cmd = spec_cmd(name, func, text, binding=False)
         cmd.add_argument("tune", help="input .sid")
@@ -127,7 +139,12 @@ def add_playspec_commands(parser) -> None:
         )
         cmd.add_argument("--entries", help="module:attr entries(view)")
         cmd.add_argument("--subtune", type=int, default=0)
-        if name == "run":
+        if name == "unnative":
+            cmd.add_argument("-o", "--output", required=True, help="new .play file")
+            cmd.add_argument(
+                "--frames", type=int, default=500, help="frames compared old vs new"
+            )
+        elif name == "run":
             cmd.add_argument("--frames", type=int, default=500)
             cmd.add_argument(
                 "--validate", action="store_true", help="check stream grammars"

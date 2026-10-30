@@ -11,6 +11,7 @@ cells, plus its toolchain:
 | Concrete execution (compiled Python) | `compile_program`, `run`, `SpecPlayer` | `python`, `run TUNE --binder mod:attr` |
 | SMT transition relation, bounded checking | `smt.transition`, `smt.bmc` | `bmc SPEC --binding JSON --frames N` |
 | Translation validation against 6502 code | `tv.validate`, `tv.replay` | `tv TUNE --binder ... --routine ... --pc ...` |
+| Replace `native` hooks with spec statements | `unnative`, `equivalent` | `unnative SPEC TUNE --binder ... -o OUT` |
 
 pysidtracker ships the language and tooling only. Specs of particular players
 belong to their format packages, which bind a spec to a build's layout and run it
@@ -78,6 +79,7 @@ schedule {
   - `while c bound N`: running past the bound is a runtime error and a proof obligation.
   - Static `for`, `in`, `goto`, `assert`.
   - `native addr(a = e, x = e, y = e) resumes pc;` runs the tune's own 6502 code (a documented hook a rip patches) from `addr` with those registers (each optional). If the code reaches `pc` the spec carries on with the registers restored; if the call returns first, the CPU has finished it and the spec's call ends. It needs a `SpecPlayer` (`run` raises) and is opaque to `check` and `tv`, which refuse it.
+  - `finish;` ends the whole play call: the rest of the schedule is skipped and the player returns to its caller.
   - `stream s = base @ cursor [grammar "mod:attr:rule" [if cond] {, "mod:attr:rule" [if cond]}]`: the first rule whose static `cond` (e.g. `L.extended`) holds, an arm without `if` always holding, so a layout can pick the rule per build; read with `let v = next s;`, `s[k]` (relative to the cursor) and `s.pos`.
 - **Arithmetic:**
   - Exact 8/16-bit wraparound. Untyped literals take the other operand's width; u8 widens to u16 implicitly.
@@ -131,6 +133,25 @@ The lowered IR is one structured program per call:
 - Every play call then runs the spec on that memory. Reads go through the CPU's banked bus; stores go to RAM, with `$00`/`$01` also reaching the bus.
 - When the play address is not the modelled entry, the tune's 6502 play routine runs and each call into an entry that `entries(view)` reports is trapped and run as the spec. One binding is kept per entry and banking, which handles play wrappers and several player instances.
 - `play_frame`/`render_grid` produce the same forward-filled grid as every other player.
+
+## Removing native hooks
+
+`unnative(spec, binding, image)` returns a spec with every `native` statement replaced,
+and `pysidtracker playspec unnative SPEC TUNE --binder ... -o OUT` writes it after
+checking it against the original.
+- **Lift.** The hook's 6502 runs symbolically (`tv.Machine6502`) from `addr` with the
+  `native` arguments as inputs, until it reaches `pc` (the spec carries on) or returns
+  (the call ends).
+- **Statements.** Each exit's memory is stated as `mem[a] := v` stores, with a `finish;`
+  on the returning exit and an `if` between exits. Everything the hook reads is read
+  into `let`s first, so the stores cannot change what the hook saw. The text replaces
+  the `native` statement in the original source, so comments elsewhere survive.
+- **Check.** `equivalent` plays both specs on the tune and compares every frame's SID
+  registers and every byte outside the stack page; the CLI does this (`--frames`).
+- **Refused.** A hook that reads a register or flag its arguments do not give it, shifts
+  by a variable, stores into its own code, loops without a bound, or is never reached by
+  the schedule. Registers a hook leaves for its caller and stack-page bytes are not
+  modelled, as the spec models neither.
 
 ## Proof tooling
 
