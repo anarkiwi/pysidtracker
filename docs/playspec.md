@@ -59,6 +59,7 @@ schedule {
     - `operand`: the cell lives in an instruction operand (self-modified code).
     - `scratch`: excluded from translation-validation comparison.
     - `latched`: a reader must not follow another instance's store in the same call.
+    - `notes(lo|hi|word, K)`: the `ro` table holds the native note table; index `i` means standard note `i + K` (`K` a static, possibly negative). `lo`/`hi` mark a `u8[n]` as the low/high byte of the note word, `word` a `u16[n]`/`ptr[n]` as the whole word. Cells aliasing one table may declare different `K`.
 - `machine m [x in a..b] { cell/signal/control/proc/step }` declares a machine
   and its instances; `x` is the static instance index.
 - `control c [on cell mask M] { s = v, ... }` declares control states. With
@@ -180,7 +181,8 @@ lineage by name.
 
 **Choosing a variant per build.** `SpecPlayer`'s `bind(view, entry)` may return
 `(variant, binding)` instead of a binding, so the code-shape probes that discover a
-build's layout also choose which variant runs it.
+build's layout also choose which variant runs it. A format registers `bind` with its
+spec through [`SidFormat.spec`](formats.md#spec).
 
 What goes where:
 - **The layout:** what a build moves. Addresses, operands, table sizes, and static flags that pick between expressions.
@@ -200,6 +202,29 @@ The lowered IR is one structured program per call:
 - Every play call then runs the spec on that memory. Reads go through the CPU's banked bus; stores go to RAM, with `$00`/`$01` also reaching the bus.
 - When the play address is not the modelled entry, the tune's 6502 play routine runs and each call into an entry that `entries(view)` reports is trapped and run as the spec. One binding is kept per entry and banking, which handles play wrappers and several player instances.
 - `play_frame`/`render_grid` produce the same forward-filled grid as every other player.
+
+## Standard notes
+
+A tracker's native frequency table differs from the equal-tempered one. A cell
+declared `notes(part, K)` says which note each of its indexes means, so a player can
+answer every read of it with the standard word instead, e.g.
+`cell flo: u8[96] @ L.freq_lo ro notes(lo, -24);` for a table whose index 24 is C0.
+
+`pysidtracker.notes.frequency(note, clock_hz)` is the word: `round(440 * 2 ** ((note -
+57) / 12) * 2**24 / clock_hz)`, 0 where that rounds to 0 or exceeds 16 bits. Note 0 is
+C0, 24 is C2, 57 is A4.
+
+`SpecPlayer(..., notes=clock_hz)` (or `elaborate(..., standard=clock_hz)`) lowers each
+read of a declared cell to a lookup op that `pyexec` compiles to a precomputed table
+index. Any index is answered, past the native table's end included, and an index whose
+note is negative answers 0. Memory is never written, so the data overrun indexes reach
+is intact. Without `notes` the declaration changes nothing: `elaborate`, `pyexec`,
+`smt`, `tv` and `unnative` see native memory. `smt` refuses a program lowered with
+`standard`. `native` blocks and the tune's own 6502 code still read the native table,
+as do `mem[]` reads.
+
+A variant's `override cell` restates the declaration, so a variant that omits `notes`
+leaves that cell native.
 
 ## Removing native hooks
 

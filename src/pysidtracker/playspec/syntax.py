@@ -171,9 +171,21 @@ class _ToAst(Transformer):
 
     def cell(self, meta, c):
         name, (ctype, length), place, *attrs = c
+        notes = [a for a in attrs if isinstance(a, tuple)]
         return self._n(
-            "cell", meta, str(name), ctype, length, place, {str(a) for a in attrs}
+            "cell",
+            meta,
+            str(name),
+            ctype,
+            length,
+            place,
+            {str(a) for a in attrs if isinstance(a, Token)},
+            notes[0] if notes else None,
         )
+
+    def notes(self, meta, c):
+        del meta
+        return str(c[0]), c[1]
 
     def ctype(self, meta, c):
         del meta

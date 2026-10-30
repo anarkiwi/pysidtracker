@@ -12,7 +12,9 @@ lfield: NAME ("," NAME)* ":" LKIND ";"
 LKIND: "addr" | "byte" | "flag" | "list"
 const: "const" NAME "=" expr ";"
 
-cell: "cell" NAME ":" ctype "@" place ATTR* ";"
+cell: "cell" NAME ":" ctype "@" place (ATTR | notes)* ";"
+notes: "notes" "(" NOTEPART "," expr ")"
+NOTEPART: "lo" | "hi" | "word"
 ctype: TYPE ("[" expr "]")?
 place: expr                    -> at
      | "(" expr "," expr ")"   -> split

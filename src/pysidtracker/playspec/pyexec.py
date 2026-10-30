@@ -9,9 +9,10 @@ the entry registers the spec reads (``a``, ``x``, ``y``, flag letters) and
 from __future__ import annotations
 
 import re
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Tuple
 
 from ..errors import SidError
+from ..notes import table
 from .ir import K, Program, Rd, V, width
 
 
@@ -52,6 +53,7 @@ class _Gen:
 
     def __init__(self, program: Program):
         self.lines: List[str] = []
+        self.tables: Dict[str, tuple] = {}
         self.controls: Dict[str, int] = {
             n: i for i, (n, _w, _d) in enumerate(program.controls)
         }
@@ -72,6 +74,10 @@ class _Gen:
             return f"R({self.ex(e.a)})"
         if isinstance(e, V):
             return self.name(e.n)
+        if e.op == "note":
+            key = (*(k.v for k in e.a[:3]), 1 << max(8, width(e.a[3])))
+            name = self.tables.setdefault(key, f"T{len(self.tables)}")
+            return f"{name}[{self.ex(e.a[3])}]"
         args = [self.ex(a) for a in e.a]
         mask = (1 << e.w) - 1
         if e.op in _BIN:
@@ -145,21 +151,29 @@ class _Gen:
             return
 
 
-def source(program: Program) -> str:
-    """The Python source of ``program``'s frame function."""
+def _generate(program: Program) -> Tuple[str, Dict[str, tuple]]:
+    """``(source, tables)``: the frame function and the ``table`` arguments of the
+    note tables (``T0``, ...) it reads."""
     gen = _Gen(program)
     gen.lines.append("def frame(R, W, C, G=None, P=None, N=None):")
     for name in program.inputs:
         gen.lines.append(f"    {gen.name(name)} = P[{name[4:]!r}]")
     gen.emit(program.body, 1)
-    return "\n".join(gen.lines) + "\n"
+    return "\n".join(gen.lines) + "\n", {n: k for k, n in gen.tables.items()}
+
+
+def source(program: Program) -> str:
+    """The Python source of ``program``'s frame function."""
+    return _generate(program)[0]
 
 
 def compile_program(program: Program) -> Callable:
     """``frame(R, W, C, G=None, P=None, N=None)`` running one call of ``program``."""
+    text, tables = _generate(program)
     namespace = {"SpecRuntimeError": SpecRuntimeError}
+    namespace.update((name, table(*key)) for name, key in tables.items())
     exec(
-        compile(source(program), f"<playspec {program.name}>", "exec"), namespace
+        compile(text, f"<playspec {program.name}>", "exec"), namespace
     )  # pylint: disable=exec-used
     return namespace["frame"]
 

@@ -5,6 +5,9 @@ Expressions: :class:`K`, :class:`Rd`, :class:`V`, :class:`Op`. Statements: ``("w
 ``("assert", c, what)``, ``("hook", stream_index, base)`` and
 ``("native", addr, ((reg, v), ...), resume)`` (run 6502 code from ``addr`` until it
 reaches ``resume``; opaque to the solver) and ``("finish",)`` (the call ends).
+
+``Op("note", w, (K(clock), K(part), K(offset), index))`` (standard note mode only) is
+the :func:`~pysidtracker.notes.table` entry at ``index``, which the solver rejects.
 """
 
 from __future__ import annotations
@@ -87,7 +90,11 @@ def evaluate(op: str, w: int, args, arg_width: int = 8) -> int:
 
 @dataclass
 class Cell:
-    """A cell bound to ``place`` ``(addr,)`` or ``(lo, hi)``; ``length`` None for a scalar."""
+    """A cell bound to ``place`` ``(addr,)`` or ``(lo, hi)``; ``length`` None for a scalar.
+
+    ``notes`` is ``(part, offset)`` when the cell holds a note table: ``part`` its
+    :data:`~pysidtracker.notes.PARTS` key and ``offset`` the note of index 0.
+    """
 
     name: str
     owner: str
@@ -96,6 +103,7 @@ class Cell:
     place: Tuple[Optional[int], ...]
     attrs: frozenset
     line: int
+    notes: Optional[Tuple[str, int]] = None
 
     def extent(self) -> List[int]:
         """Every byte address the declaration spans (empty while unbound)."""
@@ -110,7 +118,11 @@ class Cell:
 
 @dataclass
 class Program:
-    """A lowered frame (or one routine): its statements, variables and declarations."""
+    """A lowered frame (or one routine): its statements, variables and declarations.
+
+    ``standard`` is the clock in Hz when reads of declared note tables are lowered to
+    the standard note words (None: they read memory).
+    """
 
     name: str
     body: list
@@ -124,6 +136,7 @@ class Program:
     order: List[str] = field(default_factory=list)
     inputs: Dict[str, int] = field(default_factory=dict)
     natives: list = field(default_factory=list)
+    standard: Optional[int] = None
 
 
 __all__ = ["Cell", "K", "Op", "Program", "Rd", "V", "evaluate", "width"]

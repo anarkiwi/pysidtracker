@@ -15,6 +15,7 @@ from importlib.metadata import entry_points
 from typing import (
     Any,
     Callable,
+    Collection,
     Dict,
     Iterable,
     Iterator,
@@ -23,6 +24,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    TYPE_CHECKING,
 )
 
 import numpy as np
@@ -33,6 +35,10 @@ from .cadence import cadence_info
 from .errors import SidFormatError, SidParseError
 from .image import SidImage
 from .player import MemPlayer
+
+if TYPE_CHECKING:  # playspec imports this module through testing
+    from .playspec.player import Binder, SpecPlayer
+    from .playspec.syntax import Spec
 
 ENTRY_POINT_GROUP = "pysidtracker.formats"
 CANONICAL = "canonical"
@@ -56,6 +62,23 @@ class FormatCommand:
     help: str
     add_arguments: Callable[[Any], None]
     handler: Callable[[Any, "SidFormat"], None]
+
+
+@dataclass(frozen=True)
+class SpecBinding:
+    """A model's playspec: the ``spec``, its ``bind(view, entry)`` binder and
+    optionally ``entries(view)``, the modelled entries (default: the play address).
+
+    ``image`` is the model's own tune image, loaded at its ``load_addr`` and played
+    from subtune ``subtune``; ``psid`` is False for an RSID.
+    """
+
+    spec: Spec
+    bind: Binder
+    image: bytes
+    entries: Optional[Callable[[bytes], Collection[int]]] = None
+    subtune: int = 0
+    psid: bool = True
 
 
 @dataclass(frozen=True)
@@ -86,7 +109,8 @@ class SidFormat:
     ``player_modules`` names the modules, besides ``player``'s own, whose code a
     render depends on, or ``"pkg:path/to/file"`` for a package data file it reads
     (a ``.play`` spec, say); :mod:`pysidtracker.rendercache` invalidates every
-    cached render when any of them changes.
+    cached render when any of them changes. ``spec(model)`` is the model's
+    :class:`SpecBinding`, which :meth:`spec_player` plays.
     """
 
     name: str
@@ -103,6 +127,7 @@ class SidFormat:
     streams: Optional[Callable[[Any], Iterable[Stream]]] = None
     canonical: Optional[Callable[[Any], str]] = None
     player_modules: Sequence[str] = ()
+    spec: Optional[Callable[[Any], SpecBinding]] = None
 
     def listing(self, model: Any) -> Iterator[str]:
         """The :meth:`ByteGrammar.listing` of ``model``'s streams.
@@ -113,6 +138,39 @@ class SidFormat:
         if self.grammar is None or self.streams is None:
             raise SidFormatError(f"format {self.name!r} has no byte grammar")
         return self.grammar.listing(self.streams(model))
+
+    def spec_player(
+        self, model: Any, *, notes: Optional[int] = None, **kwargs
+    ) -> SpecPlayer:
+        """A :class:`~pysidtracker.playspec.SpecPlayer` of ``model`` from its ``spec``.
+
+        ``notes`` is a clock in Hz: the player then reads the standard note words
+        wherever the spec declares a note table. ``kwargs`` go to the player.
+
+        Raises:
+          SidFormatError: the format has no ``spec`` hook.
+        """
+        from .playspec.player import (
+            SpecPlayer,
+        )  # pylint: disable=import-outside-toplevel
+
+        if self.spec is None:
+            raise SidFormatError(f"format {self.name!r} has no playspec")
+        binding = self.spec(model)
+        _name, _author, _released, load, init, play = self.model_metadata(model)
+        return SpecPlayer(
+            binding.spec,
+            binding.image,
+            load,
+            init,
+            play,
+            binding.subtune,
+            bind=binding.bind,
+            entries=binding.entries,
+            psid=binding.psid,
+            notes=notes,
+            **kwargs,
+        )
 
     def canonical_text(self, model: Any) -> str:
         """``model``'s canonical text.

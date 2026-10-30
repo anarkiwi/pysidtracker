@@ -62,6 +62,11 @@ class SpecPlayer(EmuPlayer):
     :class:`~pysidtracker.SidParseError` is raised only when that set is empty. Frames
     are unaffected: each call dispatches on the entry the CPU reaches.
 
+    With ``notes`` (a clock in Hz) every spec read of a cell declared ``notes(...)``
+    is the standard note word of that note at the clock, not memory: the register
+    grid is then the tune's as played from the standard equal-tempered table. The
+    tune's own 6502 code and ``native`` blocks still read their native table.
+
     A spec call advances no cycles, so with ``cycles_per_frame`` scheduling the
     player plays a call the real routine would have overrun and had dropped, and runs
     one call ahead from there.
@@ -82,6 +87,7 @@ class SpecPlayer(EmuPlayer):
         validate: bool = False,
         sid: Union[bytes, SidImage, None] = None,
         clock: Optional[str] = None,
+        notes: Optional[int] = None,
         **kwargs,
     ):
         # pylint: disable=too-many-arguments
@@ -98,6 +104,7 @@ class SpecPlayer(EmuPlayer):
         self.entry: Optional[int] = None
         self._hosted: Optional[InterruptPlayer] = None
         self._sid, self._clock, self._raw = sid, clock, bytes(image)
+        self._standard = notes
         kwargs.setdefault("max_cycles", MAX_CYCLES)
         super().__init__(image, load, init, play, subtune, **kwargs)
 
@@ -131,7 +138,7 @@ class SpecPlayer(EmuPlayer):
         if key not in self._compiled:
             bound = self._bind(self.view(), entry)
             spec, binding = bound if isinstance(bound, tuple) else (self.spec, bound)
-            program = elaborate(spec, binding)
+            program = elaborate(spec, binding, standard=self._standard)
             self._compiled[key] = (program, compile_program(program), controls(program))
         return self._compiled[key]
 
