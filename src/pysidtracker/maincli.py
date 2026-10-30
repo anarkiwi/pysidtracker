@@ -34,6 +34,7 @@ from .formats import FormatCommand, SidFormat, discover_formats, recognize_forma
 from .image import SidImage
 from .grammardiff import add_grammardiff_arguments
 from .lint import add_lint_arguments, run_lint
+from .playspec.cli import add_playspec_commands
 from .reglog import register_writes_from_player, write_reglog
 from .snapshot import add_snapshot_commands, resolve_format
 from .source import read_bytes
@@ -256,6 +257,11 @@ def build_parser(formats: Sequence[SidFormat]) -> argparse.ArgumentParser:
     )
     add_lint_arguments(lint)
     lint.set_defaults(func=run_lint)
+
+    playspec = subparsers.add_parser(
+        "playspec", help="check, run and prove playroutine state-machine specs"
+    )
+    add_playspec_commands(playspec)
 
     variant = subparsers.add_parser("variant", help="variant-level analysis")
     variant_sub = variant.add_subparsers(dest="variant_command", required=True)

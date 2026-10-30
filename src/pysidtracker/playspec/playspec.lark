@@ -1,0 +1,108 @@
+// playspec: a SID playroutine as synchronous extended finite state machines
+// over memory-mapped cells. LALR(1).
+
+start: _item*
+
+_item: spec_decl | layout | const | cell | machine | proc | schedule
+     | invariant | assume
+
+spec_decl: "spec" NAME ";"
+layout: "layout" "{" lfield* "}"
+lfield: NAME ("," NAME)* ":" LKIND ";"
+LKIND: "addr" | "byte" | "flag" | "list"
+const: "const" NAME "=" expr ";"
+
+cell: "cell" NAME ":" ctype "@" place ATTR* ";"
+ctype: TYPE ("[" expr "]")?
+place: expr                    -> at
+     | "(" expr "," expr ")"   -> split
+ATTR: "ro" | "out" | "operand" | "scratch" | "latched"
+
+machine: "machine" NAME ("[" NAME "in" expr ".." expr "]")? "{" _mitem* "}"
+_mitem: cell | signal | control | proc | step
+signal: "signal" NAME ":" TYPE "=" expr ";"
+control: "control" NAME ("on" NAME "mask" expr)? "{" state ("," state)* "}"
+state: NAME ("=" expr)?
+step: "step" block
+proc: "proc" NAME "(" [param ("," param)*] ")" ("->" TYPE)? block
+param: NAME ":" (TYPE | STREAM)
+STREAM: "stream"
+
+schedule: "schedule" sblock
+sblock: "{" _sitem* "}"
+_sitem: inst ";" | sif | sfor
+sif: "if" expr sblock ("else" sblock)?
+sfor: "for" NAME "in" iter sblock
+inst: NAME ("[" expr "]")?
+iter: expr ".." expr  -> irange
+    | expr            -> ilist
+
+invariant: "invariant" NAME ":" expr ";"
+assume: "assume" expr ";"
+
+block: "{" _stmt* "}"
+_stmt: assign | let | next_let | next_set | if_ | while_ | for_ | call
+     | return_ | goto | in_ | stream | assert_
+assign: lval ASSIGNOP expr ";"
+let: "let" NAME (":" TYPE)? "=" expr ";"
+next_let: "let" NAME "=" "next" NAME ";"
+next_set: lval ASSIGNOP "next" NAME ";"
+if_: "if" expr block elif_* ("else" block)?
+elif_: "elif" expr block
+while_: "while" expr "bound" INT block
+for_: "for" NAME "in" iter block
+call: NAME "(" [expr ("," expr)*] ")" ";"
+return_: "return" [expr] ";"
+goto: "goto" NAME ";"
+in_: "in" NAME "{" arm+ "}"
+arm: NAME "=>" block
+stream: "stream" NAME "=" expr "@" expr ("grammar" STRING)? ";"
+assert_: "assert" expr ";"
+
+lval: NAME                 -> lname
+    | NAME "[" expr "]"    -> lindex
+    | "mem" "[" expr "]"   -> lmem
+    | NAME "." NAME        -> lattr
+
+ASSIGNOP.3: ":=" | "+=" | "-=" | "&=" | "|=" | "^=" | "<<=" | ">>="
+
+?expr: lor
+?lor: land ("||" land)*         -> lor_
+?land: lnot ("&&" lnot)*        -> land_
+?lnot: "!" lnot                 -> not_
+     | cmp
+?cmp: bor (CMPOP bor)?          -> cmp_
+?bor: bxor ("|" bxor)*          -> bor_
+?bxor: band ("^" band)*         -> bxor_
+?band: shift ("&" shift)*       -> band_
+?shift: sum (SHOP sum)*         -> shift_
+?sum: prod (ADDOP prod)*        -> sum_
+?prod: unary (MULOP unary)*     -> prod_
+?unary: "~" unary               -> inv_
+      | "-" unary               -> neg_
+      | atom
+?atom: INT                      -> num
+     | "true"                   -> true_
+     | "false"                  -> false_
+     | NAME                     -> name
+     | NAME "[" expr "]"        -> index
+     | NAME "[" expr "]" "." NAME -> inst_attr
+     | NAME "." NAME            -> attr
+     | "mem" "[" expr "]"       -> mem
+     | "mem16" "[" expr "]"     -> mem16
+     | NAME "(" [expr ("," expr)*] ")" -> func
+     | "(" expr ")"
+
+CMPOP: "==" | "!=" | "<=" | ">=" | "<" | ">"
+SHOP.2: "<<" | ">>"
+MULOP: "*" | "/" | "%"
+ADDOP: "+" | "-"
+TYPE: "u8" | "u16" | "bool" | "ptr"
+INT: /0x[0-9a-fA-F]+/ | /0b[01]+/ | /[0-9]+/
+STRING: /"[^"]*"/
+
+%import common.CNAME -> NAME
+%import common.WS
+%ignore WS
+COMMENT: /\/\/[^\n]*/
+%ignore COMMENT
