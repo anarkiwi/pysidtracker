@@ -775,3 +775,40 @@ def test_hosted_spec_replaces_the_trapped_entry(monkeypatch):
     grid = player.render_grid(whole_song(10))
     steps = {(b[0] - a[0]) & 0xFF for a, b in zip(grid[1:], grid[2:])}
     assert steps == {5}
+
+
+def test_tv_counted_loop_with_unconditional_back_edge():
+    routine = """
+shift: LDY $1000
+loop:  DEY
+       BMI done
+       LSR $1011
+       ROR $1010
+       JMP loop
+done:  RTS
+"""
+    spec = """
+spec t;
+layout { cnt, val: addr; }
+cell count: u8 @ L.cnt;
+cell low: u8 @ L.val;
+cell high: u8 @ L.val + 1;
+machine m {
+  proc shift() {
+    let k = count - 1;
+    while !neg(k) bound 128 {
+      let w = word(low, high) >> 1;
+      low := lo(w);
+      high := hi(w);
+      k -= 1;
+    }
+  }
+  step { shift(); }
+}
+schedule { m; }
+"""
+    code, _ = assemble(routine, 0x2000)
+    image = bytearray(0x10000)
+    image[0x2000 : 0x2000 + len(code)] = code
+    binding = {"cnt": 0x1000, "val": 0x1010}
+    assert validate(parse(spec), binding, "m.shift", bytes(image), 0x2000)
