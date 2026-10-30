@@ -9,7 +9,7 @@ logs it; see ``docs/irqhost.md`` for what is modelled and how it is validated.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Dict, Iterator, List, Optional, Tuple, Type, Union
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Type, Union
 
 from vagrant_moses import memmap as mm
 from vagrant_moses.machine import SOURCES, Machine, boot_cycle
@@ -159,17 +159,56 @@ class _Sid:
             self.reads.flush(cycle)
 
 
+class _Anywhere:
+    """A watch set holding every address: the trap re-derives the real one."""
+
+    def __contains__(self, addr: int) -> bool:
+        return True
+
+
+_STALE = _Anywhere()
+
+
+class _TrapMachine(Machine):
+    """A :class:`~vagrant_moses.machine.Machine` that hands a fetch at a watched
+    address to ``trap(machine)`` before decoding it.
+
+    ``trap`` returns True once it has run the call (it has set ``mpu.pc``), and the
+    fetch is made again at the new ``pc``. Nothing is watched until the CPU reaches
+    ``idle`` (the tune's init has returned); after that the watch is stale at each
+    write to the CPU port, and ``trap`` rebuilds it for the new banking.
+    """
+
+    def __init__(self, *args, trap: Callable[[Machine], bool], **kwargs):
+        super().__init__(*args, **kwargs)
+        self.trap, self.idle, self.armed = trap, None, False
+        self.watch = frozenset()
+
+    def __setitem__(self, addr: int, value: int) -> None:
+        super().__setitem__(addr, value)
+        if addr <= 1 and self.armed:
+            self.watch = _STALE
+
+    def _decode(self) -> None:
+        if not self.armed and self.mpu.pc == self.idle:
+            self.armed, self.watch = True, _STALE
+        while self.mpu.pc in self.watch and self.trap(self):
+            pass
+        super()._decode()
+
+
 def _boot(
     machine: Machine,
     image: SidImage,
     subtune: int,
     tune_ntsc: Optional[bool],
     poweron,
-) -> int:
+) -> Tuple[int, int]:
     """Install sidplayfp's PSID driver and the tune; reset into the driver.
 
     ``poweron`` is the ``(address, bytes)`` RAM image an RSID starts from
-    (:func:`~pysidtracker.roms.poweron_writes`). Returns the reset cycle.
+    (:func:`~pysidtracker.roms.poweron_writes`). Returns the reset cycle and the
+    driver's idle loop, which the CPU reaches once the tune's init has returned.
     """
     header = image.header
     rsid = not header.is_psid
@@ -199,7 +238,7 @@ def _boot(
         + (video, clock, 0 if rsid else _IRQ_I)
     )
     place_tune(ram, image.load, image.mem[image.load : image.end])
-    return machine.reset(labels["cold"])
+    return machine.reset(labels["cold"]), labels["idle"]
 
 
 def _resolve_ntsc(image: SidImage, clock: Optional[str]) -> Tuple[bool, Optional[bool]]:
@@ -230,6 +269,9 @@ class InterruptHost:
 
     :meth:`rows` are what sidtrace logs for the same tune; :meth:`grid` and
     :meth:`frames` frame them at the play source's raises as the oracle is framed.
+    With ``trap``, once init has returned a fetch at an address in the machine's
+    ``watch`` set is handed to ``trap(machine)``. The trap sets ``watch`` (stale after
+    each banking change) and returns True after running a call and moving ``mpu.pc``.
     """
 
     def __init__(
@@ -240,6 +282,7 @@ class InterruptHost:
         clock: Optional[str] = None,
         cia_new: bool = False,
         poweron=None,
+        trap: Optional[Callable[[Machine], bool]] = None,
     ):
         image = data if isinstance(data, SidImage) else SidImage.from_bytes(bytes(data))
         header = image.header
@@ -259,10 +302,15 @@ class InterruptHost:
         sids.update(
             {a & 0xFFE0: _Sid(self.raw, i, models[i]) for i, a in enumerate(extra, 1)}
         )
-        self.machine = Machine(ntsc, sids, cia_new, self._event)
+        if trap is None:
+            self.machine = Machine(ntsc, sids, cia_new, self._event)
+        else:
+            self.machine = _TrapMachine(ntsc, sids, cia_new, self._event, trap=trap)
         if poweron is None and header.is_rsid:
             poweron = poweron_writes() or KERNAL_VECTORS
-        self.start = _boot(self.machine, image, subtune, tune_ntsc, poweron)
+        self.start, idle = _boot(self.machine, image, subtune, tune_ntsc, poweron)
+        if trap is not None:
+            self.machine.idle = idle
         video = mm.video(ntsc)
         self.clock_hz, self.frame_cycles = video.clock_hz, video.cycles_per_frame
         self.framed: Optional[Tuple[str, int]] = None
@@ -404,8 +452,9 @@ class InterruptPlayer(MemPlayer):
         subtune: int = 0,
         *,
         clock: Optional[str] = None,
+        trap: Optional[Callable[[Machine], bool]] = None,
     ):
-        self._data, self._clock = data, clock
+        self._data, self._clock, self._trap = data, clock, trap
         self.host: Optional[InterruptHost] = None
         self._iter: Optional[Iterator[List[int]]] = None
         self._row = [0] * reg.SID_REG_COUNT
@@ -413,7 +462,9 @@ class InterruptPlayer(MemPlayer):
         super().__init__(b"", 0, subtune)
 
     def _init(self, subtune: int) -> None:
-        self.host = InterruptHost(self._data, subtune, clock=self._clock)
+        self.host = InterruptHost(
+            self._data, subtune, clock=self._clock, trap=self._trap
+        )
 
     def _frame(self) -> None:
         if self._iter is None:

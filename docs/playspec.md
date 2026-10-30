@@ -196,9 +196,14 @@ Not expressed, by design or not yet implemented:
 - **Timing inside a call.** A call is an instant, so a read of `$D41B`/`$D41C`
   (oscillator 3 / envelope 3) or a raster poll sees the value at the call's
   start cycle, not the cycle the 6502 would reach it.
-- **Tunes with play address 0.** These are driven by their own interrupt
-  handlers on `InterruptPlayer`, and `SpecPlayer` does not yet trap entries
-  under it.
+- **Timing of a trapped call under interrupts.** A tune with play address 0 runs
+  on an `InterruptPlayer` (its interrupts live, `render_grid` framed at the play
+  source's raises) and `SpecPlayer` traps each call into an `entries(view)` entry
+  there and runs it as the spec. The call is an instant at the cycle the handler
+  reaches it, so the cycles the 6502 would spend in it are not spent, and a
+  handler that reaches an entry by a vector or `JMP` rather than `JSR` is
+  returned from as an `RTS`. Pass `sid=` (the PSID/RSID) for the header's SID
+  model and extra SIDs; without it a header is built around the image.
 - **Opcodes.** Translation validation keeps opcodes constant: a routine that
   rewrites an opcode it then executes is refused, not modelled. The DSL still
   expresses such a choice as an `operand` cell.
