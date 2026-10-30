@@ -1,6 +1,7 @@
 """The playspec DSL: parsing, static checks, both backends, model checking and TV."""
 
 import json
+from collections import deque
 import re
 
 import pytest
@@ -1000,3 +1001,127 @@ def test_a_proc_lowered_once_serves_every_call(p, q, expected):
     assert len(program.procs) == 3
     mem = mem64(m1000=[p], m1100=[q])
     assert run(program, mem)[0x1200] == expected
+
+
+VOLATILE = """spec vol;
+layout { osc, pw: addr; }
+cell osc3: u8 @ L.osc volatile;
+cell pw: u8 @ L.pw out;
+cell tmp: u8 @ 0x10 scratch;
+machine m { step { %s } }
+schedule { m; }
+"""
+VOLATILE_BINDING = {"osc": 0xD41B, "pw": 0xD402}
+
+
+def _prove_volatile(step: str, source: str):
+    code, _ = assemble(source, 0x2000)
+    image = bytearray(0x10000)
+    image[0x2000 : 0x2000 + len(code)] = code
+    return validate(
+        parse(VOLATILE % step), VOLATILE_BINDING, "m.step", bytes(image), 0x2000
+    )
+
+
+def test_a_volatile_read_matches_one_6502_read():
+    result = _prove_volatile(
+        "pw := osc3 & 0x0F;", "lda $d41b\nand #$0f\nsta $d402\nrts"
+    )
+    assert result.proven
+
+
+@pytest.mark.parametrize(
+    "step, code",
+    [
+        ("pw := osc3 + osc3;", "lda $d41b\nand #$0f\nsta $d402\nrts"),
+        ("pw := osc3 & 0x0F;", "lda $d41b\nlda $d41b\nand #$0f\nsta $d402\nrts"),
+        ("pw := osc3 & 0x0F;", "lda $d41c\nand #$0f\nsta $d402\nrts"),
+    ],
+)
+def test_volatile_reads_that_differ_in_number_or_address_are_refuted(step, code):
+    assert not _prove_volatile(step, code).proven
+
+
+def test_a_volatile_read_is_not_shared_between_uses():
+    both = "lda $d41b\nsta $10\nlda $d41b\nclc\nadc $10\nsta $d402\nrts"
+    assert _prove_volatile("pw := osc3 + osc3;", both).proven
+
+
+def test_a_volatile_read_on_one_branch_counts_only_where_it_runs():
+    step = "if osc3 & 1 != 0 { pw := osc3; }"
+    code = "lda $d41b\nand #1\nbeq done\nlda $d41b\nsta $d402\ndone: rts"
+    assert _prove_volatile(step, code).proven
+
+
+def test_a_store_to_a_volatile_cell_is_refused():
+    text = VOLATILE % "osc3 := 1;"
+    with pytest.raises(SpecError, match="write to volatile cell"):
+        elaborate(parse(text), VOLATILE_BINDING)
+
+
+def test_each_volatile_read_is_a_separate_bus_read():
+    reads = []
+    program = elaborate(
+        parse(VOLATILE % "pw := osc3 + osc3; pw := pw + osc3;"), VOLATILE_BINDING
+    )
+    frame = compile_program(program)
+    ram = bytearray(0x10000)
+
+    def read(addr):
+        reads.append(addr)
+        return ram[addr]
+
+    frame(read, ram.__setitem__, [], None, {})
+    assert reads.count(0xD41B) == 3
+
+
+def test_spec_player_replays_the_6502_volatile_reads():
+    code, labels = assemble(
+        """init: lda #$ff
+        sta $d40e
+        sta $d40f
+        lda #$22
+        sta $d413
+        lda #$f0
+        sta $d414
+        lda #$81
+        sta $d412
+        rts
+play:   lda $d41b
+        and #$0f
+        sta $d402
+        lda $d41c
+        sta $d403
+        rts""",
+        0x1000,
+    )
+    spec = parse(
+        "spec o;\nlayout { osc, env, pw, pw2: addr; }\n"
+        "cell osc3: u8 @ L.osc volatile;\ncell env3: u8 @ L.env volatile;\n"
+        "cell pw: u8 @ L.pw out;\ncell pw2: u8 @ L.pw2 out;\n"
+        "machine m { step { pw := osc3 & 0x0F; pw2 := env3; } }\nschedule { m; }"
+    )
+    fed = deque()
+    player = SpecPlayer(
+        spec,
+        code,
+        0x1000,
+        labels["init"],
+        labels["play"],
+        bind=lambda v, e: {"osc": 0xD41B, "env": 0xD41C, "pw": 0xD402, "pw2": 0xD403},
+        entries=lambda view: {labels["play"]},
+        inputs=lambda addr: fed.popleft(),
+    )
+    reference = EmuPlayer(
+        code, 0x1000, labels["init"], labels["play"], record_reads=(0xD41B, 0xD41C)
+    )
+    seen = set()
+    for _ in range(60):
+        reference.play_frame()
+        assert [a for a, _v in reference.reads] == [0xD41B, 0xD41C]
+        fed.extend(v for _a, v in reference.reads)
+        seen.update(v for _a, v in reference.reads)
+        player.play_frame()
+        assert player.snapshot() == reference.snapshot()
+    assert not fed
+    assert len(seen) > 8

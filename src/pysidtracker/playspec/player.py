@@ -67,6 +67,10 @@ class SpecPlayer(EmuPlayer):
     grid is then the tune's as played from the standard equal-tempered table. The
     tune's own 6502 code and ``native`` blocks still read their native table.
 
+    With ``inputs`` (``inputs(address) -> byte``) every spec read of a ``volatile``
+    cell takes its value from it instead of the bus, so a run can be fed the values
+    the 6502 read in the same call (:attr:`~pysidtracker.oracle.EmuPlayer.reads`).
+
     A spec call advances no cycles, so with ``cycles_per_frame`` scheduling the
     player plays a call the real routine would have overrun and had dropped, and runs
     one call ahead from there.
@@ -88,6 +92,7 @@ class SpecPlayer(EmuPlayer):
         sid: Union[bytes, SidImage, None] = None,
         clock: Optional[str] = None,
         notes: Optional[int] = None,
+        inputs: Optional[Callable[[int], int]] = None,
         **kwargs,
     ):
         # pylint: disable=too-many-arguments
@@ -105,6 +110,7 @@ class SpecPlayer(EmuPlayer):
         self._hosted: Optional[InterruptPlayer] = None
         self._sid, self._clock, self._raw = sid, clock, bytes(image)
         self._standard = notes
+        self._inputs = inputs
         kwargs.setdefault("max_cycles", MAX_CYCLES)
         super().__init__(image, load, init, play, subtune, **kwargs)
 
@@ -252,7 +258,17 @@ class SpecPlayer(EmuPlayer):
         mpu = self._mpu
         regs = {"a": mpu.a, "x": mpu.x, "y": mpu.y}
         regs.update((f, bool(mpu.p & bit)) for f, bit in _FLAGS.items())
-        frame(self._bus.__getitem__, self._store, state, hook, regs, self._native)
+        read = self._bus.__getitem__
+        volatile = {
+            a for c in program.cells if "volatile" in c.attrs for a in c.extent()
+        }
+        if self._inputs is not None and volatile:
+            bus_read = read
+
+            def read(addr):
+                return self._inputs(addr) if addr in volatile else bus_read(addr)
+
+        frame(read, self._store, state, hook, regs, self._native)
 
     def _store(self, addr: int, value: int) -> None:
         """A spec store: RAM (the SID band included), and the bank port on the bus."""

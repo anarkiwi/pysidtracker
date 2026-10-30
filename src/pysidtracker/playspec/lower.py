@@ -317,7 +317,8 @@ class Lowerer:
                 (K(self.standard, 0), K(PARTS[part], 0), K(offset, 0), index),
             )
         addrs, combine = self.cell_access(cell, index, line)
-        reads = [self.rd(a) for a in addrs]
+        volatile = "volatile" in cell.attrs
+        reads = [self.rd(a, volatile) for a in addrs]
         return reads[0] if combine is None else combine(*reads)
 
     def check_latched(self, cell: Cell, line: int) -> None:
@@ -334,8 +335,11 @@ class Lowerer:
                 f" {cell.name} after {', '.join(sorted(others))} wrote it this frame",
             )
 
-    def rd(self, addr):
-        """A byte read (marked for frame-start memory inside ``old()``)."""
+    def rd(self, addr, volatile: bool = False):
+        """A byte read (marked for frame-start memory inside ``old()``); a ``volatile``
+        read is an input of the call, never folded (so not built by :func:`mk`)."""
+        if volatile:
+            return Op("vol", 8, (addr,))
         return Op("old", 8, (Rd(addr),)) if self.old else Rd(addr)
 
     def cell_key(self, cell: Cell) -> str:
@@ -346,6 +350,8 @@ class Lowerer:
         """Statements storing ``value`` to ``cell`` (``[index]``)."""
         if "ro" in cell.attrs:
             self.error(line, f"write to read-only cell {cell.name}")
+        if "volatile" in cell.attrs:
+            self.error(line, f"write to volatile cell {cell.name}")
         self.writers.setdefault(self.cell_key(cell), set()).add(self.inst.ident)
         addrs, combine = self.cell_access(cell, self.index_expr(index, line), line)
         if combine is None:
