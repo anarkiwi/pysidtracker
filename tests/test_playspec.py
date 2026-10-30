@@ -9,7 +9,8 @@ import z3
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pysidtracker import SidParseError, irqhost
+from pysidtracker import NTSC_CLOCK_HZ, PAL_CLOCK_HZ, SidFormat, SidParseError, irqhost
+from pysidtracker.formats import SpecBinding
 from pysidtracker.asm6502 import assemble
 from pysidtracker.irqhost import InterruptPlayer
 from pysidtracker.testing import whole_song
@@ -1143,3 +1144,69 @@ def test_parser_survives_an_unwritable_table_cache(monkeypatch):
         assert syntax._parser().parse("spec x;") is not None
     finally:
         syntax._parser.cache_clear()
+
+
+def _hosted_format(sid):
+    _, labels, code = _hosted_tune()
+    binding = SpecBinding(
+        parse(PLAY_SPEC),
+        lambda v, e: {"freq": 0x1300, "sid": 0xD400},
+        code,
+        entries=lambda view: {labels["play"]},
+        psid=False,
+        sid=sid,
+    )
+    model = type(
+        "Model",
+        (),
+        dict(
+            name="n",
+            author="a",
+            released="r",
+            load_addr=0x1000,
+            init_addr=labels["init"],
+            play_addr=0,
+        ),
+    )
+    return SidFormat("hosted", None, None, spec=lambda m: binding), model()
+
+
+def test_spec_player_runs_a_play_address_0_tune_on_its_real_header(monkeypatch):
+    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
+    data, labels, code = _hosted_tune()
+    fmt, model = _hosted_format(data)
+    by_hand = SpecPlayer(
+        parse(PLAY_SPEC),
+        code,
+        0x1000,
+        labels["init"],
+        0,
+        bind=lambda v, e: {"freq": 0x1300, "sid": 0xD400},
+        entries=lambda view: {labels["play"]},
+        psid=False,
+        sid=data,
+        clock="PAL",
+    )
+    frames = whole_song(40)
+    got = fmt.spec_player(model).render_grid(frames)
+    assert (
+        got == by_hand.render_grid(frames) == InterruptPlayer(data).render_grid(frames)
+    )
+    assert len({row[0] for row in got}) > 20
+
+
+def test_spec_player_clock_follows_the_tune_header(monkeypatch):
+    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
+    code, labels = assemble(HOSTED, 0x1000)
+    kwargs = dict(init=labels["init"], play=0, magic=b"RSID")
+    pal = build_psid(code, 0x1000, **kwargs)
+    ntsc = build_psid(code, 0x1000, flags=0b1000, **kwargs)
+
+    def hz(data, **overrides):
+        fmt, model = _hosted_format(data)
+        player = fmt.spec_player(model, **overrides)
+        player.render_grid(whole_song(3))
+        return player._hosted.host.clock_hz  # pylint: disable=protected-access
+
+    assert hz(pal) == PAL_CLOCK_HZ and hz(ntsc) == NTSC_CLOCK_HZ
+    assert hz(ntsc, clock="PAL") == PAL_CLOCK_HZ
