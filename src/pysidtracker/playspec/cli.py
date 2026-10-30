@@ -72,10 +72,13 @@ def _unnative(args) -> None:
     old = load(args.spec)
     player = _player(args, old)
     binding = load_spec(args.binder)(player.view(), player.entry)
-    new = unnative(old, binding, player.view())
+    new = unnative(old, binding, player.view(), name=Path(args.output).stem)
     equivalent(lambda spec: _player(args, spec), old, new, args.frames)
     Path(args.output).write_text(new.source)
-    print(f"{args.output}: native-free, same output over {args.frames} frames")
+    print(
+        f"{args.output}: native-free {new.name} extends {old.name},"
+        f" same output over {args.frames} frames"
+    )
 
 
 def _bmc(args) -> None:

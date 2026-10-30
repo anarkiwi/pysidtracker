@@ -6,7 +6,7 @@ cells, plus its toolchain:
 
 | Stage | API | CLI (`pysidtracker playspec ...`) |
 |---|---|---|
-| Parse (Lark, `playspec.lark`) | `parse(text)`, `load(name)` | |
+| Parse (Lark, `playspec.lark`), derive variants | `parse(text, resolve)`, `load(path)`, `derive` | |
 | Static checks + bind + lower to IR | `elaborate(spec, binding)` | `check SPEC [--binding JSON]` |
 | Concrete execution (compiled Python) | `compile_program`, `run`, `SpecPlayer` | `python`, `run TUNE --binder mod:attr` |
 | SMT transition relation, bounded checking | `smt.transition`, `smt.bmc` | `bmc SPEC --binding JSON --frames N` |
@@ -15,7 +15,8 @@ cells, plus its toolchain:
 
 pysidtracker ships the language and tooling only. Specs of particular players
 belong to their format packages, which bind a spec to a build's layout and run it
-with `SpecPlayer`.
+with `SpecPlayer`. A build that differs from a spec in a few statements is a
+[variant](#variants) that `extends` it, not a copy.
 
 ## Model
 
@@ -79,6 +80,7 @@ schedule {
   - `while c bound N`: running past the bound is a runtime error and a proof obligation.
   - Static `for`, `in`, `goto`, `assert`.
   - `native addr(a = e, x = e, y = e) resumes pc;` runs the tune's own 6502 code (a documented hook a rip patches) from `addr` with those registers (each optional). If the code reaches `pc` the spec carries on with the registers restored; if the call returns first, the CPU has finished it and the spec's call ends. It needs a `SpecPlayer` (`run` raises) and is opaque to `check` and `tv`, which refuse it.
+  - `name: stmt` labels a statement and `{ ... }` groups statements without opening a scope; both are places a [variant](#variants) can `patch`.
   - `finish;` ends the whole play call: the rest of the schedule is skipped and the player returns to its caller.
   - `stream s = base @ cursor [grammar "mod:attr:rule" [if cond] {, "mod:attr:rule" [if cond]}]`: the first rule whose static `cond` (e.g. `L.extended`) holds, an arm without `if` always holding, so a layout can pick the rule per build; read with `let v = next s;`, `s[k]` (relative to the cursor) and `s.pos`.
 - **Arithmetic:**
@@ -120,6 +122,71 @@ opened stream with that `ByteGrammar` and reports malformed data in
 With a binding it also rejects private cells shared by two instances, and lists
 writable cells aliasing read-only tables in `Program.notes`.
 
+## Variants
+
+`spec v extends base;` makes `v` a variant: it starts as `base` and states only what
+differs. `parse` derives it, so `elaborate`, `smt`, `tv` and `SpecPlayer` see one flat
+spec. Every edit must apply exactly, or `parse` raises a `SpecError` listing each one
+that does not.
+
+| Item | Effect | Refused when |
+|---|---|---|
+| a plain declaration (`layout` field, `const`, `cell`, `proc`, `machine`, `invariant`, `assume`) | added | the base already has that name (a layout field of the same kind is allowed) |
+| `override const/cell/proc/machine/invariant/schedule ...` | replaces the base's, in its place | the base has none of that kind and name |
+| `extend machine m { ... }` | merges members into `m`: plain members are added, `override cell/signal/control/proc/step` replaces one, `patch` and `drop` act on its members | `m` does not exist |
+| `patch p { replace l {...} before l {...} after l {...} }` | edits proc `p` (top-level, or a member or `step` inside `extend machine`) at the statement labelled `l` | `p` has no statement labelled `l`, or more than one |
+| `drop n, ...;` | removes the declarations (or members) named | none or several have that name |
+
+A base marks the places its variants differ with labels: `name: stmt`, at any depth
+in a proc. A group `{ ... }` is a statement sequence that opens no scope, so a
+replacement can bind `let`s that later statements use, and a label on a group covers
+several statements. `replace` keeps the label on the new statements, so a variant of a
+variant can edit the same place again; `before`/`after` insert next to it.
+
+```
+// player.play: the orderlist's end byte restarts the voice
+spec player;
+...
+machine voice[x in 0..3] {
+  proc orderwalk() {
+    ...
+    order_end: if ord[0] == L.order_end {
+      ord.pos := L.order_restart;
+    }
+    ...
+  }
+}
+
+// player_stop.play: a build whose end byte stops the voice instead
+spec player_stop extends player;
+cell stopped: u8 @ L.stopped;
+layout { stopped: addr; }
+extend machine voice {
+  patch orderwalk {
+    replace order_end {
+      if ord[0] == L.order_end {
+        stopped := 1;
+        finish;
+      }
+    }
+  }
+}
+```
+
+`load(path)` reads a base from `NAME.play` in the same directory; `parse(text,
+resolve)` takes a mapping or function from base name to `Spec`. Diagnostics give each
+line as `spec:line` (`line player_stop:9: ...`). `Spec.sources` holds every spec in the
+lineage by name.
+
+**Choosing a variant per build.** `SpecPlayer`'s `bind(view, entry)` may return
+`(variant, binding)` instead of a binding, so the code-shape probes that discover a
+build's layout also choose which variant runs it.
+
+What goes where:
+- **The layout:** what a build moves. Addresses, operands, table sizes, and static flags that pick between expressions.
+- **A variant:** what a build does differently. Other statements, procs or schedule, rather than an `L.flag` guarding both code paths in one spec.
+- **`native`:** code the spec has not stated yet. [`unnative`](#removing-native-hooks) states it as a variant.
+
 ## Execution
 
 The lowered IR is one structured program per call:
@@ -136,16 +203,19 @@ The lowered IR is one structured program per call:
 
 ## Removing native hooks
 
-`unnative(spec, binding, image)` returns a spec with every `native` statement replaced,
-and `pysidtracker playspec unnative SPEC TUNE --binder ... -o OUT` writes it after
-checking it against the original.
+`unnative(spec, binding, image, name=...)` returns a [variant](#variants) of `spec`
+(default name `<spec>_stated`) that overrides each proc holding a `native` statement with
+the statement replaced. `pysidtracker playspec unnative SPEC TUNE --binder ... -o OUT`
+writes it, named after `OUT`'s stem, after checking it against the original. Keep it
+beside `SPEC` so `load` finds the base.
 - **Lift.** The hook's 6502 runs symbolically (`tv.Machine6502`) from `addr` with the
   `native` arguments as inputs, until it reaches `pc` (the spec carries on) or returns
   (the call ends).
 - **Statements.** Each exit's memory is stated as `mem[a] := v` stores, with a `finish;`
   on the returning exit and an `if` between exits. Everything the hook reads is read
   into `let`s first, so the stores cannot change what the hook saw. The text replaces
-  the `native` statement in the original source, so comments elsewhere survive.
+  the `native` statement in its proc's source, so the proc's comments survive. A hook
+  inside statements a `patch` put into a base's proc is refused.
 - **Check.** `equivalent` plays both specs on the tune and compares every frame's SID
   registers and every byte outside the stack page; the CLI does this (`--frames`).
 - **Refused.** A hook that reads a register or flag its arguments do not give it, shifts

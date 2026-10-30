@@ -4,9 +4,9 @@
 start: _item*
 
 _item: spec_decl | layout | const | cell | machine | proc | schedule
-     | invariant | assume
+     | invariant | assume | override | extend | patch | drop
 
-spec_decl: "spec" NAME ";"
+spec_decl: "spec" NAME ("extends" NAME)? ";"
 layout: "layout" "{" lfield* "}"
 lfield: NAME ("," NAME)* ":" LKIND ";"
 LKIND: "addr" | "byte" | "flag" | "list"
@@ -24,6 +24,17 @@ signal: "signal" NAME ":" TYPE "=" expr ";"
 control: "control" NAME ("on" NAME "mask" expr)? "{" state ("," state)* "}"
 state: NAME ("=" expr)?
 step: "step" block
+
+// Derivation: a spec that extends a base restates only what differs.
+override: "override" (const | cell | machine | proc | schedule | invariant
+                     | signal | control | step)
+extend: "extend" "machine" NAME "{" (_mitem | override | patch | drop)* "}"
+patch: "patch" NAME "{" edit+ "}"
+edit: EDITOP NAME eblock
+eblock: "{" _stmt* "}"
+EDITOP: "replace" | "before" | "after"
+drop: "drop" NAME ("," NAME)* ";"
+
 proc: "proc" NAME "(" [param ("," param)*] ")" ("->" TYPE)? block
 param: NAME ":" (TYPE | STREAM)
 STREAM: "stream"
@@ -43,6 +54,9 @@ assume: "assume" expr ";"
 block: "{" _stmt* "}"
 _stmt: assign | let | next_let | next_set | if_ | while_ | for_ | call
      | return_ | finish | goto | in_ | stream | assert_ | native
+     | labeled | group
+labeled: NAME ":" _stmt
+group: "{" _stmt* "}"
 assign: lval ASSIGNOP expr ";"
 let: "let" NAME (":" TYPE)? "=" expr ";"
 next_let: "let" NAME "=" "next" NAME ";"

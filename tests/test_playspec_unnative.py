@@ -6,7 +6,7 @@ import z3
 from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidError
 from pysidtracker.maincli import main as cli_main
-from pysidtracker.playspec import SpecPlayer, elaborate, parse, run
+from pysidtracker.playspec import SpecPlayer, elaborate, load, parse, run
 from pysidtracker.playspec import smt
 from pysidtracker.playspec.unnative import count_natives, equivalent, unnative
 
@@ -85,6 +85,7 @@ def test_hook_replaced_by_branch_and_finish(wrapped):
     new = unnative(old, binding, make(old).view())
     assert count_natives(new.machines) == 0
     assert "native" not in new.source and "finish;" in new.source
+    assert new.base == "hooked" and new.source.startswith("spec hooked_stated extends")
     equivalent(make, old, new, 60)
     elaborate(new, binding)  # a native-free spec also checks and bounded-checks
     smt.transition(elaborate(new, binding))
@@ -219,16 +220,21 @@ def test_cli_unnative(tmp_path, capsys):
     psid, _labels, _play = tune(HOOK)
     sid = tmp_path / "t.sid"
     sid.write_bytes(psid)
-    spec = tmp_path / "s.play"
+    spec = tmp_path / "hooked.play"
     spec.write_text(NATIVE_SPEC)
-    out = tmp_path / "o.play"
+    out = tmp_path / "stated.play"
     binder = "tests.test_playspec_unnative:cli_binding"
     cli_main(
         ["playspec", "unnative", str(spec), str(sid), "--binder", binder]
         + ["-o", str(out), "--frames", "20"]
     )
-    assert "native-free, same output over 20 frames" in capsys.readouterr().out
-    assert "native" not in out.read_text() and "finish;" in out.read_text()
+    assert "native-free stated extends hooked, same output over 20 frames" in (
+        capsys.readouterr().out
+    )
+    text = out.read_text()
+    assert text.startswith("spec stated extends hooked;")
+    assert "native" not in text and "finish;" in text
+    assert count_natives(load(out).machines) == 0
 
 
 ARITH_SPEC = LOOP_SPEC.replace("x = n, y = 2", "a = n, x = n")
@@ -315,3 +321,15 @@ def test_index_register_and_loaded_index_are_stated(code):
     binding = {"s": 0x1000, "r": 0x1000 + len(code)}
     out = unnative(parse(_INDEXED), binding, bytes(image))
     assert "mem[" in out.source
+
+
+def test_a_hook_a_patch_put_into_a_base_proc_is_refused():
+    base = parse(NATIVE_SPEC.replace("    let v = freq;", "    first: let v = freq;"))
+    variant = parse(
+        "spec patched extends hooked;\n"
+        "extend machine m { patch step { after first { native L.hook(a = v) resumes L.tail; } } }",
+        {"hooked": base},
+    )
+    binding = {"freq": 0x1300, "sid": 0xD400, "hook": 0x1010, "tail": 0x1020}
+    with pytest.raises(SidError, match="not in a proc written in one spec"):
+        unnative(variant, binding, bytes(0x10000))

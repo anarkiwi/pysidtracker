@@ -26,7 +26,7 @@ from .validate import StreamValidator
 
 MAX_CYCLES = 8_000_000
 _FLAGS = {"c": 0x01, "z": 0x02, "i": 0x04, "d": 0x08, "v": 0x40, "n": 0x80}
-Binder = Callable[[bytes, int], dict]
+Binder = Callable[[bytes, int], Union[dict, Tuple[Spec, dict]]]
 _HEADER = 0x7C
 
 
@@ -46,7 +46,8 @@ class SpecPlayer(EmuPlayer):
     """A :class:`~pysidtracker.oracle.EmuPlayer` whose play calls run ``spec``.
 
     ``bind(view, entry)`` is the layout binding of the instance at ``entry`` in the
-    CPU's memory ``view``; ``entries(view)`` lists the modelled entries (default: the
+    CPU's memory ``view``, or ``(variant, binding)`` to run a variant of ``spec``
+    (one that ``extends`` it, say) for that instance; ``entries(view)`` lists the modelled entries (default: the
     play address). ``validate`` checks opened streams against their grammars.
 
     With ``play`` 0 the tune runs its own interrupts on an
@@ -119,7 +120,9 @@ class SpecPlayer(EmuPlayer):
     def _instance(self, entry: int) -> tuple:
         key = (self._bus.bits, entry)
         if key not in self._compiled:
-            program = elaborate(self.spec, self._bind(self.view(), entry))
+            bound = self._bind(self.view(), entry)
+            spec, binding = bound if isinstance(bound, tuple) else (self.spec, bound)
+            program = elaborate(spec, binding)
             self._compiled[key] = (program, compile_program(program), controls(program))
         return self._compiled[key]
 
