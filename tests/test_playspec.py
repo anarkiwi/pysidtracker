@@ -836,3 +836,37 @@ def test_translation_validation_of_a_stretch():
     assert validate(*args, stop=0x1004).proven
     with pytest.raises(TVError):
         validate(*args, stop=0x1100)
+
+
+PUSH_SPEC = """
+spec pushy;
+layout { out, idx: addr; }
+cell out: u8 @ L.out;
+cell idx: u8 @ L.idx;
+machine m {
+  proc go() { out := ind(0xFB, idx); }
+  step { go(); }
+}
+"""
+
+
+def test_translation_validation_pha_push_is_not_aliased_by_reads():
+    code, _ = assemble("PHA\nLDY $1010\nLDA ($FB),Y\nSTA $1000\nPLA\nRTS", 0x2000)
+    image = bytearray(0x10000)
+    image[0x2000 : 0x2000 + len(code)] = code
+    binding = {"out": 0x1000, "idx": 0x1010}
+    result = validate(parse(PUSH_SPEC), binding, "m.go", bytes(image), 0x2000)
+    assert result.proven, result.counterexample
+
+
+def test_translation_validation_assume_constrains_initial_memory():
+    image, labels = _routine()
+    binding = dict(TV_BIND, reload=labels["reload"] + 1)
+    constant = TV_SPEC.replace("cnt := reload;", "cnt := 4;")
+    args = (parse(constant), binding, "v[0].tick", image, 0x2000)
+    assert not validate(*args, registers={"X": 0}).proven
+    cell = labels["reload"] + 1
+    assumed = validate(
+        *args, registers={"X": 0}, assume=[lambda mem, regs: z3.Select(mem, cell) == 4]
+    )
+    assert assumed.proven, assumed.counterexample

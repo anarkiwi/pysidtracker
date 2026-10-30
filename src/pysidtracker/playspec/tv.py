@@ -2,7 +2,9 @@
 
 The 6502 side runs deity-informant's p-code lift (jennings' semantics) over the spec's
 z3 memory; z3 decides whether a byte outside the stack page and ``scratch`` cells can
-differ, assuming no data read aliases a return address the code itself pushed.
+differ, assuming no data read aliases a stack slot the code itself pushed (a ``JSR``
+return address, or a ``PHA``/``PHP`` byte) and that the spec's ``assume`` clauses (and
+any ``assume`` callables) hold of the initial memory and registers.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from deity_informant import lift
 from ..errors import SidError
 from .ir import Program
 from .lower import elaborate
-from .smt import State, select, step, symbolic_memory
+from .smt import State, check_property, select, step, symbolic_memory
 from .syntax import Spec
 
 REGS = {"A": 0, "X": 1, "Y": 2, "SP": 3}
@@ -165,6 +167,8 @@ class Machine6502:
         simple = z3.simplify(addr)
         if z3.is_bv_value(simple) and simple.as_long() in self.code:
             raise TVError(f"stores into its own code at ${simple.as_long():04x}")
+        if z3.is_bv_value(simple) and simple.as_long() in STACK:
+            self.pushed.add(simple.as_long())
         path.mem = z3.Store(path.mem, addr, value)
         self.writes.append(addr)
 
@@ -301,6 +305,7 @@ def validate(
     preserve: Iterable[str] = (),
     budget: int = BUDGET,
     stop: Optional[int] = None,
+    assume: Iterable = (),
 ) -> TVResult:
     """Prove spec ``routine`` (``"voice[0].parse"``) equal to the 6502 code at ``pc``.
 
@@ -308,6 +313,9 @@ def validate(
     the spec's ``operand`` cells); ``preserve`` registers must also survive the code.
     With ``stop``, the code is a stretch of a longer routine: it is run to that address
     (every path must reach it) and compared there, instead of at its final ``rts``.
+    The spec's ``assume`` clauses constrain the initial memory and registers; ``assume``
+    adds callables ``f(mem0, regs)`` returning a z3 boolean (``regs`` maps ``A``/``X``/
+    ``Y``/``SP`` to the entry register terms) for preconditions the spec cannot state.
     """
     program = elaborate(spec, binding, routine=routine)
     operands = {a for c in program.cells if "operand" in c.attrs for a in c.extent()}
@@ -326,6 +334,10 @@ def validate(
         key = name[4:].upper()
         reg = regs[REGS[key]] if key in REGS else regs[FLAGS[key]]
         env[name] = reg != 0 if w == 1 else reg
+    solver.add(*[_truth(check_property(a, mem0, env=env)) for a in program.assumes])
+    solver.add(
+        *[_truth(f(mem0, {r: regs[i] for r, i in REGS.items()})) for f in assume]
+    )
     spec_state: State = step(program, mem0, env)
     for load in cpu.loads:
         solver.add(*[load != a for a in sorted(cpu.pushed)])
@@ -371,6 +383,11 @@ def validate(
         )
     result.counterexample = out
     return result
+
+
+def _truth(term):
+    """``term`` as a z3 boolean."""
+    return term if z3.is_bool(term) else term != 0
 
 
 def _memory(model, mem0) -> bytes:
