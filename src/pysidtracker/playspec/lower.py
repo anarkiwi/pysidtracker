@@ -115,6 +115,9 @@ class Lowerer:
         self.ran: set = set()
         self.writers: Dict[str, set] = {}
         self.order: List[str] = []
+        self.procs: Dict[str, list] = {}
+        self.lowered: Dict[tuple, tuple] = {}
+        self.latched: Optional[list] = None
         self.inputs: Dict[str, int] = {}
         self.stack: List[str] = []
         self.inst: Instance = Instance("", None, None)
@@ -304,14 +307,7 @@ class Lowerer:
 
     def read_cell(self, cell: Cell, index, line: int):
         """The value of ``cell`` (``[index]``)."""
-        if "latched" in cell.attrs:
-            others = self.writers.get(self.cell_key(cell), set()) - {self.inst.ident}
-            if others:
-                self.error(
-                    line,
-                    f"causality: {self.inst.ident or 'schedule'} reads latched cell"
-                    f" {cell.name} after {', '.join(sorted(others))} wrote it this frame",
-                )
+        self.check_latched(cell, line)
         index = self.index_expr(index, line)
         if cell.notes is not None and self.standard is not None and index is not None:
             part, offset = cell.notes
@@ -323,6 +319,20 @@ class Lowerer:
         addrs, combine = self.cell_access(cell, index, line)
         reads = [self.rd(a) for a in addrs]
         return reads[0] if combine is None else combine(*reads)
+
+    def check_latched(self, cell: Cell, line: int) -> None:
+        """Report a read of a latched ``cell`` that another instance wrote this frame."""
+        if "latched" not in cell.attrs:
+            return
+        if self.latched is not None:
+            self.latched.append((cell, line))
+        others = self.writers.get(self.cell_key(cell), set()) - {self.inst.ident}
+        if others:
+            self.error(
+                line,
+                f"causality: {self.inst.ident or 'schedule'} reads latched cell"
+                f" {cell.name} after {', '.join(sorted(others))} wrote it this frame",
+            )
 
     def rd(self, addr):
         """A byte read (marked for frame-start memory inside ``old()``)."""
@@ -1164,8 +1174,13 @@ class Lowerer:
         )
 
     def inline(self, proc, args, scope: Scope, line: int, slot: Optional[str]) -> list:
-        """Inline ``proc`` with ``args`` (streams pass by reference)."""
-        _tag, _pline, name, params, ret, body = proc
+        """A call of ``proc`` with ``args`` (streams pass by reference).
+
+        The body is lowered once per instance, stream arguments and set of
+        instances already run, into :attr:`procs`; each call site only sets the
+        parameters, calls it and copies the result to ``slot``.
+        """
+        _tag, _pline, name, params, _ret, _body = proc
         key = f"{self.inst.ident}.{name}"
         if key in self.stack:
             self.error(line, f"recursive call of {name}")
@@ -1177,30 +1192,73 @@ class Lowerer:
             return []
         is_global = name in self.spec.procs and name not in self.inst.procs
         inner = Scope()
-        out = []
+        values, streams = [], []
         for (pname, ptype), arg in zip(params, args):
             if ptype == "stream":
                 if arg[0] != "name" or self.stream_of(arg[2], scope, line) is None:
                     self.error(line, f"{name}(): {pname} needs a stream")
                     continue
                 inner.names[pname] = scope.names[arg[2]]
+                streams.append((pname, repr(inner.names[pname])))
                 continue
-            ir = self.fresh(f"a_{pname}")
-            w = WIDTHS[ptype]
-            out.append(("set", ir, self.coerce(self.expr(arg, scope), w, line)))
-            inner.names[pname] = ("var", ir, w)
-        saved_ret, saved_inst = self.ret, self.inst
+            values.append(
+                (
+                    pname,
+                    WIDTHS[ptype],
+                    self.coerce(self.expr(arg, scope), WIDTHS[ptype], line),
+                )
+            )
+        owner = self.global_inst if is_global else self.inst
+        cache = (owner.ident, name, slot is None, tuple(streams), frozenset(self.ran))
+        if cache not in self.lowered:
+            self.lowered[cache] = self.lower_proc(
+                proc, key, owner, inner, values, slot is not None
+            )
+        pid, names, result, writes, reads = self.lowered[cache]
+        for cell, rline in reads:
+            self.check_latched(cell, rline)
+        for cell_key, idents in writes.items():
+            self.writers.setdefault(cell_key, set()).update(idents)
+        if self.latched is not None:
+            self.latched.extend(reads)
+        out = [("set", names[pname], value) for pname, _w, value in values]
+        out.append(("call", pid))
+        if slot is not None:
+            out.append(("set", slot, V(result[0], result[1])))
+        return out
+
+    def lower_proc(self, proc, key: str, owner, inner: Scope, values, valued: bool):
+        """``(id, parameter names, result, writes, latched reads)`` of ``proc`` lowered
+        once into :attr:`procs`."""
+        _tag, _pline, name, _params, ret, body = proc
+        names = {}
+        for pname, w, _value in values:
+            names[pname] = self.fresh(f"a_{pname}")
+            inner.names[pname] = ("var", names[pname], w)
         flag = self.fresh(f"ret_{name}")
-        self.ret = (flag, slot, WIDTHS.get(ret, 8) if ret else 0)
-        if is_global:
-            self.inst = self.global_inst
+        w = WIDTHS.get(ret, 8) if ret else 0
+        result = (self.fresh(f"r_{name}"), w) if valued else (None, w)
+        saved = self.ret, self.inst, self.latched
+        before = {k: set(v) for k, v in self.writers.items()}
+        self.ret = (flag, result[0], w)
+        self.inst = owner
+        self.latched = []
         self.stack.append(key)
         lowered = self.block(body, inner)
         self.stack.pop()
-        self.ret, self.inst = saved_ret, saved_inst
-        if any(returns(s) for s in body):
-            out.append(("set", flag, K(0, 1)))
-        return out + lowered
+        reads = self.latched
+        self.ret, self.inst, self.latched = saved
+        writes = {
+            k: new - before.get(k, set())
+            for k, new in self.writers.items()
+            if new - before.get(k, set())
+        }
+        prologue = [("set", flag, K(0, 1))] if any(returns(s) for s in body) else []
+        if valued:
+            prologue.append(("set", result[0], K(0, w)))
+        pid = f"{key}#{len(self.procs)}"
+        self.procs[pid] = prologue + lowered
+        return pid, names, result, writes, reads
 
     # -- schedule ------------------------------------------------------------
     def run_instance(self, inst: Instance, line: int) -> list:
@@ -1383,6 +1441,7 @@ def elaborate(
         inputs=low.inputs,
         natives=low.natives,
         standard=standard,
+        procs=low.procs,
     )
 
 

@@ -59,6 +59,12 @@ class _Gen:
     def __init__(self, program: Program):
         self.helpers: List[List[str]] = []
         self.tables: Dict[tuple, str] = {}
+        self.procs = program.procs
+        self.names = {
+            pid: f"_p{i}_" + re.sub(r"\W", "_", pid.rpartition("#")[0])
+            for i, pid in enumerate(program.procs)
+        }
+        self.finishing: Dict[str, bool] = {}
         self.controls: Dict[str, int] = {
             n: i for i, (n, _w, _d) in enumerate(program.controls)
         }
@@ -112,6 +118,25 @@ class _Gen:
                 group += part
         return out
 
+    def ends(self, pid: str) -> bool:
+        """Whether running proc ``pid`` can hit a ``finish``."""
+        if pid not in self.finishing:
+            self.finishing[pid] = False
+            self.finishing[pid] = self.finishes(self.procs[pid])
+        return self.finishing[pid]
+
+    def finishes(self, stmts) -> bool:
+        """Whether ``stmts`` can hit a ``finish``."""
+        for s in stmts:
+            tag = s[0]
+            if tag == "finish" or (tag == "call" and self.ends(s[1])):
+                return True
+            if tag == "if" and (self.finishes(s[2]) or self.finishes(s[3])):
+                return True
+            if tag == "loop" and self.finishes(s[2]):
+                return True
+        return False
+
     def helper(self, lines: List[str]) -> List[str]:
         """A function holding ``lines`` and the lines that call it."""
         name = f"_f{len(self.helpers)}"
@@ -155,6 +180,9 @@ class _Gen:
             ]
         if tag == "finish":
             return [_FINISH]
+        if tag == "call":
+            call = f"{self.names[s[1]]}(R, W, C, G, N, V)"
+            return [f"if {call}:", f"    {_FINISH}"] if self.ends(s[1]) else [call]
         if tag == "hook":
             return ["if G is not None:", f"    G({s[1]}, {self.ex(s[2])})"]
         return []
@@ -185,15 +213,22 @@ def _generate(program: Program) -> Tuple[str, Dict[str, tuple]]:
     """``(source, tables)``: the frame function and the ``table`` arguments of the
     note tables (``T0``, ...) it reads.
 
-    Long blocks become helper functions (``_f0`` ...) so no code object is large; a
+    Each proc is a function (``_p0_...``), and long blocks become helper functions
+    (``_f0`` ...) so no code object is large; a
     variable used by more than one function lives in the list ``V``.
     """
     gen = _Gen(program)
     prelude = [f"{gen.name(name)} = P[{name[4:]!r}]" for name in program.inputs]
-    body = gen.block(program.body)
-    funcs = gen.helpers + [
-        ["def frame(R, W, C, G=None, P=None, N=None):"] + indent(prelude + body)
+    procs = [
+        [f"def {gen.names[pid]}(R, W, C, G, N, V):"] + indent(gen.block(body))
+        for pid, body in program.procs.items()
     ]
+    body = gen.block(program.body)
+    funcs = (
+        gen.helpers
+        + procs
+        + [["def frame(R, W, C, G=None, P=None, N=None):"] + indent(prelude + body)]
+    )
     users: Dict[str, int] = {}
     for func in funcs:
         for var in set(_VAR.findall("\n".join(func))):
@@ -203,8 +238,7 @@ def _generate(program: Program) -> Tuple[str, Dict[str, tuple]]:
     }
     text = "\n".join("\n".join(func) for func in funcs) + "\n"
     text = _VAR.sub(lambda m: shared.get(m.group(), m.group()), text)
-    if shared:
-        text = text.replace("N=None):\n", f"N=None):\n    V = [0] * {len(shared)}\n")
+    text = text.replace("N=None):\n", f"N=None):\n    V = [0] * {len(shared)}\n")
     last = text.rindex("def frame(")
     text = text[:last] + text[last:].replace(_FINISH, "return")
     return text, {n: k for k, n in gen.tables.items()}

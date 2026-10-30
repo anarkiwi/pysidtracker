@@ -106,6 +106,9 @@ def _bool(term):
 class Executor:
     """Guarded symbolic execution of lowered statements."""
 
+    def __init__(self, procs: Optional[Dict[str, list]] = None):
+        self.procs = procs or {}
+
     def expr(self, e, st: State):
         """The z3 term of ``e`` in ``st``."""
         # pylint: disable=too-many-return-statements,too-many-branches
@@ -175,6 +178,8 @@ class Executor:
                 self.branch(s, st, guard)
             elif tag == "loop":
                 self.loop(s, st, guard)
+            elif tag == "call":
+                self.run(self.procs[s[1]], st, guard)
             elif tag == "native":
                 raise SidError("native 6502 code is opaque to the solver")
             elif tag == "assert":
@@ -243,7 +248,7 @@ def initial_env(program: Program, prefix: str = "") -> Dict[str, object]:
 def step(program: Program, mem, env: Optional[dict] = None) -> State:
     """One frame of ``program`` from memory ``mem`` (and hidden controls ``env``)."""
     st = State(mem, {**initial_env(program), **(env or {})}, old=mem)
-    return Executor().run(program.body, st)
+    return Executor(program.procs).run(program.body, st)
 
 
 def transition(program: Program):

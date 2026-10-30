@@ -286,9 +286,14 @@ def test_schedule_order_and_signals():
     assert list(mem[0x1000:0x1003]) == [2, 2, 4]
 
 
-def test_python_source_is_one_function():
-    text = python_source(lower(SCHEDULED, BIND))
-    assert text.startswith("def frame(R, W, C, G=None, P=None, N=None):")
+def test_python_source_has_a_function_per_proc():
+    program = lower(SCHEDULED, BIND)
+    text = python_source(program)
+    assert text.count("def ") == len(program.procs) + 1
+    assert (
+        "def _p0_clock_step(" in text
+        and "\ndef frame(R, W, C, G=None, P=None, N=None):" in text
+    )
     with pytest.raises(Exception, match="without a binding"):
         compile_program(lower(SCHEDULED))
 
@@ -965,3 +970,33 @@ def test_split_frame_finish_skips_the_rest(monkeypatch):
     monkeypatch.setattr(pyexec, "CHUNK", 1)
     out = run(lower(SPLIT, BIND), mem64(m1000=[7], m1100=[0]))
     assert (out[0x1100], out[0x1200]) == (99, 7)
+
+
+CALLS = """
+cell p: u8 @ L.a;
+cell q: u8 @ L.b;
+cell r: u8 @ L.c;
+machine m {
+  proc pick(n: u8) -> u8 { if n == 1 { return 5; } if n == 2 { finish; } }
+  proc twice() { r += 1; }
+  step {
+    let a = pick(p);
+    twice();
+    let b = pick(q);
+    twice();
+    r := r + a + b;
+  }
+}
+schedule { m; }
+"""
+
+
+@pytest.mark.parametrize(
+    "p, q, expected",
+    [(1, 0, 2 + 5), (0, 1, 2 + 5), (1, 1, 2 + 10), (0, 0, 2), (2, 1, 0), (1, 2, 1)],
+)
+def test_a_proc_lowered_once_serves_every_call(p, q, expected):
+    program = lower(CALLS, BIND)
+    assert len(program.procs) == 3
+    mem = mem64(m1000=[p], m1100=[q])
+    assert run(program, mem)[0x1200] == expected

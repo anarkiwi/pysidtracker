@@ -66,7 +66,7 @@ schedule {
   `on cell mask M` they are bits of a memory cell (`in c { s => {...} }`,
   `goto s`); without it they are a hidden persistent variable.
 - `proc f(a: u8, s: stream) -> u8 { ... }` declares a procedure. Procedures are
-  inlined, `return` is allowed, and streams pass by reference.
+  not recursive, `return` is allowed, and streams pass by reference.
 - `schedule { ... }` lists the intra-frame order: instances, `if` on statics or
   signals, and `for` over a range or an `L.list`.
 - `invariant name: expr;` and `assume expr;` state properties for bounded
@@ -192,7 +192,9 @@ What goes where:
 ## Execution
 
 The lowered IR is one structured program per call:
-- procs are inlined;
+- each proc is lowered once per instance, stream arguments and set of instances
+  already run, and called (`pysidtracker playspec python` emits one function per
+  proc, named after it; the symbolic backends execute the body at each call);
 - returns become guard flags;
 - static choices and addresses fold per instance.
 
