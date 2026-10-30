@@ -315,3 +315,63 @@ def test_sid_reads_flush_queued_writes():
     chip.flush(20)
     assert chip.pending() == 0
     assert chip.read(30, 0x19) == chip.read(30, 0x19)
+
+
+def _run_both(prog, steps):
+    from vagrant_moses.cpu import flat_mpu
+
+    out = {}
+    for f in (flat_mpu, wire_mpu):
+        s = bytearray(65536)
+        s[0x1000 : 0x1000 + len(prog)] = prog
+        mpu, _ = f(s)
+        mpu.pc = 0x1000
+        for _ in range(steps):
+            mpu.step()
+        out[f.__name__] = s
+    return out
+
+
+def test_ram_banked_sid_read_is_ram_not_chip():
+    # lda #$34 / sta $01 / lda #$77 / sta $d41b / lda $d41b / sta $2000 / jmp *
+    prog = bytes.fromhex("a9348501a9778d1bd4ad1bd48d00204c0e10")
+    out = _run_both(prog, 6)
+    assert out["flat_mpu"][0x2000] == out["wire_mpu"][0x2000] == 0x77
+
+
+# lda #$ff / sta $d40f / lda #$81 / sta $d412 / lda #$37 / sta $01 / ldx #$ff
+# / dex / bne -3 (spin) / lda $d41b / sta $2000 / lda $d43b / sta $2001 / jmp *
+_VOICE3 = bytes.fromhex(
+    "a9ff8d0fd4a9818d12d4"  # voice 3 setup (prefixed per case below)
+)
+_SPIN_READ = bytes.fromhex(
+    "a2ffcad0fd" "ad1bd48d0020" "ad3bd48d0120" "4c1e10"
+)
+
+
+def _voice3(port_first):
+    prefix = bytes([0xA9, port_first, 0x85, 0x01]) if port_first else b""
+    return prefix + _VOICE3 + bytes.fromhex("a9378501") + _SPIN_READ
+
+
+def _read_osc3(prog):
+    s = bytearray(65536)
+    s[0x1000 : 0x1000 + len(prog)] = prog
+    mpu, _ = wire_mpu(s)
+    mpu.pc = 0x1000
+    for _ in range(800):
+        mpu.step()
+    return s[0x2000], s[0x2001]
+
+
+def test_ram_banked_sid_write_does_not_reach_chip():
+    banked = _read_osc3(_voice3(0x34))
+    assert banked == (0, 0)
+    live = _read_osc3(_voice3(0))
+    assert live[0] != 0
+
+
+def test_sid_mirrors_are_the_chip_registers():
+    osc3, mirror = _read_osc3(_voice3(0))
+    assert osc3 != 0
+    assert mirror == osc3
