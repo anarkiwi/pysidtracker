@@ -4,7 +4,9 @@ Expressions: :class:`K`, :class:`Rd`, :class:`V`, :class:`Op`. Statements: ``("w
 ``("set", n, v)``, ``("if", c, then, else)``, ``("loop", c, body, bound, line)``,
 ``("assert", c, what)``, ``("hook", stream_index, base)`` and
 ``("native", addr, ((reg, v), ...), resume)`` (run 6502 code from ``addr`` until it
-reaches ``resume``; opaque to the solver) and ``("finish",)`` (the call ends).
+reaches ``resume``; opaque to the solver), ``("call", id)`` (run ``Program.procs[id]``;
+its variables are global, so arguments and results pass by name) and ``("finish",)``
+(the whole call ends).
 
 ``Op("note", w, (K(clock), K(part), K(offset), index))`` (standard note mode only) is
 the :func:`~pysidtracker.notes.table` entry at ``index``, which the solver rejects.
@@ -136,6 +138,7 @@ class Program:
     order: List[str] = field(default_factory=list)
     inputs: Dict[str, int] = field(default_factory=dict)
     natives: list = field(default_factory=list)
+    procs: Dict[str, list] = field(default_factory=dict)
     standard: Optional[int] = None
 
 

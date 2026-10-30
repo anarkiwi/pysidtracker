@@ -48,12 +48,23 @@ _UN = {
 }
 
 
+CHUNK = 100
+_FINISH = "return True"
+_VAR = re.compile(r"\bv_\w+")
+
+
 class _Gen:
     """Python source for one program."""
 
     def __init__(self, program: Program):
-        self.lines: List[str] = []
-        self.tables: Dict[str, tuple] = {}
+        self.helpers: List[List[str]] = []
+        self.tables: Dict[tuple, str] = {}
+        self.procs = program.procs
+        self.names = {
+            pid: f"_p{i}_" + re.sub(r"\W", "_", pid.rpartition("#")[0])
+            for i, pid in enumerate(program.procs)
+        }
+        self.finishing: Dict[str, bool] = {}
         self.controls: Dict[str, int] = {
             n: i for i, (n, _w, _d) in enumerate(program.controls)
         }
@@ -92,74 +103,145 @@ class _Gen:
             return f"(({args[0]} ^ {sign}) {cmp} ({args[1]} ^ {sign}))"
         raise SidError(f"no concrete form for {e.op}")
 
-    def emit(self, stmts, depth: int) -> None:
-        """Append ``stmts`` at indentation ``depth``."""
-        pad = "    " * depth
-        if not stmts:
-            self.lines.append(pad + "pass")
+    def block(self, stmts) -> List[str]:
+        """The lines of ``stmts``; a block over :data:`CHUNK` lines is split into helpers."""
+        parts = [self.stmt(s) for s in stmts] or [["pass"]]
+        if sum(map(len, parts)) <= CHUNK:
+            return [line for part in parts for line in part]
+        out: List[str] = []
+        group: List[str] = []
+        for part in parts + [None]:
+            if group and (part is None or len(group) + len(part) > CHUNK):
+                out += self.helper(group)
+                group = []
+            if part is not None:
+                group += part
+        return out
+
+    def ends(self, pid: str) -> bool:
+        """Whether running proc ``pid`` can hit a ``finish``."""
+        if pid not in self.finishing:
+            self.finishing[pid] = False
+            self.finishing[pid] = self.finishes(self.procs[pid])
+        return self.finishing[pid]
+
+    def finishes(self, stmts) -> bool:
+        """Whether ``stmts`` can hit a ``finish``."""
         for s in stmts:
             tag = s[0]
-            if tag == "wr":
-                self.lines.append(f"{pad}W({self.ex(s[1])}, {self.ex(s[2])})")
-            elif tag == "set":
-                self.lines.append(f"{pad}{self.name(s[1])} = {self.ex(s[2])}")
-            elif tag == "if":
-                self.branch(s, depth)
-            elif tag == "loop":
-                cond = self.ex(s[1])
-                self.lines.append(f"{pad}for _ in range({s[3]}):")
-                self.lines.append(f"{pad}    if not {cond}:")
-                self.lines.append(f"{pad}        break")
-                self.emit(s[2], depth + 1)
-                self.lines.append(f"{pad}else:")
-                self.lines.append(f"{pad}    if {cond}:")
-                self.lines.append(
-                    f"{pad}        raise SpecRuntimeError('loop at line {s[4]} ran past {s[3]}')"
-                )
-            elif tag == "assert":
-                self.lines.append(f"{pad}if not {self.ex(s[1])}:")
-                self.lines.append(f"{pad}    raise SpecRuntimeError({s[2]!r})")
-            elif tag == "native":
-                regs = ", ".join(f"{r!r}: {self.ex(v)}" for r, v in s[2])
-                self.lines.append(f"{pad}if N is None:")
-                self.lines.append(
-                    f"{pad}    raise SpecRuntimeError('native code needs a CPU (SpecPlayer)')"
-                )
-                self.lines.append(
-                    f"{pad}N({self.ex(s[1])}, {{{regs}}}, {self.ex(s[3])})"
-                )
-            elif tag == "finish":
-                self.lines.append(f"{pad}return")
-            elif tag == "hook":
-                self.lines.append(f"{pad}if G is not None:")
-                self.lines.append(f"{pad}    G({s[1]}, {self.ex(s[2])})")
+            if tag == "finish" or (tag == "call" and self.ends(s[1])):
+                return True
+            if tag == "if" and (self.finishes(s[2]) or self.finishes(s[3])):
+                return True
+            if tag == "loop" and self.finishes(s[2]):
+                return True
+        return False
 
-    def branch(self, s, depth: int) -> None:
+    def helper(self, lines: List[str]) -> List[str]:
+        """A function holding ``lines`` and the lines that call it."""
+        name = f"_f{len(self.helpers)}"
+        args = "R, W, C, G, N, V"
+        self.helpers.append(
+            [f"def {name}({args}):"] + ["    " + line for line in lines]
+        )
+        call = f"{name}({args})"
+        if any(_FINISH in line for line in lines):
+            return [f"if {call}:", f"    {_FINISH}"]
+        return [call]
+
+    def stmt(self, s) -> List[str]:
+        """The lines of one statement."""
+        tag = s[0]
+        if tag == "wr":
+            return [f"W({self.ex(s[1])}, {self.ex(s[2])})"]
+        if tag == "set":
+            return [f"{self.name(s[1])} = {self.ex(s[2])}"]
+        if tag == "if":
+            return self.branch(s)
+        if tag == "loop":
+            cond = self.ex(s[1])
+            return (
+                [f"for _ in range({s[3]}):", f"    if not {cond}:", "        break"]
+                + indent(self.block(s[2]))
+                + [
+                    "else:",
+                    f"    if {cond}:",
+                    f"        raise SpecRuntimeError('loop at line {s[4]} ran past {s[3]}')",
+                ]
+            )
+        if tag == "assert":
+            return [f"if not {self.ex(s[1])}:", f"    raise SpecRuntimeError({s[2]!r})"]
+        if tag == "native":
+            regs = ", ".join(f"{r!r}: {self.ex(v)}" for r, v in s[2])
+            return [
+                "if N is None:",
+                "    raise SpecRuntimeError('native code needs a CPU (SpecPlayer)')",
+                f"N({self.ex(s[1])}, {{{regs}}}, {self.ex(s[3])})",
+            ]
+        if tag == "finish":
+            return [_FINISH]
+        if tag == "call":
+            call = f"{self.names[s[1]]}(R, W, C, G, N, V)"
+            return [f"if {call}:", f"    {_FINISH}"] if self.ends(s[1]) else [call]
+        if tag == "hook":
+            return ["if G is not None:", f"    G({s[1]}, {self.ex(s[2])})"]
+        return []
+
+    def branch(self, s) -> List[str]:
         """An ``if`` with an ``elif`` chain flattened."""
-        pad = "    " * depth
+        out: List[str] = []
         keyword = "if"
         while True:
-            self.lines.append(f"{pad}{keyword} {self.ex(s[1])}:")
-            self.emit(s[2], depth + 1)
+            out.append(f"{keyword} {self.ex(s[1])}:")
+            out += indent(self.block(s[2]))
             orelse = s[3]
             if len(orelse) == 1 and orelse[0][0] == "if":
                 s, keyword = orelse[0], "elif"
                 continue
             if orelse:
-                self.lines.append(f"{pad}else:")
-                self.emit(orelse, depth + 1)
-            return
+                out.append("else:")
+                out += indent(self.block(orelse))
+            return out
+
+
+def indent(lines: List[str]) -> List[str]:
+    """``lines`` one level deeper."""
+    return ["    " + line for line in lines]
 
 
 def _generate(program: Program) -> Tuple[str, Dict[str, tuple]]:
     """``(source, tables)``: the frame function and the ``table`` arguments of the
-    note tables (``T0``, ...) it reads."""
+    note tables (``T0``, ...) it reads.
+
+    Each proc is a function (``_p0_...``), and long blocks become helper functions
+    (``_f0`` ...) so no code object is large; a
+    variable used by more than one function lives in the list ``V``.
+    """
     gen = _Gen(program)
-    gen.lines.append("def frame(R, W, C, G=None, P=None, N=None):")
-    for name in program.inputs:
-        gen.lines.append(f"    {gen.name(name)} = P[{name[4:]!r}]")
-    gen.emit(program.body, 1)
-    return "\n".join(gen.lines) + "\n", {n: k for k, n in gen.tables.items()}
+    prelude = [f"{gen.name(name)} = P[{name[4:]!r}]" for name in program.inputs]
+    procs = [
+        [f"def {gen.names[pid]}(R, W, C, G, N, V):"] + indent(gen.block(body))
+        for pid, body in program.procs.items()
+    ]
+    body = gen.block(program.body)
+    funcs = (
+        gen.helpers
+        + procs
+        + [["def frame(R, W, C, G=None, P=None, N=None):"] + indent(prelude + body)]
+    )
+    users: Dict[str, int] = {}
+    for func in funcs:
+        for var in set(_VAR.findall("\n".join(func))):
+            users[var] = users.get(var, 0) + 1
+    shared = {
+        v: f"V[{i}]" for i, v in enumerate(sorted(v for v, n in users.items() if n > 1))
+    }
+    text = "\n".join("\n".join(func) for func in funcs) + "\n"
+    text = _VAR.sub(lambda m: shared.get(m.group(), m.group()), text)
+    text = text.replace("N=None):\n", f"N=None):\n    V = [0] * {len(shared)}\n")
+    last = text.rindex("def frame(")
+    text = text[:last] + text[last:].replace(_FINISH, "return")
+    return text, {n: k for k, n in gen.tables.items()}
 
 
 def source(program: Program) -> str:

@@ -24,7 +24,7 @@ from pysidtracker.playspec import (
     parse,
     run,
 )
-from pysidtracker.playspec import smt
+from pysidtracker.playspec import pyexec, smt
 from pysidtracker.playspec.pyexec import source as python_source
 from pysidtracker.playspec.tv import TVError, replay, validate
 from pysidtracker.playspec.validate import StreamValidator
@@ -286,9 +286,14 @@ def test_schedule_order_and_signals():
     assert list(mem[0x1000:0x1003]) == [2, 2, 4]
 
 
-def test_python_source_is_one_function():
-    text = python_source(lower(SCHEDULED, BIND))
-    assert text.startswith("def frame(R, W, C, G=None, P=None, N=None):")
+def test_python_source_has_a_function_per_proc():
+    program = lower(SCHEDULED, BIND)
+    text = python_source(program)
+    assert text.count("def ") == len(program.procs) + 1
+    assert (
+        "def _p0_clock_step(" in text
+        and "\ndef frame(R, W, C, G=None, P=None, N=None):" in text
+    )
     with pytest.raises(Exception, match="without a binding"):
         compile_program(lower(SCHEDULED))
 
@@ -925,3 +930,73 @@ def test_pha_pla_routine_is_not_vacuously_proven(high, proven):
     binding = {"src": 0x1000, "dst": 0x1010}
     result = validate(spec, binding, "m.split", bytes(image), 0x2000)
     assert result.proven is proven
+
+
+SPLIT = """
+cell p: u8 @ L.a;
+cell q: u8 @ L.b;
+cell r: u8[4] @ L.c;
+machine m {
+  step {
+    let t = p;
+    let u = q + 1;
+    for i in 0..4 { r[i] := t + i; t += u; }
+    while u != 0 bound 20 { u -= 1; q := q + t; }
+    if p == 7 { q := 99; finish; }
+    r[0] := t;
+    q := q + u;
+  }
+}
+schedule { m; }
+"""
+
+
+@settings(max_examples=25, deadline=None)
+@given(st.integers(0, 255), st.integers(0, 15), st.integers(1, 3))
+def test_split_frame_matches_unsplit(p, q, chunk):
+    program = lower(SPLIT, BIND)
+    mem = mem64(m1000=[p], m1100=[q])
+    whole = run(program, bytearray(mem))
+    saved, pyexec.CHUNK = pyexec.CHUNK, chunk
+    try:
+        text = python_source(program)
+        assert "def _f0(" in text and "V[0]" in text
+        assert run(program, bytearray(mem)) == whole
+    finally:
+        pyexec.CHUNK = saved
+
+
+def test_split_frame_finish_skips_the_rest(monkeypatch):
+    monkeypatch.setattr(pyexec, "CHUNK", 1)
+    out = run(lower(SPLIT, BIND), mem64(m1000=[7], m1100=[0]))
+    assert (out[0x1100], out[0x1200]) == (99, 7)
+
+
+CALLS = """
+cell p: u8 @ L.a;
+cell q: u8 @ L.b;
+cell r: u8 @ L.c;
+machine m {
+  proc pick(n: u8) -> u8 { if n == 1 { return 5; } if n == 2 { finish; } }
+  proc twice() { r += 1; }
+  step {
+    let a = pick(p);
+    twice();
+    let b = pick(q);
+    twice();
+    r := r + a + b;
+  }
+}
+schedule { m; }
+"""
+
+
+@pytest.mark.parametrize(
+    "p, q, expected",
+    [(1, 0, 2 + 5), (0, 1, 2 + 5), (1, 1, 2 + 10), (0, 0, 2), (2, 1, 0), (1, 2, 1)],
+)
+def test_a_proc_lowered_once_serves_every_call(p, q, expected):
+    program = lower(CALLS, BIND)
+    assert len(program.procs) == 3
+    mem = mem64(m1000=[p], m1100=[q])
+    assert run(program, mem)[0x1200] == expected

@@ -190,7 +190,7 @@ def test_the_solver_rejects_standard_mode():
     with pytest.raises(Exception, match="standard note mode"):
         step(program, None)
     with pytest.raises(Exception, match="standard note mode"):
-        Executor().expr(program.body[0][2], State(None, {}))
+        Executor().expr(next(iter(program.procs.values()))[0][2], State(None, {}))
 
 
 def test_unindexed_read_of_a_declared_cell_is_still_an_error():
