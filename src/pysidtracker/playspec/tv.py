@@ -300,11 +300,14 @@ def validate(
     registers: Optional[Dict[str, int]] = None,
     preserve: Iterable[str] = (),
     budget: int = BUDGET,
+    stop: Optional[int] = None,
 ) -> TVResult:
     """Prove spec ``routine`` (``"voice[0].parse"``) equal to the 6502 code at ``pc``.
 
     Both start from one symbolic memory whose lifted code bytes are ``image``'s (bar
     the spec's ``operand`` cells); ``preserve`` registers must also survive the code.
+    With ``stop``, the code is a stretch of a longer routine: it is run to that address
+    (every path must reach it) and compared there, instead of at its final ``rts``.
     """
     program = elaborate(spec, binding, routine=routine)
     operands = {a for c in program.cells if "operand" in c.attrs for a in c.extent()}
@@ -313,7 +316,11 @@ def validate(
     solver = z3.Solver()
     cpu = Machine6502(bytes(image), operands, solver, mem0)
     regs = entry_registers(dict(registers or {}))
-    end = cpu.run(Path(z3.BoolVal(True), dict(regs), mem0, pc), budget)
+    end = cpu.run(Path(z3.BoolVal(True), dict(regs), mem0, pc), budget, stop)
+    if stop is not None:
+        if end is not None:
+            raise TVError(f"a path returns without reaching ${stop:04x}")
+        end = cpu.resumed
     env = {}
     for name, w in program.inputs.items():
         key = name[4:].upper()

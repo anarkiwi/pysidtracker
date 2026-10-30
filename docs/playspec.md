@@ -168,6 +168,7 @@ checking it against the original.
   - **Inputs:** a spec routine (e.g. `voice[0].parse`) and the 6502 code at `pc`.
   - **The 6502 side** executes deity-informant's p-code lift (the semantics jennings runs) over the same z3 memory. Paths fork on branches and merge at equal `(pc, call stack)`. JSR/RTS are tracked as calls.
   - **Constants:** lifted code bytes are constrained to the image. Bytes of the spec's `operand` cells stay symbolic and are read live from memory when the instruction executes.
+  - **Stretches:** `stop=ADDR` (`tv ... --stop ADDR`) runs the code only to that address, for a spec routine that states the first part of a longer one; every path must reach it, and the comparison and `preserve` check happen there.
   - **The claim:** no byte either side wrote, outside the stack page and `scratch` cells, can differ afterwards; `preserve` registers survive; and the spec's own obligations hold.
   - **Assumption:** no data read aliases a return address the code itself pushed. The spec does not model the stack.
   - **Refusal:** a constant store into lifted code is refused.
