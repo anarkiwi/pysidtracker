@@ -896,9 +896,7 @@ schedule {{ m; }}
 """
 
 
-@pytest.mark.parametrize(
-    "high,proven", [("a & 0xF0", True), ("(a & 0xF0) ^ 1", False)]
-)
+@pytest.mark.parametrize("high,proven", [("a & 0xF0", True), ("(a & 0xF0) ^ 1", False)])
 def test_pha_pla_routine_is_not_vacuously_proven(high, proven):
     code, _ = assemble(_PHA_PLA, 0x2000)
     image = bytearray(0x10000)
