@@ -3,6 +3,7 @@
 import pytest
 
 from pysidtracker import SidImage
+from pysidtracker.errors import SidError
 from pysidtracker.asm6502 import assemble
 from pysidtracker.editor import RAM_SIZE, editor_replay, ram_image, run_editor
 from pysidtracker.oracle import register_grid
@@ -107,3 +108,69 @@ def test_editor_replay_renders_the_live_player():
     assert (image.load, image.header.init_address) == (PLAYER, PLAYER)
     grid = register_grid(image, whole_song(3))
     assert [row[0] for row in grid] == [0x21, 0x31, 0x41]
+
+
+STRAIGHT = """
+      lda #1
+      sta $2000
+      lda #2
+      sta $2001
+spin: jmp spin
+"""
+RETURNS = """
+      lda #1
+      sta $2000
+      rts
+"""
+RTS_ONLY, STRAIGHT_AT, RETURNS_AT = 0xC200, 0x1200, 0x1300
+
+
+def _stop_ram():
+    ram = bytearray(_ram())
+    for source, org in (
+        (STRAIGHT, STRAIGHT_AT),
+        (RETURNS, RETURNS_AT),
+        ("rts", RTS_ONLY),
+    ):
+        code, _ = assemble(source, org)
+        ram[org : org + len(code)] = code
+    return bytes(ram)
+
+
+def test_run_editor_runs_an_entry_to_a_stop_pc():
+    for stop in (STRAIGHT_AT + 5, {STRAIGHT_AT + 5, 0x1234}):
+        mem = run_editor(
+            _stop_ram(), b"\x00", AT, (RTS_ONLY, (STRAIGHT_AT, stop), RTS_ONLY)
+        )
+        assert (mem[0x2000], mem[0x2001]) == (1, 0)
+
+
+def test_run_editor_stop_entry_restores_sp(monkeypatch):
+    seen = []
+    real = run_editor.__globals__["run_to_rts"]
+
+    def spy(mpu, mem, entry, acc, cycles):
+        seen.append(mpu.sp)
+        return real(mpu, mem, entry, acc, cycles)
+
+    monkeypatch.setitem(run_editor.__globals__, "run_to_rts", spy)
+    run_editor(
+        _stop_ram(),
+        b"\x00",
+        AT,
+        (RTS_ONLY, RTS_ONLY, (STRAIGHT_AT, STRAIGHT_AT + 5), RTS_ONLY),
+    )
+    assert len(seen) == 2 and seen[0] == seen[1]
+
+
+def test_run_editor_stop_entry_raises():
+    with pytest.raises(SidError, match="never reached"):
+        run_editor(
+            _stop_ram(),
+            b"\x00",
+            AT,
+            (RTS_ONLY, (STRAIGHT_AT, 0x1234)),
+            max_cycles=10_000,
+        )
+    with pytest.raises(SidError, match="returned before"):
+        run_editor(_stop_ram(), b"\x00", AT, (RTS_ONLY, (RETURNS_AT, 0x1234)))
