@@ -25,7 +25,7 @@ HVSC_RSIDS = {
 
 
 def _assert_same_trace(sid, seconds, song=1, name=None):
-    trace = _CACHE / f"{name or sid.stem}_{song}.csv.zst"
+    trace = _CACHE / f"{name or sid.stem}_{song}_{seconds:g}s.csv.zst"
     user = f"{os.getuid()}:{os.getgid()}"
     want = cached_sidtrace(
         sid, trace, seconds=seconds + 1, song=song, user=user, extra_args=ORACLE_ARGS
