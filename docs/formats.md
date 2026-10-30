@@ -9,6 +9,7 @@ inspection commands in the main `pysidtracker` CLI.
 | `grammar` | `ByteGrammar` | `pysidtracker grammar` |
 | `streams` | `model -> Iterable[(name, model, rule)]` | `pysidtracker grammar` |
 | `canonical` | `model -> str` | `pysidtracker equiv`, the `canonical` snapshot probe |
+| `spec` | `model -> SpecBinding` | `SidFormat.spec_player` |
 
 ```python
 SidFormat(
@@ -50,3 +51,16 @@ their unified diff and exits 1. `--subtune` defaults to each tune's start song.
 `SidFormat.snapshot_probes()` is `probes` plus, when the hook is set and
 `probes` names no `canonical`, the UTF-8 canonical text as the `canonical`
 probe, so `pysidtracker snapshot` records it for every tune.
+
+## `spec`
+
+`spec(model)` returns a `SpecBinding(spec, bind, image, entries=None, subtune=0,
+psid=True)`: the format's [playspec](playspec.md), its `bind(view, entry)` binder
+(a binding dict, or `(variant, binding)`), the model's own tune `image` and
+optionally `entries(view)`, the modelled entries.
+
+`SidFormat.spec_player(model, *, notes=None, **kwargs)` builds the `SpecPlayer` of
+the model from it (load, init and play addresses from `model_metadata`; `kwargs` go to
+`SpecPlayer`) and raises `SidFormatError` without the hook. `notes` is a clock in Hz:
+the player then answers every read of a table the spec declares with `notes(...)`
+by the standard equal-tempered word ([Standard notes](playspec.md#standard-notes)).

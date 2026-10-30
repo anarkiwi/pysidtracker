@@ -118,6 +118,8 @@ class Executor:
         if isinstance(e, V):
             return st.env[e.n]
         op, args = e.op, e.a
+        if op == "note":
+            raise SidError("standard note mode is not supported by the solver")
         if op == "old":
             inner = State(st.old if st.old is not None else st.mem, st.env)
             return self.expr(args[0], inner)

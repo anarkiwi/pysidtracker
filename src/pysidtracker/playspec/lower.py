@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
+from ..notes import PARTS
 from .ir import Cell, K, Op, Program, Rd, V, evaluate, width
 from .syntax import Spec, SpecError
 
@@ -96,9 +97,12 @@ class Lowerer:
 
     # pylint: disable=too-many-public-methods,too-many-instance-attributes
 
-    def __init__(self, spec: Spec, binding: Optional[dict]):
+    def __init__(
+        self, spec: Spec, binding: Optional[dict], standard: Optional[int] = None
+    ):
         self.spec = spec
         self.binding = binding
+        self.standard = standard
         self.errors: Dict[Tuple[int, str], None] = {}
         self.uid = 0
         self.natives: list = []
@@ -180,7 +184,7 @@ class Lowerer:
     # -- cells ---------------------------------------------------------------
     def bind_cell(self, decl, owner: str, scope: Scope) -> Cell:
         """Bind a ``cell`` declaration's addresses."""
-        _tag, line, name, typ, length, place, attrs = decl
+        _tag, line, name, typ, length, place, attrs, notes = decl
         if typ == "bool":
             self.error(line, f"cell {name}: bool is not a memory type")
         size = None if length is None else self.static(length, scope, line)
@@ -195,7 +199,30 @@ class Lowerer:
         if bad:
             self.error(line, f"cell {name} cannot be both ro and out")
         place16 = tuple(None if a is None else a & 0xFFFF for a in addrs)
-        return Cell(name, owner, typ, size, place16, frozenset(attrs), line)
+        return Cell(
+            name,
+            owner,
+            typ,
+            size,
+            place16,
+            frozenset(attrs),
+            line,
+            self.bind_notes(name, typ, length, attrs, notes, scope, line),
+        )
+
+    def bind_notes(self, name, typ, length, attrs, notes, scope: Scope, line: int):
+        """``(part, offset)`` of a cell's ``notes(part, offset)`` (None: undeclared)."""
+        if notes is None:
+            return None
+        part, expr = notes
+        offset = self.static(expr, scope, line)
+        bad = "ro" not in attrs or length is None or (part == "word") != (typ != "u8")
+        if bad:
+            self.error(
+                line,
+                f"cell {name}: notes needs a ro table, lo/hi of a u8[n] or word of a u16[n]/ptr[n]",
+            )
+        return None if offset is None else (part, offset)
 
     def instance(self, machine_name: str, index: Optional[int]) -> Instance:
         """The (lazily bound) instance of ``machine_name`` at static ``index``."""
@@ -285,7 +312,15 @@ class Lowerer:
                     f"causality: {self.inst.ident or 'schedule'} reads latched cell"
                     f" {cell.name} after {', '.join(sorted(others))} wrote it this frame",
                 )
-        addrs, combine = self.cell_access(cell, self.index_expr(index, line), line)
+        index = self.index_expr(index, line)
+        if cell.notes is not None and self.standard is not None and index is not None:
+            part, offset = cell.notes
+            return Op(
+                "note",
+                16 if part == "word" else 8,
+                (K(self.standard, 0), K(PARTS[part], 0), K(offset, 0), index),
+            )
+        addrs, combine = self.cell_access(cell, index, line)
         reads = [self.rd(a) for a in addrs]
         return reads[0] if combine is None else combine(*reads)
 
@@ -1310,14 +1345,19 @@ def returns(node) -> bool:
 
 
 def elaborate(
-    spec: Spec, binding: Optional[dict] = None, routine: Optional[str] = None
+    spec: Spec,
+    binding: Optional[dict] = None,
+    routine: Optional[str] = None,
+    standard: Optional[int] = None,
 ) -> Program:
     """Check ``spec`` and lower it: the frame, or one ``routine`` (``"voice[0].parse"``).
 
     Raises :class:`SpecError` listing every diagnostic. ``binding`` maps the layout
-    block's names to values; None checks the spec without one.
+    block's names to values; None checks the spec without one. With ``standard`` (a
+    clock in Hz) every read of a cell declared ``notes(...)`` is the standard word of
+    its note at that clock rather than memory.
     """
-    low = Lowerer(spec, binding)
+    low = Lowerer(spec, binding, standard)
     if routine is None:
         body = low.frame()
     else:
@@ -1342,6 +1382,7 @@ def elaborate(
         order=low.order,
         inputs=low.inputs,
         natives=low.natives,
+        standard=standard,
     )
 
 
