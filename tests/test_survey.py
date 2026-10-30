@@ -909,3 +909,36 @@ def test_oracle_cache_concurrent_clear(tmp_path, monkeypatch):
     assert errors == [None] * workers
     assert sorted(p.name for p in stale.iterdir()) == ["STAMP"]
     assert json.loads((stale / "STAMP").read_text("utf-8"))["image"] == "sha256:new"
+
+
+def _write_results(path, rows):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, survey.RESULT_FIELDS)
+        w.writeheader()
+        for key, verdict, first in rows:
+            w.writerow(
+                dict(key=key, path=f"{key}.sid", verdict=verdict, first_diff=first)
+            )
+    return survey.read_results(path)
+
+
+def test_changes_lists_moved_verdicts_and_first_diffs(tmp_path, capsys):
+    base = tmp_path / "base.csv"
+    head = tmp_path / "head.csv"
+    _write_results(
+        base,
+        [("a_1", "exact", ""), ("b_1", "differs", "5"), ("c_1", "differs", "7")],
+    )
+    _write_results(
+        head,
+        [("a_1", "differs", "3"), ("b_1", "differs", "9"), ("c_1", "differs", "7")],
+    )
+    rows = survey.changes_cli(base, head)
+    assert rows == [
+        ("a_1", "exact", "differs", "", "3"),
+        ("b_1", "differs", "differs", "5", "9"),
+    ]
+    out = capsys.readouterr().out
+    assert "a_1 a_1.sid: exact -> differs" in out
+    assert "b_1 b_1.sid: differs -> differs first_diff 5 -> 9" in out
+    assert "2 of 3 subtunes changed" in out

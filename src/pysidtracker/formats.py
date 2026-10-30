@@ -83,6 +83,9 @@ class SidFormat:
     ``grammar`` and ``streams(model)`` (``(name, model, rule)`` triples) back
     the ``grammar`` command; ``canonical(model)`` is a text that is equal for
     two models exactly when they play the same (the ``equiv`` command).
+    ``player_modules`` names the modules, besides ``player``'s own, whose code a
+    render depends on; :mod:`pysidtracker.rendercache` invalidates every cached
+    render when any of them changes.
     """
 
     name: str
@@ -98,6 +101,7 @@ class SidFormat:
     grammar: Optional[ByteGrammar] = None
     streams: Optional[Callable[[Any], Iterable[Stream]]] = None
     canonical: Optional[Callable[[Any], str]] = None
+    player_modules: Sequence[str] = ()
 
     def listing(self, model: Any) -> Iterator[str]:
         """The :meth:`ByteGrammar.listing` of ``model``'s streams.

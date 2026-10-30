@@ -163,7 +163,7 @@ Two snapshots taken before and after a refactor show which tunes it changed.
 
 ```bash
 pysidtracker snapshot build CORPUS... -o before.json \
-    [--format NAME|module:attr] [--probe NAME=module:attr ...] [--jobs N]
+    [--format NAME|module:attr] [--probe NAME=module:attr ...] [--jobs N] [--work SURVEY_WORK]
 pysidtracker snapshot diff before.json after.json   # exit 1 on any difference
 ```
 

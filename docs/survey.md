@@ -155,6 +155,27 @@ Results written before these columns existed still report, without that list. `d
 a subtune's first difference. The work directory derives from copyright tunes:
 keep it untracked.
 
+## Render cache and `changes`
+
+With `--format`, `run` keeps every subtune's library grid in `WORK/render/`
+(beside the oracle cache), keyed by a digest of the format, its decoded model,
+the subtune and the player code (`rendercache.player_version`: the core playback
+modules, the module of `SidFormat.player` and `SidFormat.player_modules`; decoder
+code is deliberately not in it). Decoding still runs for every tune, but a
+subtune whose key is unchanged since an earlier run is not rendered again, so a
+change that alters ten decodes renders ten subtunes. Any change to player code
+invalidates every entry. A render is causal, so the frame count is not in the
+key: a cached grid serves any request up to its length, and a longer request
+replaces it. Entries are written atomically, so concurrent runs may share the
+directory. The progress bar and the `cache` column of `results.csv` report
+`rendered` / `reused` (`miss` / `hit`).
+
+`pysidtracker snapshot build --work WORK` reads and fills the same `WORK/render/`,
+so the snapshot's `render` digest and the survey compare one cached grid.
+
+`changes BASE HEAD` lists the subtunes whose `verdict` or `first_diff` differs
+between two `results.csv` files (`survey.changes`, `survey.changes_cli`).
+
 ## `compare`
 
 Compares a `results.csv` with a baseline one (`--base`, e.g. the survey before a

@@ -7,6 +7,7 @@ import pytest
 from pysidtracker import BaseSidParser, SidFormat, SidImage, SidParseError
 from pysidtracker.maincli import main
 from pysidtracker.player import MemPlayer
+from pysidtracker.rendercache import HIT, MISS, RenderCache
 from pysidtracker.testing import check_outcome, corpus_params
 from pysidtracker.snapshot import (
     MISSING,
@@ -193,3 +194,14 @@ def test_corpus_cases_from_a_snapshot(tmp_path):
         check_outcome(load, "A/good.sid", "unsupported toy")
     with pytest.raises(SidParseError):
         check_outcome(load, "B/bad.sid", None)
+
+
+def test_snapshot_reuses_cached_renders(songlengths, tmp_path):
+    data = b"\x00\x10TOY1"
+    songlengths.add(data, 0.06)
+    cache = RenderCache(tmp_path / "render")
+    first = fingerprint(data, TOY, cache=cache)
+    assert cache.last == MISS and first == fingerprint(data, TOY)
+    assert fingerprint(data, TOY, cache=cache) == first and cache.last == HIT
+    changed = fingerprint(b"\x00\x10TOY2", TOY, cache=cache)
+    assert cache.last == MISS and changed["render"] != first["render"]

@@ -9,7 +9,6 @@ two snapshots taken around a refactor show exactly which tunes it changed
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 import sys
@@ -22,6 +21,8 @@ from tqdm import tqdm
 from . import jobs
 from .census import tune_paths
 from .formats import SidFormat, find_format
+from .header import parse_sid_header
+from .rendercache import HIT, MISS, RenderCache, digest
 from .source import read_bytes
 from .testing import song_frames
 
@@ -31,12 +32,6 @@ MISSING = "*"
 
 Probe = Callable[[Any], Any]
 Snapshot = Dict[str, Dict[str, str]]
-
-
-def digest(value: Any) -> str:
-    """BLAKE2b digest of ``value``'s bytes (``bytes``-like) or ``repr``."""
-    raw = value if isinstance(value, (bytes, bytearray)) else repr(value).encode()
-    return hashlib.blake2b(raw, digest_size=16).hexdigest()
 
 
 def load_spec(spec: str) -> Any:
@@ -72,27 +67,44 @@ def _digest_of(probe: Probe, model: Any) -> str:
         return _failed(exc)
 
 
-def _render(data: bytes, fmt: SidFormat) -> Probe:
+def _start_song(data: bytes) -> int:
+    """The 1-based start song of a PSID/RSID ``data`` (1 for a bare PRG)."""
+    try:
+        return parse_sid_header(data).start_song
+    except Exception:  # pylint: disable=broad-except
+        return 1
+
+
+def _render(data: bytes, fmt: SidFormat, cache: Optional[RenderCache]) -> Probe:
     def render(model: Any) -> bytes:
         frames = song_frames(data, None)
-        return np.asarray(fmt.player(model).render_grid(frames), np.uint8).tobytes()
+        if cache is None:
+            grid = fmt.player(model).render_grid(frames)
+        else:
+            grid = cache.grid(fmt, model, _start_song(data), frames)
+        return np.asarray(grid, np.uint8).tobytes()
 
     return render
 
 
 def fingerprint(
-    data: bytes, fmt: SidFormat, probes: Optional[Mapping[str, Probe]] = None
+    data: bytes,
+    fmt: SidFormat,
+    probes: Optional[Mapping[str, Probe]] = None,
+    cache: Optional[RenderCache] = None,
 ) -> Dict[str, str]:
     """``{key: digest}`` of ``data``'s model, of :data:`RENDER` (``fmt.player(model)``
     over the start song's whole length, :func:`~pysidtracker.testing.song_frames`)
     and every probe of the model (:meth:`SidFormat.snapshot_probes` then
     ``probes``); a key whose step raised holds ``!Error: message``. Probes must
-    not render a part of a song: :data:`RENDER` is the render digest."""
+    not render a part of a song: :data:`RENDER` is the render digest. A ``cache``
+    (:class:`~pysidtracker.rendercache.RenderCache`, shared with ``survey run``)
+    supplies the render of an unchanged model."""
     try:
         model = fmt.load(data)
     except Exception as exc:  # pylint: disable=broad-except
         return {MODEL: _failed(exc)}
-    out = {MODEL: digest(model), RENDER: _digest_of(_render(data, fmt), model)}
+    out = {MODEL: digest(model), RENDER: _digest_of(_render(data, fmt, cache), model)}
     for name, probe in {**fmt.snapshot_probes(), **(probes or {})}.items():
         out[name] = _digest_of(probe, model)
     return out
@@ -109,13 +121,17 @@ def parse_probes(specs: Iterable[str]) -> Dict[str, Probe]:
     return out
 
 
-def _task(path: str, fmt: str, specs: Tuple[str, ...]) -> Dict[str, str]:
+def _task(
+    path: str, fmt: str, specs: Tuple[str, ...], cache_dir: Optional[str] = None
+) -> Tuple[Dict[str, str], str]:
     data = read_bytes(path)
+    cache = RenderCache(cache_dir) if cache_dir else None
     try:
         found = resolve_format(data, fmt)
     except Exception as exc:  # pylint: disable=broad-except
-        return {MODEL: _failed(exc)}
-    return fingerprint(data, found, parse_probes(specs))
+        return {MODEL: _failed(exc)}, ""
+    out = fingerprint(data, found, parse_probes(specs), cache)
+    return out, cache.last if cache else ""
 
 
 def snapshot(
@@ -124,18 +140,26 @@ def snapshot(
     probes: Iterable[str] = (),
     workers: Optional[int] = None,
     progress: bool = True,
+    cache_dir: Optional[str] = None,
 ) -> Snapshot:
     """``{name: fingerprint}`` of every ``(name, path)`` tune, over ``workers``
     processes; ``fmt`` and ``probes`` as :func:`resolve_format` /
-    :func:`parse_probes` take them."""
+    :func:`parse_probes` take them. Renders come from the render cache at
+    ``cache_dir`` where its model is unchanged."""
     tunes = list(tunes)
     specs = tuple(probes)
     parse_probes(specs)
-    tasks = [(str(path), fmt, specs) for _, path in tunes]
+    tasks = [(str(path), fmt, specs, cache_dir) for _, path in tunes]
     out: Snapshot = {}
+    seen = {"rendered": 0, "reused": 0}
     bar = tqdm(total=len(tasks), unit="tune", disable=not progress)
     for index, value, error in jobs.imap(_task, tasks, workers):
-        out[tunes[index][0]] = value if error is None else {MODEL: _failed(error)}
+        if error is not None:
+            value = ({MODEL: _failed(error)}, "")
+        out[tunes[index][0]], status = value
+        seen["rendered"] += status == MISS
+        seen["reused"] += status == HIT
+        bar.set_postfix(seen)
         bar.update()
     bar.close()
     return dict(sorted(out.items()))
@@ -178,7 +202,11 @@ def read_snapshot(path) -> Snapshot:
 
 def _build(args) -> None:
     snap = snapshot(
-        tune_paths(args.inputs, args.hvsc), args.format, args.probe, args.jobs
+        tune_paths(args.inputs, args.hvsc),
+        args.format,
+        args.probe,
+        args.jobs,
+        cache_dir=str(Path(args.work) / "render") if args.work else None,
     )
     failed = sum(any(v.startswith("!") for v in fp.values()) for fp in snap.values())
     write_snapshot(snap, args.out)
@@ -212,7 +240,13 @@ def add_snapshot_commands(parser) -> None:
         help="name=module:attr, a callable of the model to digest (repeatable)",
     )
     build.add_argument("--hvsc", help="HVSC root that find CSV paths are relative to")
-    build.add_argument("--jobs", type=int, default=None, help="worker processes")
+    build.add_argument(
+        "--jobs", type=int, default=None, help="worker processes (default: all cores)"
+    )
+    build.add_argument(
+        "--work",
+        help="survey work dir whose render/ cache supplies and keeps whole-song renders",
+    )
     build.set_defaults(func=_build)
     cmp = sub.add_parser("diff", help="list the digests two snapshots differ in")
     cmp.add_argument("old", help="snapshot JSON before")
