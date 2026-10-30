@@ -26,7 +26,7 @@ from pysidtracker.playspec import (
 )
 from pysidtracker.playspec import smt
 from pysidtracker.playspec.pyexec import source as python_source
-from pysidtracker.playspec.tv import replay, validate
+from pysidtracker.playspec.tv import TVError, replay, validate
 from pysidtracker.playspec.validate import StreamValidator
 
 from .helpers import build_psid
@@ -812,3 +812,27 @@ schedule { m; }
     image[0x2000 : 0x2000 + len(code)] = code
     binding = {"cnt": 0x1000, "val": 0x1010}
     assert validate(parse(spec), binding, "m.shift", bytes(image), 0x2000)
+
+
+STRETCH_SPEC = """spec stretch;
+layout { src, dst: addr; }
+cell src: u8 @ L.src;
+cell dst: u8 @ L.dst;
+machine m[x in 0..1] {
+  step { copy(); }
+  proc copy() { dst := src; }
+}
+schedule { m[0]; }
+"""
+
+
+def test_translation_validation_of_a_stretch():
+    image = bytearray(0x10000)
+    code = bytes.fromhex("A5208521A5228523E62460")
+    image[0x1000 : 0x1000 + len(code)] = code
+    binding = {"src": 0x20, "dst": 0x21}
+    args = (parse(STRETCH_SPEC), binding, "m[0].copy", bytes(image), 0x1000)
+    assert not validate(*args).proven
+    assert validate(*args, stop=0x1004).proven
+    with pytest.raises(TVError):
+        validate(*args, stop=0x1100)

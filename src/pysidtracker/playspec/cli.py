@@ -102,6 +102,7 @@ def _tv(args) -> None:
         int(args.pc, 16),
         registers=regs,
         preserve=args.preserve,
+        stop=None if args.stop is None else int(args.stop, 16),
     )
     print(
         f"{args.routine} vs ${result.pc:04x}: {'proven' if result.proven else 'counterexample'}"
@@ -159,6 +160,9 @@ def add_playspec_commands(parser) -> None:
             )
             cmd.add_argument(
                 "--preserve", action="append", default=[], help="register kept"
+            )
+            cmd.add_argument(
+                "--stop", help="hex address ending a stretch of a longer routine"
             )
 
 
