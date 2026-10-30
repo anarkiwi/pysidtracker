@@ -459,7 +459,7 @@ def test_assert_decode_fidelity(songlengths):
         )
 
 
-def test_song_length_reads_hvsc_songlengths(songlengths, monkeypatch, tmp_path):
+def test_song_length_reads_hvsc_songlengths(songlengths, tmp_path):
     two = build_psid(b"\x60", 0x1000, songs=2, start_song=2)
     songlengths.add(two, 61.5, 0.2)
     assert testing.song_length(two) == 61.5
