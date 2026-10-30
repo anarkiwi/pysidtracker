@@ -1125,3 +1125,21 @@ play:   lda $d41b
         assert player.snapshot() == reference.snapshot()
     assert not fed
     assert len(seen) > 8
+
+
+def test_parser_survives_an_unwritable_table_cache(monkeypatch):
+    from pysidtracker.playspec import syntax
+
+    real = syntax.Lark
+
+    def lark(text, **options):
+        if options.get("cache"):
+            raise OSError("read-only cache directory")
+        return real(text, **options)
+
+    monkeypatch.setattr(syntax, "Lark", lark)
+    syntax._parser.cache_clear()
+    try:
+        assert syntax._parser().parse("spec x;") is not None
+    finally:
+        syntax._parser.cache_clear()

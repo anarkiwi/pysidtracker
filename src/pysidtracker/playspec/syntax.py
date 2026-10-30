@@ -437,7 +437,11 @@ class _ToAst(Transformer):
 @lru_cache(maxsize=None)
 def _parser() -> Lark:
     text = resources.files(__package__).joinpath("playspec.lark").read_text()
-    return Lark(text, parser="lalr", propagate_positions=True, maybe_placeholders=True)
+    options = dict(parser="lalr", propagate_positions=True, maybe_placeholders=True)
+    try:
+        return Lark(text, cache=True, **options)
+    except OSError:
+        return Lark(text, **options)
 
 
 Resolver = Union[Callable[[str], Optional[Spec]], Mapping[str, Spec]]
