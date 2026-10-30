@@ -17,7 +17,11 @@ bank and `$D418`), then, before the first entry runs, puts back the RAM's own
 `$01` (`keep_bank`, also after the boot) and `$D418` (`keep_volume`), places the
 payload and writes the KERNAL `LOAD` end word `at + len(payload)` to each
 `load_end` address. `entries[0]` runs as init, the rest in order with `A = 0`
-(`emu.run_to_rts`). Pass the editor's LOAD decoder (and a packer) as entries;
+(`emu.run_to_rts`). An entry may instead be a `(start, stop)` pair, for
+straight-line code inside a larger routine: it runs from `start` until the PC
+reaches `stop` (an address or a collection of them), then the stack pointer is
+restored as after a return. It raises `SidError` if `max_cycles` runs out or the
+routine returns before `stop`. Pass the editor's LOAD decoder (and a packer) as entries;
 `editor_replay` then wraps the editor's live player so an `EmuPlayer` subclass
 renders the song exactly as the composer hears it.
 
