@@ -344,9 +344,7 @@ def test_ram_banked_sid_read_is_ram_not_chip():
 _VOICE3 = bytes.fromhex(
     "a9ff8d0fd4a9818d12d4"  # voice 3 setup (prefixed per case below)
 )
-_SPIN_READ = bytes.fromhex(
-    "a2ffcad0fd" "ad1bd48d0020" "ad3bd48d0120" "4c1e10"
-)
+_SPIN_READ = bytes.fromhex("a2ffcad0fd" "ad1bd48d0020" "ad3bd48d0120" "4c1e10")
 
 
 def _voice3(port_first):
