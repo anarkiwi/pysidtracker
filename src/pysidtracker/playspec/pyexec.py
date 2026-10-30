@@ -1,8 +1,9 @@
 """Concrete execution: a lowered :class:`~.ir.Program` compiled to one Python function.
 
-``frame(R, W, C, G, P)``: ``R``/``W`` read and store a byte, ``C`` holds hidden
-control states, ``G(index, base)`` (or None) sees each stream open and ``P`` maps
-the entry registers the spec reads (``a``, ``x``, ``y``, flag letters).
+``frame(R, W, C, G, P, N)``: ``R``/``W`` read and store a byte, ``C`` holds hidden
+control states, ``G(index, base)`` (or None) sees each stream open, ``P`` maps
+the entry registers the spec reads (``a``, ``x``, ``y``, flag letters) and
+``N(addr, regs, resume)`` (or None) runs the tune's 6502 code for ``native``.
 """
 
 from __future__ import annotations
@@ -112,6 +113,15 @@ class _Gen:
             elif tag == "assert":
                 self.lines.append(f"{pad}if not {self.ex(s[1])}:")
                 self.lines.append(f"{pad}    raise SpecRuntimeError({s[2]!r})")
+            elif tag == "native":
+                regs = ", ".join(f"{r!r}: {self.ex(v)}" for r, v in s[2])
+                self.lines.append(f"{pad}if N is None:")
+                self.lines.append(
+                    f"{pad}    raise SpecRuntimeError('native code needs a CPU (SpecPlayer)')"
+                )
+                self.lines.append(
+                    f"{pad}N({self.ex(s[1])}, {{{regs}}}, {self.ex(s[3])})"
+                )
             elif tag == "hook":
                 self.lines.append(f"{pad}if G is not None:")
                 self.lines.append(f"{pad}    G({s[1]}, {self.ex(s[2])})")
@@ -136,7 +146,7 @@ class _Gen:
 def source(program: Program) -> str:
     """The Python source of ``program``'s frame function."""
     gen = _Gen(program)
-    gen.lines.append("def frame(R, W, C, G=None, P=None):")
+    gen.lines.append("def frame(R, W, C, G=None, P=None, N=None):")
     for name in program.inputs:
         gen.lines.append(f"    {gen.name(name)} = P[{name[4:]!r}]")
     gen.emit(program.body, 1)
@@ -144,7 +154,7 @@ def source(program: Program) -> str:
 
 
 def compile_program(program: Program) -> Callable:
-    """``frame(R, W, C, G=None)`` running one call of ``program``."""
+    """``frame(R, W, C, G=None, P=None, N=None)`` running one call of ``program``."""
     namespace = {"SpecRuntimeError": SpecRuntimeError}
     exec(
         compile(source(program), f"<playspec {program.name}>", "exec"), namespace

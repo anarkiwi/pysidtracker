@@ -2,7 +2,9 @@
 
 Expressions: :class:`K`, :class:`Rd`, :class:`V`, :class:`Op`. Statements: ``("wr", a, v)``,
 ``("set", n, v)``, ``("if", c, then, else)``, ``("loop", c, body, bound, line)``,
-``("assert", c, what)`` and ``("hook", stream_index, base)``.
+``("assert", c, what)``, ``("hook", stream_index, base)`` and
+``("native", addr, ((reg, v), ...), resume)`` (run 6502 code from ``addr`` until it
+reaches ``resume``; opaque to the solver).
 """
 
 from __future__ import annotations

@@ -77,6 +77,7 @@ schedule {
   - `if`/`elif`/`else`.
   - `while c bound N`: running past the bound is a runtime error and a proof obligation.
   - Static `for`, `in`, `goto`, `assert`.
+  - `native addr(a = e, x = e, y = e) resumes pc;` runs the tune's own 6502 code (a documented hook a rip patches) from `addr` with those registers (each optional). If the code reaches `pc` the spec carries on with the registers restored; if the call returns first, the CPU has finished it and the spec's call ends. It needs a `SpecPlayer` (`run` raises) and is opaque to `check` and `tv`, which refuse it.
   - `stream s = base @ cursor [grammar "mod:attr:rule" [if cond] {, "mod:attr:rule" [if cond]}]`: the first rule whose static `cond` (e.g. `L.extended`) holds, an arm without `if` always holding, so a layout can pick the rule per build; read with `let v = next s;`, `s[k]` (relative to the cursor) and `s.pos`.
 - **Arithmetic:**
   - Exact 8/16-bit wraparound. Untyped literals take the other operand's width; u8 widens to u16 implicitly.

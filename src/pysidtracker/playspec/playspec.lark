@@ -42,7 +42,7 @@ assume: "assume" expr ";"
 
 block: "{" _stmt* "}"
 _stmt: assign | let | next_let | next_set | if_ | while_ | for_ | call
-     | return_ | goto | in_ | stream | assert_
+     | return_ | goto | in_ | stream | assert_ | native
 assign: lval ASSIGNOP expr ";"
 let: "let" NAME (":" TYPE)? "=" expr ";"
 next_let: "let" NAME "=" "next" NAME ";"
@@ -59,6 +59,8 @@ arm: NAME "=>" block
 stream: "stream" NAME "=" expr "@" expr ("grammar" gsel ("," gsel)*)? ";"
 gsel: STRING ("if" expr)?
 assert_: "assert" expr ";"
+native: "native" expr "(" [narg ("," narg)*] ")" "resumes" expr ";"
+narg: NAME "=" expr
 
 lval: NAME                 -> lname
     | NAME "[" expr "]"    -> lindex
