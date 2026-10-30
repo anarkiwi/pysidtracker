@@ -3,7 +3,8 @@
 Each ``native addr(...) resumes pc;`` is lifted: the tune's 6502 from ``addr`` runs
 symbolically (:class:`~.tv.Machine6502`) until it reaches ``pc`` (the spec carries on)
 or returns (the call ends, a ``finish``). The memory each exit leaves is stated as
-spec statements, spliced over the original statement's source text.
+spec statements, spliced over the original statement's source text, and every proc
+holding a hook is restated in a variant spec that ``extends`` the original.
 
 The statements read every memory byte they need before they store any, so they see
 the memory the hook saw. The spec models no register outputs, no stack page and no
@@ -12,7 +13,7 @@ code writes, so the hook may not depend on those: such a hook is refused.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import z3
 
@@ -375,8 +376,23 @@ def count_natives(node) -> int:
     return 0
 
 
-def unnative(spec: Spec, binding: dict, image: bytes, *, budget: int = BUDGET) -> Spec:
-    """``spec`` with every ``native`` hook replaced by spec statements.
+def _owners(spec: Spec):
+    """``(machine or None, proc)`` for every proc of ``spec``."""
+    yield from ((None, p) for p in spec.procs.values())
+    for machine in spec.machines.values():
+        yield from ((machine[2], m) for m in machine[6] if m[0] == "proc")
+
+
+def unnative(
+    spec: Spec,
+    binding: dict,
+    image: bytes,
+    *,
+    name: Optional[str] = None,
+    budget: int = BUDGET,
+) -> Spec:
+    """A variant of ``spec`` (``name``, default ``<spec>_stated``) that overrides
+    each proc holding a ``native`` hook with the hook replaced by spec statements.
 
     ``binding`` is the layout the spec is elaborated against and ``image`` the 64 KiB
     the tune plays from (its post-init memory). Raises :class:`~..errors.SidError` for
@@ -394,25 +410,61 @@ def unnative(spec: Spec, binding: dict, image: bytes, *, budget: int = BUDGET) -
     if count_natives(spec.machines) + count_natives(spec.procs) != len(hooks):
         raise SidError("a native hook is never reached by the schedule")
     operands = {a for c in program.cells if "operand" in c.attrs for a in c.extent()}
-    text = spec.source
-    for number, span in sorted(
-        enumerate(sorted(hooks, key=lambda s: s.start)), key=lambda p: -p[1].start
-    ):
-        addr, resume = hooks[span]
-        args = {
-            reg: text[a:b].split("=", 1)[1].strip().rstrip(";")
-            for reg, (a, b) in span.args
-        }
-        line_start = text.rfind("\n", 0, span.start) + 1
-        indent = text[line_start : span.start]
-        indent = (
-            indent if not indent.strip() else " " * (len(indent) - len(indent.lstrip()))
+    order = sorted(hooks, key=lambda s: (s.origin, s.start))
+    owned: Dict[tuple, tuple] = {}
+    for span in order:
+        owner = next(
+            (
+                (machine, proc)
+                for machine, proc in _owners(spec)
+                if proc[1].origin == span.origin
+                and proc[1].start <= span.start < proc[1].end
+            ),
+            None,
         )
-        stated = state_hook(
-            bytes(image), operands, addr, resume, args, f"nat{number}", indent, budget
+        if owner is None:
+            raise SidError(
+                f"the native hook at {span.origin}:{span.start} is not in a proc"
+                " written in one spec"
+            )
+        owned.setdefault((owner[0], owner[1][2]), (owner[1], []))[1].append(span)
+    parts = [f"spec {name or spec.name + '_stated'} extends {spec.name};"]
+    for (machine, _name), (proc, spans) in owned.items():
+        loc = proc[1]
+        text = spec.sources[loc.origin]
+        body = text[loc.start : loc.end]
+        for span in sorted(spans, key=lambda s: -s.start):
+            addr, resume = hooks[span]
+            args = {
+                reg: text[a:b].split("=", 1)[1].strip().rstrip(";")
+                for reg, (a, b) in span.args
+            }
+            line_start = text.rfind("\n", 0, span.start) + 1
+            indent = text[line_start : span.start]
+            indent = (
+                indent
+                if not indent.strip()
+                else " " * (len(indent) - len(indent.lstrip()))
+            )
+            stated = state_hook(
+                bytes(image),
+                operands,
+                addr,
+                resume,
+                args,
+                f"nat{order.index(span)}",
+                indent,
+                budget,
+            )
+            body = (
+                body[: span.start - loc.start] + stated + body[span.end - loc.start :]
+            )
+        parts.append(
+            f"override {body}"
+            if machine is None
+            else f"extend machine {machine} {{\n  override {body}\n}}"
         )
-        text = text[: span.start] + stated + text[span.end :]
-    out = parse(text)
+    out = parse("\n\n".join(parts) + "\n", {spec.name: spec})
     elaborate(out, binding)
     return out
 

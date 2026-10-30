@@ -1,7 +1,9 @@
 """Parse playspec source (``playspec.lark``) into a tuple AST.
 
-Every node is ``(tag, line, *fields)``; :func:`parse` returns a :class:`Spec`
-whose declarations keep source order.
+Every node is ``(tag, line, *fields)``, ``line`` a :class:`Loc`; :func:`parse`
+returns a :class:`Spec` whose declarations keep source order. A spec that
+``extends`` a base is derived from it here (:func:`derive`), so later stages see
+one flat spec.
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 from lark import Lark, Token, Transformer, v_args
 from lark.exceptions import LarkError
@@ -22,11 +24,43 @@ class SpecError(SidError):
     """A playspec that does not parse, type-check or bind."""
 
 
+class Loc(int):
+    """A source line that also knows its spec (``origin``) and character extent."""
+
+    def __new__(cls, line: int, origin: str = "", start: int = 0, end: int = 0):
+        loc = super().__new__(cls, line)
+        loc.origin, loc.start, loc.end = origin, start, end
+        return loc
+
+    def __str__(self) -> str:
+        return f"{self.origin}:{int(self)}" if self.origin else str(int(self))
+
+    def __format__(self, spec: str) -> str:
+        return str(self) if not spec else int.__format__(self, spec)
+
+    def __eq__(self, other) -> bool:
+        return int(self) == int(other) and self.origin == getattr(
+            other, "origin", self.origin
+        )
+
+    def __ne__(self, other) -> bool:
+        return not self == other
+
+    def __hash__(self) -> int:
+        return hash((int(self), self.origin))
+
+
 @dataclass
 class Spec:
-    """A parsed spec: its name and declarations by kind, in source order."""
+    """A parsed spec: its name and declarations by kind, in source order.
+
+    ``base`` names the spec it extends and ``edits`` holds its ``override``,
+    ``extend``, ``patch`` and ``drop`` items until :func:`derive` applies them.
+    ``sources`` is the text of every spec in the lineage by name.
+    """
 
     name: str = ""
+    base: str = ""
     layout: Dict[str, str] = field(default_factory=dict)
     consts: List[Tuple] = field(default_factory=list)
     cells: List[Tuple] = field(default_factory=list)
@@ -35,7 +69,9 @@ class Spec:
     schedule: Tuple = ()
     invariants: List[Tuple] = field(default_factory=list)
     assumes: List[Tuple] = field(default_factory=list)
+    edits: List[Tuple] = field(default_factory=list)
     source: str = ""
+    sources: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -45,10 +81,16 @@ class Span:
     start: int
     end: int
     args: Tuple[Tuple[str, Tuple[int, int]], ...] = ()
+    origin: str = ""
 
 
-def _line(meta) -> int:
-    return getattr(meta, "line", 0)
+def _line(meta, origin: str = "") -> Loc:
+    return Loc(
+        getattr(meta, "line", 0),
+        origin,
+        getattr(meta, "start_pos", 0),
+        getattr(meta, "end_pos", 0),
+    )
 
 
 def _int(text: str) -> int:
@@ -58,8 +100,12 @@ def _int(text: str) -> int:
 @v_args(meta=True)
 class _ToAst(Transformer):
     # pylint: disable=missing-function-docstring,too-many-public-methods
+    def __init__(self, origin: str = ""):
+        super().__init__()
+        self.origin = origin
+
     def _n(self, tag, meta, *fields):
-        return (tag, _line(meta), *fields)
+        return (tag, _line(meta, self.origin), *fields)
 
     def start(self, meta, items):
         del meta
@@ -67,7 +113,7 @@ class _ToAst(Transformer):
         for item in items:
             tag = item[0]
             if tag == "spec":
-                spec.name = item[2]
+                spec.name, spec.base = item[2], item[3] or ""
             elif tag == "layout":
                 for names, kind in item[2]:
                     spec.layout.update(dict.fromkeys(names, kind))
@@ -83,12 +129,35 @@ class _ToAst(Transformer):
                 spec.schedule = item
             elif tag == "invariant":
                 spec.invariants.append(item)
-            else:
+            elif tag == "assume":
                 spec.assumes.append(item)
+            else:
+                spec.edits.append(item)
         return spec
 
     def spec_decl(self, meta, c):
-        return self._n("spec", meta, str(c[0]))
+        return self._n("spec", meta, str(c[0]), str(c[1]) if len(c) > 1 else "")
+
+    def override(self, meta, c):
+        return self._n("override", meta, c[0])
+
+    def extend(self, meta, c):
+        return self._n("extend", meta, str(c[0]), list(c[1:]))
+
+    def patch(self, meta, c):
+        return self._n("patch", meta, str(c[0]), list(c[1:]))
+
+    def edit(self, meta, c):
+        return self._n(str(c[0]), meta, str(c[1]), c[2])
+
+    def drop(self, meta, c):
+        return self._n("drop", meta, [str(n) for n in c])
+
+    def labeled(self, meta, c):
+        return self._n("label", meta, str(c[0]), c[1])
+
+    def group(self, meta, c):
+        return self._n("group", meta, list(c))
 
     def layout(self, meta, c):
         return self._n("layout", meta, c)
@@ -179,6 +248,10 @@ class _ToAst(Transformer):
     def assume(self, meta, c):
         return self._n("assume", meta, c[0])
 
+    def eblock(self, meta, c):
+        del meta
+        return list(c)
+
     def block(self, meta, c):
         del meta
         return list(c)
@@ -234,7 +307,12 @@ class _ToAst(Transformer):
 
     def native(self, meta, c):
         args = [a for a in c[1:-1] if a is not None]
-        span = Span(meta.start_pos, meta.end_pos, tuple((r, s) for r, _e, s in args))
+        span = Span(
+            meta.start_pos,
+            meta.end_pos,
+            tuple((r, s) for r, _e, s in args),
+            self.origin,
+        )
         return self._n("native", meta, c[0], [(r, e) for r, e, _s in args], c[-1], span)
 
     def narg(self, meta, c):
@@ -350,20 +428,246 @@ def _parser() -> Lark:
     return Lark(text, parser="lalr", propagate_positions=True, maybe_placeholders=True)
 
 
-def parse(text: str) -> Spec:
-    """The :class:`Spec` of playspec ``text``; raises :class:`SpecError` on a syntax error."""
+Resolver = Union[Callable[[str], Optional[Spec]], Mapping[str, Spec]]
+
+
+def parse(text: str, resolve: Optional[Resolver] = None) -> Spec:
+    """The :class:`Spec` of playspec ``text``; raises :class:`SpecError` on a syntax
+    or derivation error. ``resolve`` maps a base name to its :class:`Spec` for a
+    spec that ``extends`` one."""
     try:
         tree = _parser().parse(text)
     except LarkError as exc:
         raise SpecError(f"playspec syntax: {exc}") from exc
-    spec = _ToAst().transform(tree)
+    decl = next(tree.find_data("spec_decl"), None)
+    spec = _ToAst(str(decl.children[0]) if decl else "").transform(tree)
     spec.source = text
-    return spec
+    spec.sources = {spec.name: text}
+    if not spec.base:
+        if spec.edits:
+            raise SpecError(
+                f"line {spec.edits[0][1]}: {spec.edits[0][0]} needs a base (spec ... extends)"
+            )
+        return spec
+    get = resolve.get if isinstance(resolve, Mapping) else resolve
+    base = get(spec.base) if get else None
+    if base is None:
+        raise SpecError(f"spec {spec.name}: no base spec {spec.base!r}")
+    return derive(base, spec)
 
 
-def load(path) -> Spec:
-    """The :class:`Spec` in the ``.play`` file at ``path``."""
-    return parse(Path(path).read_text())
+def _siblings(folder: Path, seen: Tuple[str, ...]) -> Callable[[str], Spec]:
+    def resolve(name: str) -> Spec:
+        if name in seen:
+            raise SpecError(f"spec {name} extends itself")
+        path = folder / f"{name}.play"
+        if not path.is_file():
+            raise SpecError(f"no base spec {name!r} at {path}")
+        return parse(path.read_text(), _siblings(folder, seen + (name,)))
+
+    return resolve
 
 
-__all__ = ["Span", "Spec", "SpecError", "load", "parse"]
+def load(path, resolve: Optional[Resolver] = None) -> Spec:
+    """The :class:`Spec` in the ``.play`` file at ``path``; a base it ``extends`` is
+    ``NAME.play`` beside it unless ``resolve`` says otherwise."""
+    path = Path(path)
+    return parse(path.read_text(), resolve or _siblings(path.parent, ()))
+
+
+# -- derivation ------------------------------------------------------------------
+_TOP = ("const", "cell", "proc", "machine", "invariant")
+
+
+class _Deriver:
+    """Applies a derived spec's declarations and edits to a copy of its base."""
+
+    def __init__(self, base: Spec, own: Spec):
+        self.errors: List[str] = []
+        self.top = {
+            "const": {d[2]: d for d in base.consts},
+            "cell": {d[2]: d for d in base.cells},
+            "proc": dict(base.procs),
+            "machine": dict(base.machines),
+            "invariant": {d[2]: d for d in base.invariants},
+        }
+        self.own = own
+
+    def error(self, line, message: str) -> None:
+        self.errors.append(f"line {line}: {message}")
+
+    def put(self, table: Dict[str, Tuple], item, replace: bool, where: str) -> None:
+        """Add ``item`` to ``table`` (``replace``: in its base's place)."""
+        name, tag = item[2], item[0]
+        old = table.get(name)
+        if replace and old is None:
+            self.error(item[1], f"override of {tag} {name}: {where} has none")
+        elif replace and old[0] != tag:
+            self.error(item[1], f"override of {tag} {name}: {where} has a {old[0]}")
+        elif not replace and old is not None:
+            self.error(
+                item[1],
+                f"{tag} {name} is already in {where}: say override to replace it",
+            )
+        else:
+            table[name] = item
+
+    def drop(self, tables, node, where: str) -> None:
+        """Remove each name in a ``drop`` from whichever of ``tables`` holds it."""
+        for name in node[2]:
+            hits = [t for t in tables if name in t]
+            if len(hits) != 1:
+                self.error(
+                    node[1], f"drop {name}: {where} has {len(hits)} of that name"
+                )
+            else:
+                del hits[0][name]
+
+    def patch(self, table: Dict[str, Tuple], node, where: str) -> None:
+        """Apply a ``patch`` node's edits to the proc it names in ``table``."""
+        proc = table.get(node[2])
+        if proc is None or proc[0] != "proc":
+            self.error(node[1], f"patch {node[2]}: {where} has no such proc")
+            return
+        body = proc[5]
+        for op, line, label, stmts in node[3]:
+            body, hits = _edit(body, op, label, ("group", line, stmts))
+            if hits != 1:
+                self.error(
+                    line,
+                    f"{op} {label}: proc {node[2]} has {hits} statements so labelled",
+                )
+        table[node[2]] = proc[:5] + (body,)
+
+    def extend(self, node) -> None:
+        """Merge an ``extend machine`` node's members into the base machine."""
+        machine = self.top["machine"].get(node[2])
+        if machine is None:
+            self.error(node[1], f"extend machine {node[2]}: no such machine")
+            return
+        where = f"machine {node[2]}"
+        members = {m[2]: m for m in machine[6]}
+        for item in node[3]:
+            tag = item[0]
+            if tag == "override":
+                self.put(members, item[2], True, where)
+            elif tag == "patch":
+                self.patch(members, item, where)
+            elif tag == "drop":
+                self.drop([members], item, where)
+            else:
+                self.put(members, item, False, where)
+        self.top["machine"][node[2]] = machine[:6] + (list(members.values()),)
+
+    def apply(self, base: Spec) -> Spec:
+        """The derived spec."""
+        own = self.own
+        layout = dict(base.layout)
+        for name, kind in own.layout.items():
+            if layout.setdefault(name, kind) != kind:
+                self.errors.append(
+                    f"layout {name}: {kind} here, {layout[name]} in base"
+                )
+        for item in [
+            *own.consts,
+            *own.cells,
+            *own.procs.values(),
+            *own.machines.values(),
+            *own.invariants,
+        ]:
+            self.put(self.top[item[0]], item, False, f"base {base.name}")
+        schedule = base.schedule
+        if own.schedule:
+            if schedule:
+                self.error(own.schedule[1], "the base has a schedule: say override")
+            schedule = own.schedule
+        for node in own.edits:
+            tag = node[0]
+            if tag == "override" and node[2][0] == "schedule":
+                if not schedule:
+                    self.error(node[1], "override of schedule: the base has none")
+                schedule = node[2]
+            elif tag == "override" and node[2][0] in _TOP and node[2][2] != "step":
+                self.put(self.top[node[2][0]], node[2], True, f"base {base.name}")
+            elif tag == "override":
+                self.error(node[1], f"override of {node[2][0]} outside extend machine")
+            elif tag == "extend":
+                self.extend(node)
+            elif tag == "patch":
+                self.patch(self.top["proc"], node, f"base {base.name}")
+            else:
+                self.drop([self.top[k] for k in _TOP], node, f"base {base.name}")
+        if self.errors:
+            raise SpecError("\n".join(self.errors))
+        return Spec(
+            name=own.name,
+            base=base.name,
+            layout=layout,
+            consts=list(self.top["const"].values()),
+            cells=list(self.top["cell"].values()),
+            procs=self.top["proc"],
+            machines=self.top["machine"],
+            schedule=schedule,
+            invariants=list(self.top["invariant"].values()),
+            assumes=[*base.assumes, *own.assumes],
+            source=own.source,
+            sources={**base.sources, **own.sources},
+        )
+
+
+def _edit(stmts: list, op: str, label: str, group: tuple) -> Tuple[list, int]:
+    """``stmts`` with ``group`` put ``before``/``after``/in place of (``replace``)
+    the statement labelled ``label``, at any depth, and how many such labels."""
+    out: list = []
+    hits = 0
+    for stmt in stmts:
+        if stmt[0] == "label" and stmt[2] == label:
+            hits += 1
+            if op == "replace":
+                out.append(stmt[:3] + (group,))
+            else:
+                out += [group, stmt] if op == "before" else [stmt, group]
+            continue
+        stmt, found = _descend(stmt, op, label, group)
+        hits += found
+        out.append(stmt)
+    return out, hits
+
+
+def _descend(stmt: tuple, op: str, label: str, group: tuple) -> Tuple[tuple, int]:
+    """``stmt`` with :func:`_edit` applied to the statement lists inside it."""
+    tag = stmt[0]
+
+    def sub(body):
+        return _edit(body, op, label, group)
+
+    if tag in ("group", "while", "for", "label"):
+        body = [stmt[-1]] if tag == "label" else stmt[-1]
+        new, hits = sub(body)
+        if tag == "label":
+            new = new[0] if len(new) == 1 else ("group", stmt[1], new)
+        return stmt[:-1] + (new,), hits
+    if tag in ("if", "in"):
+        arms, hits = [], 0
+        for key, body in stmt[3 if tag == "in" else 2]:
+            new, found = sub(body)
+            arms.append((key, new))
+            hits += found
+        if tag == "in":
+            return stmt[:3] + (arms,), hits
+        orelse, found = sub(stmt[3])
+        return stmt[:2] + (arms, orelse), hits + found
+    return stmt, 0
+
+
+def derive(base: Spec, own: Spec) -> Spec:
+    """``own`` (a spec that extends ``base``) applied to ``base``: declarations it
+    adds, ``override``s replacing the base's in place, ``extend machine`` merging
+    members, ``patch`` edits at labelled statements and ``drop``s. Raises
+    :class:`SpecError` listing every edit that does not apply exactly."""
+    if own.name in base.sources:
+        raise SpecError(f"spec {own.name} extends itself")
+    return _Deriver(base, own).apply(base)
+
+
+__all__ = ["Loc", "Span", "Spec", "SpecError", "derive", "load", "parse"]

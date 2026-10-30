@@ -805,6 +805,7 @@ class Lowerer:
     def block(self, stmts, scope: Scope) -> list:
         """Lower a block; statements after a possible return run under ``!returned``."""
         out: list = []
+        stmts = list(flat(stmts))
         for i, stmt in enumerate(stmts):
             if stmt[0] == "return":
                 out += self.stmt(stmt, scope)
@@ -1279,9 +1280,22 @@ def eval_compare(tag: str, a: int, b: int) -> bool:
     }[tag]
 
 
+def flat(stmts):
+    """``stmts`` with labels stripped and groups spliced in (a group opens no scope)."""
+    for stmt in stmts:
+        if stmt[0] == "label":
+            yield from flat([stmt[3]])
+        elif stmt[0] == "group":
+            yield from flat(stmt[2])
+        else:
+            yield stmt
+
+
 def returns(node) -> bool:
     """Whether a statement node may execute a ``return`` (not counting inlined calls)."""
     tag = node[0]
+    if tag in ("label", "group"):
+        return any(returns(s) for s in flat([node]))
     if tag == "return":
         return True
     if tag == "if":
