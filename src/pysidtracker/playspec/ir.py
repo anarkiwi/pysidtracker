@@ -4,7 +4,7 @@ Expressions: :class:`K`, :class:`Rd`, :class:`V`, :class:`Op`. Statements: ``("w
 ``("set", n, v)``, ``("if", c, then, else)``, ``("loop", c, body, bound, line)``,
 ``("assert", c, what)``, ``("hook", stream_index, base)`` and
 ``("native", addr, ((reg, v), ...), resume)`` (run 6502 code from ``addr`` until it
-reaches ``resume``; opaque to the solver).
+reaches ``resume``; opaque to the solver) and ``("finish",)`` (the call ends).
 """
 
 from __future__ import annotations
@@ -123,6 +123,7 @@ class Program:
     notes: List[str] = field(default_factory=list)
     order: List[str] = field(default_factory=list)
     inputs: Dict[str, int] = field(default_factory=dict)
+    natives: list = field(default_factory=list)
 
 
 __all__ = ["Cell", "K", "Op", "Program", "Rd", "V", "evaluate", "width"]

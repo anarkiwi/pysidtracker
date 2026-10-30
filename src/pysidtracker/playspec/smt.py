@@ -96,6 +96,7 @@ class State:
     obligations: List[Tuple[object, str]] = field(default_factory=list)
     old: object = None
     writes: List[object] = field(default_factory=list)
+    done: object = None
 
 
 def _bool(term):
@@ -151,6 +152,12 @@ class Executor:
         """Execute ``stmts`` under path condition ``guard`` (None: always)."""
         for s in stmts:
             tag = s[0]
+            if st.done is not None:  # a ``finish`` ended the call on some paths
+                guard = _and(guard, z3.Not(st.done))
+            if tag == "finish":
+                now = z3.BoolVal(True) if guard is None else guard
+                st.done = now if st.done is None else z3.Or(st.done, now)
+                continue
             if tag == "wr":
                 addr, val = self.expr(s[1], st), self.expr(s[2], st)
                 if guard is not None:

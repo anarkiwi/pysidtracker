@@ -35,6 +35,16 @@ class Spec:
     schedule: Tuple = ()
     invariants: List[Tuple] = field(default_factory=list)
     assumes: List[Tuple] = field(default_factory=list)
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class Span:
+    """A ``native`` statement's source extent and each argument's (``name = expr``)."""
+
+    start: int
+    end: int
+    args: Tuple[Tuple[str, Tuple[int, int]], ...] = ()
 
 
 def _line(meta) -> int:
@@ -223,13 +233,16 @@ class _ToAst(Transformer):
         return self._n("stream", meta, str(c[0]), c[1], c[2], c[3:])
 
     def native(self, meta, c):
-        return self._n(
-            "native", meta, c[0], [a for a in c[1:-1] if a is not None], c[-1]
-        )
+        args = [a for a in c[1:-1] if a is not None]
+        span = Span(meta.start_pos, meta.end_pos, tuple((r, s) for r, _e, s in args))
+        return self._n("native", meta, c[0], [(r, e) for r, e, _s in args], c[-1], span)
 
     def narg(self, meta, c):
-        del meta
-        return str(c[0]), c[1]
+        return str(c[0]), c[1], (meta.start_pos, meta.end_pos)
+
+    def finish(self, meta, c):
+        del c
+        return self._n("finish", meta)
 
     def gsel(self, meta, c):
         del meta
@@ -343,7 +356,9 @@ def parse(text: str) -> Spec:
         tree = _parser().parse(text)
     except LarkError as exc:
         raise SpecError(f"playspec syntax: {exc}") from exc
-    return _ToAst().transform(tree)
+    spec = _ToAst().transform(tree)
+    spec.source = text
+    return spec
 
 
 def load(path) -> Spec:
@@ -351,4 +366,4 @@ def load(path) -> Spec:
     return parse(Path(path).read_text())
 
 
-__all__ = ["Spec", "SpecError", "load", "parse"]
+__all__ = ["Span", "Spec", "SpecError", "load", "parse"]

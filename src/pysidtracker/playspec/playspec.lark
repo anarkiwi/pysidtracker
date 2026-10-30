@@ -42,7 +42,7 @@ assume: "assume" expr ";"
 
 block: "{" _stmt* "}"
 _stmt: assign | let | next_let | next_set | if_ | while_ | for_ | call
-     | return_ | goto | in_ | stream | assert_ | native
+     | return_ | finish | goto | in_ | stream | assert_ | native
 assign: lval ASSIGNOP expr ";"
 let: "let" NAME (":" TYPE)? "=" expr ";"
 next_let: "let" NAME "=" "next" NAME ";"
@@ -53,6 +53,7 @@ while_: "while" expr "bound" INT block
 for_: "for" NAME "in" iter block
 call: NAME "(" [expr ("," expr)*] ")" ";"
 return_: "return" [expr] ";"
+finish: "finish" ";"
 goto: "goto" NAME ";"
 in_: "in" NAME "{" arm+ "}"
 arm: NAME "=>" block

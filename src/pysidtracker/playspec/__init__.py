@@ -9,6 +9,7 @@ from .lower import elaborate
 from .player import SpecPlayer
 from .pyexec import SpecRuntimeError, compile_program, run
 from .syntax import Spec, SpecError, load, parse
+from .unnative import equivalent, unnative
 from .validate import StreamValidator
 
 __all__ = [
@@ -25,7 +26,9 @@ __all__ = [
     "V",
     "compile_program",
     "elaborate",
+    "equivalent",
     "load",
     "parse",
     "run",
+    "unnative",
 ]

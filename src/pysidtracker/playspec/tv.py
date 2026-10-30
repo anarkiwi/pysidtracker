@@ -86,6 +86,7 @@ class Machine6502:
         self.writes: List[object] = []
         self.loads: List[object] = []
         self.pushed: set = set()
+        self.resumed: Optional[Path] = None
 
     def lifted(self, pc: int) -> dict:
         """The lift of the instruction at ``pc``; its non-operand bytes become constraints."""
@@ -218,8 +219,14 @@ class Machine6502:
             return out
         raise TVError(f"control {kind} at ${path.pc:04x}")
 
-    def run(self, entry: Path, budget: int = BUDGET) -> Path:
-        """Every path from ``entry`` to its final ``rts``, merged into one state."""
+    def run(
+        self, entry: Path, budget: int = BUDGET, stop: Optional[int] = None
+    ) -> Optional[Path]:
+        """Every path from ``entry`` to its final ``rts``, merged into one state.
+
+        With ``stop``, paths reaching that pc are merged into ``self.resumed`` instead,
+        and the result is None when none returns.
+        """
         pending: Dict[Tuple[int, Tuple[int, ...]], Path] = {
             (entry.pc, entry.calls): entry
         }
@@ -232,13 +239,20 @@ class Machine6502:
                     f"a path runs past {budget} instructions at ${path.pc:04x}"
                 )
             for nxt in self.step(path):
+                if stop is not None and nxt.pc == stop:
+                    if nxt.calls:
+                        raise TVError(f"${stop:04x} reached inside a subroutine")
+                    self.paths += 1
+                    res = self.resumed
+                    self.resumed = nxt if res is None else merge(res, nxt)
+                    continue
                 if nxt.pc == -1:
                     self.paths += 1
                     done = nxt if done is None else merge(done, nxt)
                     continue
                 k = (nxt.pc, nxt.calls)
                 pending[k] = merge(pending[k], nxt) if k in pending else nxt
-        if done is None:
+        if done is None and (stop is None or self.resumed is None):
             raise TVError("no path returns")
         return done
 
