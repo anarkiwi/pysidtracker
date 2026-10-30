@@ -18,6 +18,7 @@ from pysidtracker import (
 )
 from pysidtracker import oracle, registers
 from pysidtracker.testing import make_oracle_fixtures, oracle_grid
+from pysidtracker.testing import whole_song
 
 from .helpers import build_psid, event, fake_sidtrace, handled, paced_trace, trace_csv
 
@@ -181,7 +182,7 @@ def test_register_grid_seeds_driver_volume():
     # init at $1000: LDA #$0A / STA $D400 / RTS ; play just RTS (never sets vol).
     image = bytes([0xA9, 0x0A, 0x8D, 0x00, 0xD4, 0x60, 0x60])
     tune = build_psid(image, load=0x1000, init=0x1000, play=0x1006)
-    grid = register_grid(tune, 2)
+    grid = register_grid(tune, whole_song(2))
     assert grid[0][24] == 0x0F  # PSID driver max volume, not 0
     assert grid[0][0] == 0x0A
 
@@ -238,8 +239,10 @@ def test_oracle_grid_uses_cache(tmp_path, monkeypatch):
         raise AssertionError("should not re-render on a cache hit")
 
     monkeypatch.setattr(oracle, "run_sidtrace", _no_render)
-    grid = oracle_grid(tune, oracle_cache=cache)
-    assert grid == sidtrace_grid(read_sidtrace(cache / "song.csv.zst"))
+    rows = read_sidtrace(cache / "song.csv.zst")
+    calls = oracle.sidtrace_calls(rows)
+    want = sidtrace_grid(rows)[:calls]
+    assert oracle_grid(tune, oracle_cache=cache, frames=calls) == want
 
 
 def test_oracle_grid_reuses_a_trace_without_rti_rows(tmp_path, monkeypatch):
@@ -260,10 +263,11 @@ def test_oracle_grid_reuses_a_trace_without_rti_rows(tmp_path, monkeypatch):
         raise AssertionError("a never-returning trace must be reused, not re-rendered")
 
     monkeypatch.setattr(oracle.subprocess, "run", _no_render)
-    grid = oracle_grid(tune, oracle_cache=cache)
     rows = read_sidtrace(cache / "song.csv.zst")
+    calls = oracle.sidtrace_calls(rows)
     assert not oracle.nested(rows)
-    assert grid == sidtrace_grid(rows)
+    want = sidtrace_grid(rows)[:calls]
+    assert oracle_grid(tune, oracle_cache=cache, frames=calls) == want
 
 
 def test_oracle_grid_still_raises_without_interrupt_rows(tmp_path):
@@ -276,14 +280,16 @@ def test_oracle_grid_still_raises_without_interrupt_rows(tmp_path):
     tune = tmp_path / "song.sid"
     tune.write_bytes(b"PSID" + b"\x00" * 60)
     with pytest.raises(ValueError, match="no interrupt rows"):
-        oracle_grid(tune, oracle_cache=cache)
+        oracle_grid(tune, oracle_cache=cache, frames=whole_song(0))
 
 
 def test_oracle_grid_renders_on_miss(tmp_path, monkeypatch):
     monkeypatch.setattr(oracle.subprocess, "run", _fake_docker(_CSV))
     tune = tmp_path / "song.sid"
     tune.write_bytes(b"PSID" + b"\x00" * 60)
-    grid = oracle_grid(tune, oracle_cache=tmp_path / "csv", seconds=2, frames=2)
+    grid = oracle_grid(
+        tune, oracle_cache=tmp_path / "csv", seconds=whole_song(2), frames=whole_song(2)
+    )
     assert (tmp_path / "csv" / "song.csv.zst").exists() and len(grid) == 2
 
 
@@ -298,7 +304,13 @@ def test_oracle_grid_plays_the_given_song(tmp_path, monkeypatch):
     tune = tmp_path / "song.sid"
     tune.write_bytes(b"PSID" + b"\x00" * 60)
     for song in (None, 1, 2):
-        oracle_grid(tune, oracle_cache=tmp_path / "csv", seconds=2, song=song)
+        oracle_grid(
+            tune,
+            oracle_cache=tmp_path / "csv",
+            seconds=whole_song(2),
+            frames=whole_song(2),
+            song=song,
+        )
     names = sorted(p.name for p in (tmp_path / "csv").glob("*.csv.zst"))
     assert names == ["song.csv.zst", "song_1.csv.zst", "song_2.csv.zst"]
     songs = [[a for a in cmd if a.startswith("-o")] for cmd in seen]

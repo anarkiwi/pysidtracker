@@ -14,6 +14,7 @@ from pysidtracker import formats, irqhost, oracle, registers, survey
 from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidFormatError, SidParseError
 from pysidtracker.header import parse_sid_header, write_psid
+from pysidtracker.testing import whole_song
 
 from . import irqhost_tunes
 from .helpers import build_prg, handled, trace_csv
@@ -92,8 +93,14 @@ def test_as_sid_wraps_bare_prg(prg):
         survey.as_sid(b"\x00\x10")
 
 
+def test_compare_file_covers_the_whole_song(prg, songlengths):
+    songlengths.add(survey.as_sid(prg), 0.3)
+    row = survey.compare_file(prg, render_exact)
+    assert row["frames"] == 15 and row["verdict"] == "exact"
+
+
 def test_compare_file_exact(prg):
-    row = survey.compare_file(prg, render_exact, frames=NFRAMES)
+    row = survey.compare_file(prg, render_exact, frames=whole_song(NFRAMES))
     assert row["oracle"] == "jennings" and row["verdict"] == "exact"
     assert (row["lead"], row["min_lead"], row["min_bad"]) == (0, 0, 0)
     assert row["key"] == f"{hashlib.md5(survey.as_sid(prg)).hexdigest()}_1"
@@ -102,7 +109,7 @@ def test_compare_file_exact(prg):
 
 @pytest.mark.parametrize("render,k", [(render_shift3, 3), (render_shift_m2, -2)])
 def test_compare_file_shift(prg, render, k):
-    row = survey.compare_file(prg, render, frames=NFRAMES)
+    row = survey.compare_file(prg, render, frames=whole_song(NFRAMES))
     assert row["verdict"] == "exact"
     assert (row["lead"], row["min_lead"], row["min_bad"]) == (k, k, 0)
 
@@ -110,17 +117,17 @@ def test_compare_file_shift(prg, render, k):
 def test_compare_file_differs_and_errors(prg, tmp_path):
     path = tmp_path / "t.prg"
     path.write_bytes(prg)
-    row = survey.compare_file(path, render_glitch, frames=NFRAMES)
+    row = survey.compare_file(path, render_glitch, frames=whole_song(NFRAMES))
     assert (row["verdict"], row["first_diff"], row["diff_regs"]) == (
         "differs",
         7,
         "v2_ctrl",
     )
     assert (row["min_bad"], row["path"]) == (1, str(path))
-    assert survey.compare_file(prg, render_unknown, frames=4)["verdict"] == (
-        "not_decompiled"
-    )
-    row = survey.compare_file(b"\x00", render_exact, frames=4)
+    assert survey.compare_file(prg, render_unknown, frames=whole_song(4))[
+        "verdict"
+    ] == ("not_decompiled")
+    row = survey.compare_file(b"\x00", render_exact, frames=whole_song(4))
     assert row["verdict"] == "oracle_error" and "SidParseError" in row["error"]
 
 
@@ -153,7 +160,7 @@ def test_compare_file_cached_sidtrace(prg, tmp_path, monkeypatch):
     work = tmp_path / "work"
     md5 = hashlib.md5(survey.as_sid(prg)).hexdigest()
     (survey.oracle_cache(work) / f"{md5}_1.csv.zst").write_bytes(_video_trace(NFRAMES))
-    row = survey.compare_file(prg, render_exact, frames=NFRAMES, work=work)
+    row = survey.compare_file(prg, render_exact, frames=whole_song(NFRAMES), work=work)
     assert (row["oracle"], row["verdict"]) == ("sidtrace", "exact")
     assert row["seconds"] == pytest.approx(NFRAMES * CPF / registers.PAL_CLOCK_HZ)
     assert (work / "sid" / f"{md5}.sid").read_bytes() == survey.as_sid(prg)
@@ -170,7 +177,9 @@ def test_compare_file_sidtrace_fallback(prg, tmp_path, monkeypatch):
     monkeypatch.setattr(oracle, "run_sidtrace", _unavailable)
     sid_path = tmp_path / "t.sid"
     sid_path.write_bytes(survey.as_sid(prg))
-    row = survey.compare_file(sid_path, render_exact, frames=8, work=tmp_path / "w")
+    row = survey.compare_file(
+        sid_path, render_exact, frames=whole_song(8), work=tmp_path / "w"
+    )
     assert (row["oracle"], row["verdict"], row["seconds"]) == ("jennings", "exact", "")
     assert seen == [sid_path]
 
@@ -182,7 +191,7 @@ def test_compare_file_fallback_hosts_play_address_zero(monkeypatch):
     def render(sid, song, nframes):
         return irqhost.InterruptPlayer(sid, song - 1).render_grid(nframes), {}
 
-    row = survey.compare_file(data, render, frames=8)
+    row = survey.compare_file(data, render, frames=whole_song(8))
     assert (row["oracle"], row["verdict"]) == ("jennings", "exact")
 
 
@@ -228,7 +237,7 @@ def test_file_cli_pool(prg, tmp_path):
         f.write_bytes(prg)
     out = tmp_path / "out.csv"
     tally = survey.file_cli(
-        f"{__name__}:render_shift3", files, out=out, jobs=2, frames=12
+        f"{__name__}:render_shift3", files, out=out, jobs=2, frames=whole_song(12)
     )
     assert tally == {"exact": 3}
     assert {r["lead"] for r in survey.load_tunes(out)} == {"3"}
@@ -262,7 +271,11 @@ def test_file_cli_songs(prg, tmp_path, monkeypatch):
         ([sid], "3,1-2", [(sid, 3), (sid, 1), (sid, 2)]),
     ):
         tally = survey.file_cli(
-            f"{__name__}:render_by_song", files, song=spec, out=out, frames=8
+            f"{__name__}:render_by_song",
+            files,
+            song=spec,
+            out=out,
+            frames=whole_song(8),
         )
         rows = survey.load_tunes(out)
         assert sorted((r["path"], r["song"]) for r in rows) == sorted(
@@ -327,16 +340,20 @@ def test_renderer_prefers_format_over_spec():
     assert render.func is formats.render and render.args == ("auto",)
 
 
-def test_fidelity_row():
-    def render(data, nframes, _song):
-        return [[data[0]] * 25 for _ in range(nframes)]
+def test_fidelity_row(songlengths):
+    data, other = b"\x00\x10\x01", b"\x00\x10\x02"
+    songlengths.add(data, 0.06)
 
-    ok = survey.fidelity_row({}, b"\x01", lambda d: d, render=render, frames=3)
+    def render(data, nframes, _song):
+        return [[data[2]] * 25 for _ in range(nframes)]
+
+    ok = survey.fidelity_row({}, data, lambda d: d, render=render)
     assert ok["fidelity"] == "exact"
-    bad = survey.fidelity_row({}, b"\x01", lambda d: b"\x02", render=render, frames=3)
+    bad = survey.fidelity_row({}, data, lambda d: other, render=render)
     assert bad["fidelity"] == "differs" and bad["fidelity_first"] == 0
+    assert survey.fidelity_row({}, b"\x01", lambda d: d)["fidelity"] == "not_decompiled"
 
     def boom(_):
         raise ValueError("x")
 
-    assert survey.fidelity_row({}, b"\x01", boom)["fidelity"] == "rebuild_error"
+    assert survey.fidelity_row({}, data, boom)["fidelity"] == "rebuild_error"

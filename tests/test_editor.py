@@ -6,6 +6,7 @@ from pysidtracker import SidImage
 from pysidtracker.asm6502 import assemble
 from pysidtracker.editor import RAM_SIZE, editor_replay, ram_image, run_editor
 from pysidtracker.oracle import register_grid
+from pysidtracker.testing import whole_song
 
 AT, DECODED = 0x2000, 0x3000
 DECODE, BUMP, PLAYER = 0xC000, 0xC100, 0x1000
@@ -104,5 +105,5 @@ def test_editor_replay_renders_the_live_player():
     )
     image = SidImage.from_bytes(psid)
     assert (image.load, image.header.init_address) == (PLAYER, PLAYER)
-    grid = register_grid(image, 3)
+    grid = register_grid(image, whole_song(3))
     assert [row[0] for row in grid] == [0x21, 0x31, 0x41]

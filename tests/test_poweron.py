@@ -6,6 +6,7 @@ from vagrant_moses import c64
 from vagrant_moses import memmap as mm
 
 from pysidtracker import MemPlayer, poweron
+from pysidtracker.testing import whole_song
 
 
 def test_ram_pattern_is_four_byte_runs_flipped_per_16k_bank():
@@ -117,9 +118,9 @@ def test_flat_players_see_the_basic_load_pointers():
     end = 0x1000 + len(code)
     want = (end & 0xFF, end >> 8, 0x00, 0x10)
     psid = write_psid(load=0x1000, init=0x1000, play=labels["play"], image=code)
-    row = register_grid(psid, 1)[0]
+    row = register_grid(psid, whole_song(1))[0]
     assert (row[0], row[1], row[5], row[6]) == want
-    emu = EmuPlayer(code, 0x1000, 0x1000, labels["play"]).render_grid(1)[0]
+    emu = EmuPlayer(code, 0x1000, 0x1000, labels["play"]).render_grid(whole_song(1))[0]
     assert (emu[0], emu[1], emu[5], emu[6]) == want
 
 

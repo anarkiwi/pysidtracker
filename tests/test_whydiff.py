@@ -10,8 +10,10 @@ import pytest
 
 from pysidtracker import gridcmp, testing, whydiff
 from pysidtracker.asm6502 import assemble
+from pysidtracker.errors import IncompleteComparison
 from pysidtracker.header import write_psid
 from pysidtracker.player import MemPlayer
+from pysidtracker.testing import whole_song
 
 ORG = 0x1000
 
@@ -37,7 +39,7 @@ class Toy(MemPlayer):
     def _frame(self):
         carry = self.cnt >= self.threshold
         self._wr(0xD400, 0x10 + carry)
-        self.cnt += 1
+        self.cnt = (self.cnt + 1) & 0xFF
 
 
 class Faithful(Toy):
@@ -119,14 +121,17 @@ def test_assert_oracle_match(tmp_path, monkeypatch):
 
     def grid(path, **kw):
         seen.update(kw)
-        return whydiff.register_grid(path.read_bytes(), kw["frames"])
+        return whydiff.register_grid(path.read_bytes(), seen.get("rows", 9022))
 
     monkeypatch.setattr(testing, "oracle_grid", grid)
     with pytest.raises(AssertionError, match="toy.sid"):
         testing.assert_oracle_match(
-            "A/toy.sid", _toy, hvsc_cache=tmp_path, oracle_cache=tmp_path, frames=8
+            "A/toy.sid", _toy, hvsc_cache=tmp_path, oracle_cache=tmp_path
         )
-    assert seen["song"] == 1 and seen["seconds"] is None and seen["frames"] == 8
+    assert seen["song"] == 1 and seen["hvsc"] == tmp_path
+    seen["rows"] = 9021
+    with pytest.raises(IncompleteComparison, match="9021 of the song's 9022"):
+        testing.assert_oracle_match("A/toy.sid", _toy, oracle_cache=tmp_path)
     monkeypatch.setattr(testing, "resolve_tune", lambda rel, **kw: None)
     with pytest.raises(testing.TuneFetchError):
         testing.assert_oracle_match(
@@ -134,7 +139,8 @@ def test_assert_oracle_match(tmp_path, monkeypatch):
         )
 
 
-def test_oracle_fixture_with_player_explains(pytester):
+def test_oracle_fixture_with_player_explains(pytester, songlengths):
+    songlengths.add(SID, 0.12)
     pytester.makepyfile(f"""
         from pathlib import Path
 
@@ -281,7 +287,10 @@ def test_two_python_players_side_by_side():
         )
 
     generic, native = side(3, "generic"), side(2, "native")
-    grids = (Generic(3).render_grid(6), Generic(2).render_grid(6))
+    grids = (
+        Generic(3).render_grid(whole_song(6)),
+        Generic(2).render_grid(whole_song(6)),
+    )
     why = whydiff.explain_cell(generic, native, grids, frame=2, register=0, name="toy")
     assert why.values == {"generic": 0x10, "native": 0x11}
     for s, lift in ((generic, "0"), (native, "1")):
@@ -490,13 +499,13 @@ SPARSE = (
 
 
 def test_a_side_without_a_store_traces_its_last_store():
-    grid = Sparse(b"", 0).render_grid(6)
+    grid = Sparse(b"", 0).render_grid(whole_song(6))
     side = whydiff.python_side(lambda: Sparse(b"", 0), 3, 0, grid=grid)
     assert (side.frame, side.traced) == (3, 2) and side.root is not None
     assert whydiff.python_side(lambda: Sparse(b"", 0), 3, 0).root is None
     code, labels = assemble(SPARSE, ORG)
     sid = write_psid(load=ORG, init=labels["init"], play=labels["play"], image=code)
-    jen = whydiff.register_grid(sid, 6)
+    jen = whydiff.register_grid(sid, whole_song(6))
     cpu = whydiff.cpu_side(sid, 3, 0, grid=jen)
     assert (cpu.frame, cpu.traced) == (3, 2) and cpu.events[cpu.root].text.startswith(
         "STA"
@@ -590,7 +599,7 @@ class Ungated(Gated):
 
 def test_state_is_chased_to_where_it_parts():
     why = whydiff.explain_divergence(
-        GSID, lambda d: Gated(b"", 0), frames=8, state=True
+        GSID, lambda d: Gated(b"", 0), frames=whole_song(8), state=True
     )
     assert (why.frame, why.register) == (3, 4)
     state = why.state
@@ -609,7 +618,10 @@ def test_state_is_chased_to_where_it_parts():
 
 
 def test_state_between_two_python_players_and_its_edges():
-    grids = (Gated(b"", 0).render_grid(6), Ungated(b"", 0).render_grid(6))
+    grids = (
+        Gated(b"", 0).render_grid(whole_song(6)),
+        Ungated(b"", 0).render_grid(whole_song(6)),
+    )
     left = whydiff.python_side(lambda: Gated(b"", 0), 3, 4, grid=grids[0])
     right = whydiff.python_side(
         lambda: Ungated(b"", 0), 3, 4, label="native", grid=grids[1]
@@ -701,7 +713,7 @@ class Voiced(MemPlayer):
 
 def test_a_list_member_pairs_with_its_strided_cell():
     why = whydiff.explain_divergence(
-        VSID, lambda d: Voiced(b"", 0), frames=10, state=True
+        VSID, lambda d: Voiced(b"", 0), frames=whole_song(10), state=True
     )
     assert (why.frame, why.register) == (5, 0x12)
     pairs = {a: (b, f) for a, b, f in why.state.pairs}

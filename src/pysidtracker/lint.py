@@ -22,7 +22,11 @@ Also available as ``pysidtracker lint`` and the ``lint_project`` pytest fixture.
   class, function, method or attribute of the package. A reference resolves when
   it equals, or is a dotted suffix of, a qualified name the package defines.
 
-Both checks take a ``whitelist`` of names to ignore (public API kept for
+* **Truncated comparisons** -- a render or compare call in the ``tests``
+  directories given a hard-coded frame or second count
+  (:func:`truncated_comparisons`): comparisons cover whole songs.
+
+The first two checks take a ``whitelist`` of names to ignore (public API kept for
 downstream users, external symbols named in prose).
 """
 
@@ -267,6 +271,106 @@ def unresolved_references(
     return problems
 
 
+# Render/compare calls: positions and keywords of their frame or second counts.
+LENGTH_ARGS: Dict[str, Tuple[Tuple[int, ...], Tuple[str, ...]]] = {
+    "render_grid": ((0,), ("nframes",)),
+    "iter_frames": ((0,), ("max_frames",)),
+    "register_grid": ((1,), ("nframes",)),
+    "oracle_grid": ((), ("frames", "seconds")),
+    "sidtrace_oracle": ((), ("frames", "seconds")),
+    "oracle_rows": ((2, 4), ("seconds", "calls")),
+    **{
+        name: ((), ("frames",))
+        for name in (
+            "decode_fidelity",
+            "assert_decode_fidelity",
+            "assert_matches",
+            "assert_oracle_match",
+            "make_oracle_fixtures",
+            "explain_divergence",
+            "fidelity_row",
+            "compare_file",
+            "file_cli",
+        )
+    },
+}
+
+
+def _is_number(node: ast.AST, constants: Set[str]) -> bool:
+    """Whether ``node`` is a number literal, a name bound only to one, or arithmetic
+    of them."""
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, (int, float)) and not isinstance(node.value, bool)
+    if isinstance(node, ast.Name):
+        return node.id in constants
+    if isinstance(node, ast.UnaryOp):
+        return _is_number(node.operand, constants)
+    if isinstance(node, ast.BinOp):
+        return _is_number(node.left, constants) and _is_number(node.right, constants)
+    return False
+
+
+def _number_names(trees: Iterable[ast.Module]) -> Set[str]:
+    """Names every assignment in ``trees`` binds to a number expression."""
+    bound: Dict[str, List[ast.AST]] = {}
+    for tree in trees:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value:
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        bound.setdefault(target.id, []).append(node.value)
+            elif isinstance(node, ast.arg):
+                bound.setdefault(node.arg, []).append(node)
+            elif isinstance(node, (ast.AugAssign, ast.For, ast.comprehension)):
+                for target in ast.walk(node.target):
+                    if isinstance(target, ast.Name):
+                        bound.setdefault(target.id, []).append(node)
+    numbers: Set[str] = set()
+    while True:
+        more = {
+            name
+            for name, values in bound.items()
+            if name not in numbers and all(_is_number(v, numbers) for v in values)
+        }
+        if not more:
+            return numbers
+        numbers |= more
+
+
+def truncated_comparisons(tests: Sequence[Path]) -> List[str]:
+    """Problems for render/compare calls in ``tests`` given a hard-coded length.
+
+    A call named in :data:`LENGTH_ARGS` whose frame or second count is a number
+    literal, a name every assignment binds to one (across ``tests``), or arithmetic
+    of those cuts the comparison to a window of the song. Compare whole songs
+    (:func:`pysidtracker.testing.song_frames`); a synthetic song whose whole length
+    is the number says so with :func:`pysidtracker.testing.whole_song`.
+    """
+    trees = {p: t for p in _py_files(tests) if (t := _parse(p)) is not None}
+    numbers = _number_names(trees.values())
+    problems = []
+    for path, tree in trees.items():
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+        for node in sorted(calls, key=lambda n: (n.lineno, n.col_offset)):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else func
+            name = name.id if isinstance(name, ast.Name) else name
+            if not isinstance(name, str) or name not in LENGTH_ARGS:
+                continue
+            spots, keywords = LENGTH_ARGS[name]
+            args = [node.args[i] for i in spots if i < len(node.args)]
+            args += [k.value for k in node.keywords if k.arg in keywords]
+            if any(_is_number(arg, numbers) for arg in args):
+                problems.append(
+                    f"{path}:{node.lineno}: {name}() compares a hard-coded length, "
+                    "not the whole song"
+                )
+    return problems
+
+
 def check_project(
     package: str,
     tests: Sequence[str] = ("tests",),
@@ -280,8 +384,10 @@ def check_project(
     whitelist = list(whitelist)
     test_dirs = [Path(t) for t in tests if Path(t).exists()]
     doc_dirs = [Path(d) for d in docs if Path(d).exists()]
-    return unused_symbols(Path(package), test_dirs, whitelist) + (
-        unresolved_references(Path(package), doc_dirs, whitelist)
+    return (
+        unused_symbols(Path(package), test_dirs, whitelist)
+        + unresolved_references(Path(package), doc_dirs, whitelist)
+        + truncated_comparisons(test_dirs)
     )
 
 

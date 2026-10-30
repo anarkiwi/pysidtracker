@@ -101,14 +101,15 @@ class SidtraceOracle:
         self,
         tune_path,
         *,
-        frames,
+        frames=None,
         cycles_per_frame=None,
         seconds=None,
         reg_count: int = 25,
         chip: int = 0,
         force: bool = False,
     ):
-        """The first ``frames`` rows of the sidtrace grid for ``tune_path``.
+        """``frames`` rows (default the song's whole length) of the sidtrace grid
+        for ``tune_path``.
 
         ``cycles_per_frame`` frames at a fixed cadence (e.g. PAL) instead of the
         sidtrace auto-cadence. The CSV is cached; ``seconds`` defaults to

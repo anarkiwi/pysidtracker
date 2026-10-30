@@ -24,6 +24,11 @@ class SidFormatError(SidParseError):
     """The container is not a recognised PSID/RSID/PRG, or is truncated."""
 
 
+class IncompleteComparison(SidError):
+    """A render comparison covers less than the song's whole length: a reference
+    or render cut to a window cannot vouch for the frames past it."""
+
+
 class EmulatorUnavailable(SidError):
     """The 6502 emulator (``jennings``) is needed but not importable.
 

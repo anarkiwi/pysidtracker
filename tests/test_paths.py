@@ -11,6 +11,7 @@ from pysidtracker import oracle, paths
 from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidParseError
 from pysidtracker.player import MemPlayer
+from pysidtracker.testing import song_frames, whole_song
 
 from .helpers import build_psid, build_prg
 
@@ -51,7 +52,9 @@ def test_cpu_edges_alternate_with_the_branch():
     taken = trace.names[trace.labels.index(min(odd - common))]
     fall = trace.names[trace.labels.index(min(l for l in even - common if "BNE" in l))]
     assert taken != fall and taken.startswith("edge:")
-    assert np.array_equal(trace.grid, np.asarray(oracle.register_grid(data, 4)))
+    assert np.array_equal(
+        trace.grid, np.asarray(oracle.register_grid(data, whole_song(4)))
+    )
     assert trace.side == "6502"
     assert all(f.dtype == np.int32 and np.all(np.diff(f) > 0) for f in trace.frames)
     assert [trace.labels[i] for i in trace.sequence(1)] == [
@@ -173,7 +176,7 @@ def test_py_memplayer_arcs_sites_and_grid(backend):
     assert even in names[0] and odd not in names[0]
     assert odd in names[1] and even not in names[1]
     assert np.array_equal(
-        trace.grid, np.asarray(ToyMem(b"\x0f", 0x1000).render_grid(4))
+        trace.grid, np.asarray(ToyMem(b"\x0f", 0x1000).render_grid(whole_song(4)))
     )
     assert trace.names[trace.sites[0, 0]] == f"store:0:{src.where(head + 3)}"
     vol = _line(ToyMem._volume, "self._wr")
@@ -220,7 +223,7 @@ def test_py_generic_list_alias_sites():
     subject = paths.PySubject(Aliased, cell=_regs, label="native")
     trace = paths.py_paths(subject, 3)
     assert trace.side == "native"
-    assert np.array_equal(trace.grid, np.asarray(Aliased().render_grid(3)))
+    assert np.array_equal(trace.grid, np.asarray(Aliased().render_grid(whole_song(3))))
     then = _line(Aliased.play_frame, "regs[1] = ")
     other = _line(Aliased.play_frame, "regs[0], ")
     sites = trace.sites
@@ -287,7 +290,9 @@ def test_py_generated_code_keys_alike_across_tunes():
     two = _generated(7, 40, 1)[0]
     a, b = paths.py_paths(one, 4), paths.py_paths(two, 4)
     assert a.names == b.names and a.labels != b.labels
-    assert np.array_equal(a.grid, np.asarray(Generated(name, text).render_grid(4)))
+    assert np.array_equal(
+        a.grid, np.asarray(Generated(name, text).render_grid(whole_song(4)))
+    )
     assert (
         a.names[a.sites[1, 4]]
         == "store:4:<playroutine toy#>:f_tick:out[#] = _x_#(#) & #"
@@ -322,7 +327,7 @@ def test_py_ending_player_stops_its_grid():
     started = paths.PySubject(Ending, cell=_regs, starts=lambda p: (p.tick, None))
     assert paths.py_paths(started, 6).starts == (3, None)
     assert trace.sites.shape == (3, 25)
-    assert np.array_equal(trace.grid, np.asarray(Ending().render_grid(6)))
+    assert np.array_equal(trace.grid, np.asarray(Ending().render_grid(whole_song(6))))
 
 
 def test_py_bare_callable_and_explicit_roots(tmp_path):
@@ -368,12 +373,13 @@ def test_real_goattracker_tune():
     sid = pytest.importorskip("pygoattracker.sid")
     with open(HVSC_TUNE, "rb") as fh:
         data = fh.read()
-    cpu = paths.cpu_paths(data, 50)
-    assert np.array_equal(cpu.grid, np.asarray(oracle.register_grid(data, 50)))
+    frames = song_frames(data, hvsc=HVSC_TUNE.split("/DEMOS/")[0], local_env="")
+    cpu = paths.cpu_paths(data, frames)
+    assert np.array_equal(cpu.grid, np.asarray(oracle.register_grid(data, frames)))
     assert (cpu.sites >= 0).any()
-    py = paths.py_paths(lambda: sid.decompile_sid(data, subtune=0).player(), 50)
+    py = paths.py_paths(lambda: sid.decompile_sid(data, subtune=0).player(), frames)
     fresh = sid.decompile_sid(data, subtune=0).player()
-    assert np.array_equal(py.grid, np.asarray(fresh.render_grid(50)))
+    assert np.array_equal(py.grid, np.asarray(fresh.render_grid(frames)))
     assert (py.sites >= 0).all()
     assert {n for n in py.names if n.startswith("edge:")} <= set(
         paths.py_universe(py.roots)

@@ -13,6 +13,8 @@ import zipfile
 import pytest
 
 from pysidtracker import testing
+from pysidtracker.errors import IncompleteComparison
+from pysidtracker.oracle import DEFAULT_SECONDS, play_calls
 from pysidtracker.testing import (
     CACHE_KINDS,
     default_cache,
@@ -28,6 +30,8 @@ from pysidtracker.testing import (
     resolve_tune,
 )
 from pysidtracker.testing import main as fetch_main
+
+from .helpers import build_psid
 
 _SID = b"PSID" + b"\x00" * 60
 
@@ -427,16 +431,66 @@ def _as_grid(data, nframes, _song):
     return [[data[3]] * 25 for _ in range(nframes)]
 
 
-def test_decode_fidelity_exact_and_differs():
-    same = testing.decode_fidelity(_prg(5), _prg(5), render=_as_grid, frames=4)
-    assert same.ok
-    diff = testing.decode_fidelity(_prg(5), _prg(6), render=_as_grid, frames=4)
+def test_decode_fidelity_exact_and_differs(songlengths):
+    songlengths.add(_prg(5), 0.08)
+    assert testing.song_frames(_prg(5)) == 4
+    same = testing.decode_fidelity(_prg(5), _prg(5), render=_as_grid)
+    assert same.ok and same.n == 4
+    diff = testing.decode_fidelity(_prg(5), _prg(6), render=_as_grid)
     assert not diff.ok and diff.first == 0
 
 
-def test_assert_decode_fidelity():
-    testing.assert_decode_fidelity(_prg(5), lambda d: d, render=_as_grid, frames=4)
+def test_decode_fidelity_refuses_a_short_render(songlengths):
+    songlengths.add(_prg(5), 0.08)
+
+    def short(data, nframes, song):
+        return _as_grid(data, min(nframes, 3), song)
+
+    with pytest.raises(IncompleteComparison, match="render 3"):
+        testing.decode_fidelity(_prg(5), _prg(5), render=short)
+
+
+def test_assert_decode_fidelity(songlengths):
+    songlengths.add(_prg(5), 0.08)
+    testing.assert_decode_fidelity(_prg(5), lambda d: d, render=_as_grid)
     with pytest.raises(AssertionError, match="replays differently"):
         testing.assert_decode_fidelity(
-            _prg(5), lambda d: _prg(6), render=_as_grid, frames=4, name="t"
+            _prg(5), lambda d: _prg(6), render=_as_grid, name="t"
         )
+
+
+def test_song_length_reads_hvsc_songlengths(songlengths, monkeypatch, tmp_path):
+    two = build_psid(b"\x60", 0x1000, songs=2, start_song=2)
+    songlengths.add(two, 61.5, 0.2)
+    assert testing.song_length(two) == 61.5
+    assert testing.song_length(two, None) == testing.song_length(two, 2) == 0.2
+    assert testing.song_length(two, 3) == DEFAULT_SECONDS
+    assert testing.song_frames(two, 2) == 10
+    path = tmp_path / "two.sid"
+    path.write_bytes(two)
+    assert testing.song_frames(path, None) == 10
+    assert testing.song_length(_prg(1)) == DEFAULT_SECONDS
+    assert testing.song_frames(_prg(1)) == play_calls(_prg(1), DEFAULT_SECONDS)
+
+
+def test_songlengths_fetched_into_the_cache_once(monkeypatch, tmp_path):
+    monkeypatch.delenv("HVSC")
+    got = []
+
+    def download(url):
+        got.append(url)
+        return f"{hashlib.md5(_prg(2)).hexdigest()}=0:01\n".encode()
+
+    monkeypatch.setattr(testing, "_download", download)
+    assert testing.song_length(_prg(2), hvsc=tmp_path) == 1.0
+    assert testing.song_length(_prg(2), hvsc=tmp_path, local_env="") == 1.0
+    assert got == [f"{DEFAULT_MIRROR}/DOCUMENTS/Songlengths.md5"]
+    assert testing.songlengths_root(tmp_path) == tmp_path
+    monkeypatch.setenv("HVSC", str(tmp_path / "missing"))
+    assert testing.songlengths_root(tmp_path) == tmp_path
+
+
+def test_require_whole():
+    testing.require_whole([[0]] * 3, 3)
+    with pytest.raises(IncompleteComparison, match="render covers 2 of the song's 3"):
+        testing.require_whole([[0]] * 2, 3, "render")

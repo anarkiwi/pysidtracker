@@ -78,6 +78,7 @@ from .emu import observe_data_access, run_to_rts, set_iomap, wire_mpu
 from .errors import (
     AudioUnavailable,
     EmulatorUnavailable,
+    IncompleteComparison,
     KernalHostError,
     PackageErrors,
     SidError,
@@ -290,6 +291,9 @@ from .testing import (
     make_tune_fixtures,
     oracle_grid,
     resolve_tune,
+    song_frames,
+    song_length,
+    whole_song,
 )
 from .trace import InitTrace, init_arguments, trace_init, trace_init_argument
 from .whydiff import (
@@ -304,7 +308,7 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.41.0"
+__version__ = "0.42.0"
 
 __all__ = [
     "REACH",
@@ -575,6 +579,10 @@ __all__ = [
     "Divergence",
     "PyTrace",
     "assert_matches",
+    "IncompleteComparison",
+    "song_frames",
+    "song_length",
+    "whole_song",
     "assert_oracle_match",
     "cpu_history",
     "explain_divergence",

@@ -59,6 +59,7 @@ from .header import PSID_MAGIC, RSID_MAGIC, parse_sid_header, write_psid
 from .image import SidImage
 from .irqhost import TunePlayer
 from .oracle import (
+    DEFAULT_SECONDS,
     ShortTrace,
     SidtraceUnavailable,
     cached_sidtrace,
@@ -70,7 +71,7 @@ from .oracle import (
     sidtrace_grid,
     sidtrace_image_id,
 )
-from .testing import decode_fidelity
+from .testing import decode_fidelity, song_frames
 from .sidid import identify, sidid_signatures
 from .variants import variants_cli
 
@@ -283,7 +284,7 @@ def library_row(row, oracle, render, data, song, *, lead=LEAD, timeout=0, lcsv=N
     )
 
 
-def fidelity_row(row, data, rebuild, *, render=None, song=1, frames=250, lead=0):
+def fidelity_row(row, data, rebuild, *, render=None, song=1, lead=0):
     """``row`` plus the ``FIDELITY_FIELDS`` verdict column of a decode-fidelity check.
 
     ``rebuild(data) -> bytes`` writes the image back from the decoded model;
@@ -296,7 +297,6 @@ def fidelity_row(row, data, rebuild, *, render=None, song=1, frames=250, lead=0)
             data,
             rebuild(data),
             render=render,
-            frames=frames,
             song=song,
             max_lead=lead,
         )
@@ -395,7 +395,7 @@ def compare_file(
     path_or_prg,
     render,
     *,
-    frames,
+    frames=None,
     init=None,
     play=None,
     song=1,
@@ -407,7 +407,8 @@ def compare_file(
 
     ``path_or_prg`` (a path, or the bytes) is a PSID/RSID or a bare PRG wrapped
     by :func:`as_sid`. The oracle (:func:`file_oracle`, ``work`` and the
-    ``oracle`` column choosing sidtrace or jennings) gives ``frames`` frames;
+    ``oracle`` column choosing sidtrace or jennings) gives ``frames`` frames, by
+    default the song's whole length (:func:`~pysidtracker.testing.song_frames`);
     the ``render`` hook (as for ``run``) gets ``frames + lead`` and is scanned
     over leads up to ``lead`` (``verdict``, ``lead``, ``min_lead``, ``min_bad``...).
     """
@@ -416,6 +417,8 @@ def compare_file(
     row = dict(path=str(path or ""), song=song, frames=frames)
     try:
         sid = as_sid(raw, init, play)
+        if frames is None:
+            row["frames"] = frames = song_frames(sid, song)
         row.update(key=f"{hashlib.md5(sid).hexdigest()}_{song}", player=identify(sid))
         own = path if path and sid == raw else None
         row["seconds"], oracle, row["oracle"] = file_oracle(
@@ -531,12 +534,18 @@ def file_cli(render, files, *, song=1, out=None, jobs=None, **kw):
     return tally
 
 
-def jobs_for(hvsc, tunes, work, render, default_seconds=180, timeout=600):
+def song_seconds(lengths, song):
+    """The HVSC length of 1-based ``song`` among ``lengths`` (seconds per song),
+    :data:`~pysidtracker.oracle.DEFAULT_SECONDS` when it lists none."""
+    return lengths[song - 1] if 0 < song <= len(lengths) else DEFAULT_SECONDS
+
+
+def jobs_for(hvsc, tunes, work, render, timeout=600):
     """One :func:`check` job per (tune, song), timed by its HVSC song length."""
     for tune in tunes:
         lens = [float(x) for x in tune["lengths"].split()]
         for song in range(1, int(tune["songs"]) + 1):
-            secs = lens[song - 1] if song <= len(lens) else default_seconds
+            secs = song_seconds(lens, song)
             yield Path(hvsc) / tune["path"], tune, song, secs, Path(
                 work
             ), render, timeout
@@ -551,14 +560,13 @@ def run(
     player=None,
     limit=None,
     jobs=None,
-    default_seconds=180,
     timeout=600,
 ):
     """Compare every subtune; write ``results.csv`` under ``work``, return tallies."""
     work = Path(work)
     oracle_cache(work)
     tunes = player_tunes(tunes_csv, player)
-    jobs_ = list(jobs_for(hvsc, tunes[:limit], work, render, default_seconds, timeout))
+    jobs_ = list(jobs_for(hvsc, tunes[:limit], work, render, timeout))
     tally = Counter()
     with open(work / "results.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, RESULT_FIELDS)
@@ -1187,7 +1195,7 @@ def main(argv=None):
     )
     p.add_argument("files", nargs="+", help=".sid or bare .prg native files")
     p.add_argument("--format", help="an installed format's renderer, or auto")
-    p.add_argument("--frames", type=int, required=True, help="oracle frames")
+    p.add_argument("--frames", type=int, help="oracle frames (default: the whole song)")
     p.add_argument(
         "--song", default="1", help="1-based subtunes: N, N-M, comma lists, or all"
     )
@@ -1219,7 +1227,6 @@ def main(argv=None):
             "--timeout", type=float, default=600, help="render seconds (0: none)"
         )
         p.add_argument("--jobs", type=int, default=os.cpu_count())
-    sub.choices["run"].add_argument("--default-seconds", type=float, default=180)
     p = sub.choices["leads"]
     p.add_argument("keys", nargs="*", help="<md5>_<song> subtune keys")
     p.add_argument(
@@ -1263,7 +1270,6 @@ def main(argv=None):
             player=a.player,
             limit=a.limit,
             jobs=a.jobs,
-            default_seconds=a.default_seconds,
             timeout=a.timeout,
         )
     elif a.cmd == "scope":

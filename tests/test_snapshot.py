@@ -6,6 +6,7 @@ import pytest
 
 from pysidtracker import BaseSidParser, SidFormat, SidImage, SidParseError
 from pysidtracker.maincli import main
+from pysidtracker.player import MemPlayer
 from pysidtracker.testing import check_outcome, corpus_params
 from pysidtracker.snapshot import (
     MISSING,
@@ -45,7 +46,22 @@ def explode(model):
     raise ValueError(f"no export for {model[0]}")
 
 
-TOY = SidFormat("toy", _ToyParser(), None, probes={"rebuild": rebuild})
+class _ToyPlayer(MemPlayer):
+    """Writes the model's last byte, then counts frames, to ``$D400``."""
+
+    def __init__(self, model):
+        self.last = model[2][-1]
+        super().__init__(b"", 0x1000)
+
+    def _init(self, subtune):
+        self.cnt = 0
+
+    def _frame(self):
+        self._wr(0xD400, self.last + self.cnt)
+        self.cnt += 1
+
+
+TOY = SidFormat("toy", _ToyParser(), _ToyPlayer, probes={"rebuild": rebuild})
 
 
 def toy_factory():
@@ -68,10 +84,16 @@ def test_digest_is_content_addressed():
     assert len(digest(b"")) == 32
 
 
-def test_fingerprint_records_model_probes_and_errors():
+def test_fingerprint_records_model_probes_and_errors(songlengths):
     data = b"\x00\x10TOY1"
+    songlengths.add(data, 0.06)
     out = fingerprint(data, TOY, {"export": explode})
     assert out["model"] == digest(("toy", 0, b"TOY1"))
+    regs = [[ord("1") + f] + [0] * 24 for f in range(3)]
+    for row in regs:
+        row[0x18] = 0x0F
+    assert out["render"] == digest(bytes(sum(regs, [])))
+    assert fingerprint(b"\x00\x10TOY2", TOY)["render"] != out["render"]
     assert out["rebuild"] == digest(b"TOY1")
     assert out["export"] == "!ValueError: no export for toy"
     assert fingerprint(b"\x00\x10BAD", TOY) == {

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from pysidtracker import gridcmp, survey
+from pysidtracker.errors import IncompleteComparison
 
 _U42_NAMES = [
     f"v{n} {s}"
@@ -225,6 +226,11 @@ def test_compare_grids_short_render_is_an_error():
         gridcmp.compare_grids(a, np.zeros((8, 25)))
     with pytest.raises(ValueError, match="shift 8"):
         gridcmp.verdict_lead(np.zeros((4, 25), np.int16), np.zeros((4, 25), np.int16))
+    with pytest.raises(IncompleteComparison, match="of a 11-frame song"):
+        gridcmp.verdict_lead(a, np.vstack([a, a]), whole=11)
+    with pytest.raises(IncompleteComparison, match="render 17"):
+        gridcmp.verdict_lead(a, a[np.arange(17) % 10], whole=10)
+    assert gridcmp.verdict_lead(a, np.vstack([a, a]), whole=10).ok
     b = np.vstack([np.zeros((2, 25)), a, a[:6]])
     out = gridcmp.compare_grids(a, b)
     assert (out["verdict"], out["lead"], out["frames"]) == ("exact", 2, 10)
