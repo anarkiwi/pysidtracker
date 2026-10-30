@@ -1,5 +1,7 @@
 """Standard note words, declared note tables and the standard-notes SpecPlayer."""
 
+from dataclasses import replace
+
 import pytest
 
 from pysidtracker import SidFormat
@@ -10,6 +12,8 @@ from pysidtracker.playspec import SpecError, SpecPlayer, elaborate, parse, run
 from pysidtracker.playspec.pyexec import source
 from pysidtracker.playspec.smt import Executor, State, step
 from pysidtracker.playspec.syntax import Spec
+
+from .helpers import build_psid
 
 PAL, NTSC = 985248, 1022727
 
@@ -236,3 +240,75 @@ def test_spec_binding_entries_and_subtune_reach_the_player():
     fmt = SidFormat("synthetic", None, None, spec=lambda model: binding)
     with pytest.raises(SidParseError, match="no modelled entry"):
         fmt.spec_player(Model())
+
+
+def _sid_format(flags=None, image=None):
+    spec = parse(SPEC)
+    sid = None if flags is None else build_psid(image or tune([7]), LOAD, flags=flags)
+    return SidFormat(
+        "synthetic",
+        None,
+        None,
+        spec=lambda model: SpecBinding(
+            spec, lambda view, entry: BINDING, tune([7, 7, 7]), sid=sid
+        ),
+    )
+
+
+def _word(player):
+    player.play_frame()
+    return player.regs[1] << 8 | player.regs[0]
+
+
+@pytest.mark.parametrize(
+    "flags,clock", [(0b0100, PAL), (0b1000, NTSC), (0b0000, PAL), (0b1100, PAL)]
+)
+def test_notes_true_is_the_tune_clock(flags, clock):
+    player = _sid_format(flags).spec_player(Model(), notes=True)
+    assert _word(player) == frequency(7, clock)
+
+
+def test_notes_true_without_a_container_is_pal():
+    assert _word(_sid_format().spec_player(Model(), notes=True)) == frequency(7, PAL)
+
+
+def test_explicit_clock_and_kwargs_override_the_header():
+    fmt = _sid_format(0b1000)
+    assert _word(fmt.spec_player(Model(), notes=PAL)) == frequency(7, PAL)
+    assert _word(fmt.spec_player(Model(), notes=True, ntsc=False)) == frequency(7, PAL)
+    assert _word(fmt.spec_player(Model())) == NATIVE[7]
+
+
+def test_header_sets_the_chip_and_machine_of_a_called_player():
+    player = _sid_format(0b101000).spec_player(Model())
+    assert player._sid_model == "8580"  # pylint: disable=protected-access
+    assert player._pal_flag == 0  # pylint: disable=protected-access
+    other = _sid_format(0b010100).spec_player(Model())
+    assert other._sid_model == "6581"  # pylint: disable=protected-access
+    assert other._pal_flag == 1  # pylint: disable=protected-access
+    assert (
+        _sid_format(0b101000).spec_player(Model(), sid_model="6581")._sid_model
+        == "6581"
+    )  # pylint: disable=protected-access
+
+
+def test_binding_without_a_container_is_unchanged():
+    player = _sid_format().spec_player(Model())
+    assert (
+        player._sid is None and player._clock is None
+    )  # pylint: disable=protected-access
+    assert player._sid_model == "6581"  # pylint: disable=protected-access
+
+
+def test_binding_accepts_a_loaded_image():
+    from pysidtracker import SidImage  # pylint: disable=import-outside-toplevel
+
+    data = build_psid(tune([7]), LOAD, flags=0b1000)
+    fmt = _sid_format()
+    binding = fmt.spec(Model())
+    image = SidImage.from_bytes(data)
+    fmt = SidFormat("x", None, None, spec=lambda m: replace(binding, sid=image))
+    assert _word(fmt.spec_player(Model(), notes=True)) == frequency(7, NTSC)
+    prg = SidImage.from_prg(bytes([0, 0x10]) + tune([7]))
+    fmt = SidFormat("x", None, None, spec=lambda m: replace(binding, sid=prg))
+    assert _word(fmt.spec_player(Model(), notes=True)) == frequency(7, PAL)
