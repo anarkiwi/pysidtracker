@@ -999,12 +999,29 @@ class Lowerer:
         b, p = self.fresh(f"{name}_base"), self.fresh(f"{name}_pos")
         scope.names[name] = ("stream", b, p)
         out = [("set", b, base_v), ("set", p, pos_v)]
-        if grammar is not None:
-            if grammar.count(":") != 2:
-                self.error(line, 'grammar is "module:attribute:rule"')
-            self.grammars.append((grammar, line))
+        chosen = self.select_grammar(grammar, scope, line)
+        if chosen is not None:
+            self.grammars.append((chosen, line))
             out.append(("hook", len(self.grammars) - 1, V(b, 16)))
         return out
+
+    def select_grammar(self, alts, scope, line: int) -> Optional[str]:
+        """The rule of the first ``"ref" if cond`` arm that holds (an arm with no
+        condition always holds); ``cond`` is static, so the layout picks the rule."""
+        chosen = None
+        for ref, cond in alts:
+            if ref.count(":") != 2:
+                self.error(line, 'grammar is "module:attribute:rule"')
+            if chosen is None:
+                if cond is None:
+                    chosen = ref
+                else:
+                    value = self.static(cond, scope, line)
+                    if value is None and self.binding is None:
+                        chosen = ref  # unbound: every arm is a candidate
+                    elif value:
+                        chosen = ref
+        return chosen
 
     def control(self, name: str, line: int):
         """The control declaration ``name`` of the current instance."""

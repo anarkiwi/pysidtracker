@@ -77,7 +77,7 @@ schedule {
   - `if`/`elif`/`else`.
   - `while c bound N`: running past the bound is a runtime error and a proof obligation.
   - Static `for`, `in`, `goto`, `assert`.
-  - `stream s = base @ cursor [grammar "mod:attr:rule"]`, read with `let v = next s;`, `s[k]` (relative to the cursor) and `s.pos`.
+  - `stream s = base @ cursor [grammar "mod:attr:rule" [if cond] {, "mod:attr:rule" [if cond]}]`: the first rule whose static `cond` (e.g. `L.extended`) holds, an arm without `if` always holding, so a layout can pick the rule per build; read with `let v = next s;`, `s[k]` (relative to the cursor) and `s.pos`.
 - **Arithmetic:**
   - Exact 8/16-bit wraparound. Untyped literals take the other operand's width; u8 widens to u16 implicitly.
   - Narrowing is a width error (use `lo()`/`hi()`).
