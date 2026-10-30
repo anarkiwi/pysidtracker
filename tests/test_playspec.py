@@ -715,7 +715,7 @@ play: LDA $1300
 """
 
 
-def _hosted_tune(**kwargs):
+def _hosted_tune():
     code, labels = assemble(HOSTED, 0x1000)
     data = build_psid(code, 0x1000, init=labels["init"], play=0, magic=b"RSID")
     return data, labels, code
@@ -761,7 +761,7 @@ def test_spec_player_traps_entries_under_the_interrupt_host(container, monkeypat
 
 def test_hosted_spec_replaces_the_trapped_entry(monkeypatch):
     monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
-    data, labels, code = _hosted_tune()
+    _, labels, code = _hosted_tune()
     player = SpecPlayer(
         parse(PLAY_SPEC.replace("freq += 3", "freq += 5")),
         code,
