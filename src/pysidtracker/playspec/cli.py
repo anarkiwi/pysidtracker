@@ -50,6 +50,7 @@ def _player(args) -> SpecPlayer:
         bind=load_spec(args.binder),
         entries=entries,
         psid=header.is_psid,
+        sid=image if header.play_address == 0 else None,
         validate=getattr(args, "validate", False),
     )
 

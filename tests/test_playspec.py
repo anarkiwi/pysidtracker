@@ -8,7 +8,9 @@ import z3
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from pysidtracker import irqhost
 from pysidtracker.asm6502 import assemble
+from pysidtracker.irqhost import InterruptPlayer
 from pysidtracker.testing import whole_song
 from pysidtracker.maincli import main as cli_main
 from pysidtracker.oracle import EmuPlayer
@@ -678,3 +680,98 @@ wrap:
     reference = EmuPlayer(image, 0x1000, labels["init"], play)
     frames = whole_song(60)
     assert player.render_grid(frames) == reference.render_grid(frames)
+
+
+HOSTED = """
+init: SEI
+  LDA #$7F
+  STA $DC0D
+  LDA $DC0D
+  LDA #$10
+  STA $1300
+  LDA #<irq
+  STA $0314
+  LDA #>irq
+  STA $0315
+  LDA #$1B
+  STA $D011
+  LDA #$80
+  STA $D012
+  LDA #$01
+  STA $D01A
+  CLI
+  RTS
+irq: INC $D019
+  JSR play
+  JMP $EA31
+play: LDA $1300
+  CLC
+  ADC #$03
+  STA $1300
+  STA $D400
+  LDA #$41
+  STA $D404
+  RTS
+"""
+
+
+def _hosted_tune(**kwargs):
+    code, labels = assemble(HOSTED, 0x1000)
+    data = build_psid(code, 0x1000, init=labels["init"], play=0, magic=b"RSID")
+    return data, labels, code
+
+
+@pytest.mark.parametrize("container", [True, False])
+def test_spec_player_traps_entries_under_the_interrupt_host(container, monkeypatch):
+    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
+    data, labels, code = _hosted_tune()
+    player = SpecPlayer(
+        parse(PLAY_SPEC),
+        code,
+        0x1000,
+        labels["init"],
+        0,
+        bind=lambda v, e: {"freq": 0x1300, "sid": 0xD400},
+        entries=lambda view: {labels["play"]},
+        psid=False,
+        sid=data if container else None,
+    )
+    reference = InterruptPlayer(data)
+    frames = whole_song(40)
+    grid = player.render_grid(frames)
+    assert grid == reference.render_grid(frames)
+    assert len({row[0] for row in grid}) > 20
+    assert player.entry == labels["play"]
+    assert player.program().name == "counter"
+    assert len(player.view()) == len(player.memory) == 0x10000
+    more = SpecPlayer(
+        parse(PLAY_SPEC),
+        code,
+        0x1000,
+        labels["init"],
+        0,
+        bind=lambda v, e: {"freq": 0x1300, "sid": 0xD400},
+        entries=lambda view: {labels["play"]},
+        psid=False,
+        sid=data,
+    )
+    assert more.play_frame() and more.play_frame()
+    assert more.snapshot()[0] == more.regs[0]
+
+
+def test_hosted_spec_replaces_the_trapped_entry(monkeypatch):
+    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
+    data, labels, code = _hosted_tune()
+    player = SpecPlayer(
+        parse(PLAY_SPEC.replace("freq += 3", "freq += 5")),
+        code,
+        0x1000,
+        labels["init"],
+        0,
+        bind=lambda v, e: {"freq": 0x1300, "sid": 0xD400},
+        entries=lambda view: {labels["play"]},
+        psid=False,
+    )
+    grid = player.render_grid(whole_song(10))
+    steps = {(b[0] - a[0]) & 0xFF for a, b in zip(grid[1:], grid[2:])}
+    assert steps == {5}
