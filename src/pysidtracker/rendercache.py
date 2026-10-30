@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import importlib.resources
 import importlib.util
 import os
 import tempfile
@@ -50,6 +51,16 @@ def digest(value: Any) -> str:
 def _modules_digest(names: Tuple[str, ...]) -> str:
     out = hashlib.blake2b(digest_size=16)
     for name in names:
+        if ":" in name:  # a package data file, "pkg:path/to/file"
+            package, _, resource = name.partition(":")
+            try:
+                data = (
+                    importlib.resources.files(package).joinpath(resource).read_bytes()
+                )
+            except (ImportError, ValueError, OSError):
+                continue
+            out.update(name.encode() + data)
+            continue
         try:
             spec = importlib.util.find_spec(name)
         except (ImportError, ValueError):
@@ -62,7 +73,8 @@ def _modules_digest(names: Tuple[str, ...]) -> str:
 
 def player_version(fmt: SidFormat) -> str:
     """A digest of the playback code ``fmt``'s renders depend on: the core playback
-    modules, the module of ``fmt.player`` and ``fmt.player_modules``. Decoding code
+    modules, the module of ``fmt.player`` and ``fmt.player_modules`` (a ``"pkg:path"``
+    entry is a package data file, such as a ``.play`` spec). Decoding code
     is left out, so a decoder change invalidates only the models it alters."""
     own = (getattr(fmt.player, "__module__", None), *fmt.player_modules)
     core = tuple(f"{__package__}.{name}" for name in CORE_PLAYBACK)

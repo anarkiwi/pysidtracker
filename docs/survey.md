@@ -160,7 +160,7 @@ keep it untracked.
 With `--format`, `run` keeps every subtune's library grid in `WORK/render/`
 (beside the oracle cache), keyed by a digest of the format, its decoded model,
 the subtune and the player code (`rendercache.player_version`: the core playback
-modules, the module of `SidFormat.player` and `SidFormat.player_modules`; decoder
+modules, the module of `SidFormat.player` and `SidFormat.player_modules`, whose `"pkg:path/to/file"` entries digest package data files such as `.play` specs; decoder
 code is deliberately not in it). Decoding still runs for every tune, but a
 subtune whose key is unchanged since an earlier run is not rendered again, so a
 change that alters ten decodes renders ten subtunes. Any change to player code

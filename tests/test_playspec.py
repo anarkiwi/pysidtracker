@@ -8,7 +8,7 @@ import z3
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pysidtracker import irqhost
+from pysidtracker import SidParseError, irqhost
 from pysidtracker.asm6502 import assemble
 from pysidtracker.irqhost import InterruptPlayer
 from pysidtracker.testing import whole_song
@@ -515,6 +515,26 @@ def test_spec_player_matches_the_6502(wrapped):
     assert player.entry == labels["play"]
     assert player.program().name == "counter"
     assert len(player.view()) == 0x10000
+
+
+def test_unreached_first_call_falls_back_to_the_lowest_entry():
+    data, labels = _tune(False)
+    image = data[0x7C:]
+
+    def make(entries):
+        return SpecPlayer(
+            parse(PLAY_SPEC),
+            image,
+            0x1000,
+            labels["init"],
+            labels["init"],  # a play call that never enters the modelled routine
+            bind=lambda v, e: {"freq": 0x1300, "sid": 0xD400},
+            entries=entries,
+        )
+
+    assert make(lambda view: {labels["play"], labels["wrap"]}).entry == labels["play"]
+    with pytest.raises(SidParseError, match="no modelled entry"):
+        make(lambda view: set())
 
 
 def test_stream_validator_reports_malformed_streams():

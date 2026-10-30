@@ -84,8 +84,9 @@ class SidFormat:
     the ``grammar`` command; ``canonical(model)`` is a text that is equal for
     two models exactly when they play the same (the ``equiv`` command).
     ``player_modules`` names the modules, besides ``player``'s own, whose code a
-    render depends on; :mod:`pysidtracker.rendercache` invalidates every cached
-    render when any of them changes.
+    render depends on, or ``"pkg:path/to/file"`` for a package data file it reads
+    (a ``.play`` spec, say); :mod:`pysidtracker.rendercache` invalidates every
+    cached render when any of them changes.
     """
 
     name: str

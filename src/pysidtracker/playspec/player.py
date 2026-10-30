@@ -56,6 +56,15 @@ class SpecPlayer(EmuPlayer):
     makes into a modelled entry runs as the spec, as an instant at the cycle it is
     reached; ``render_grid`` frames at the play source's raises. ``entry`` is the last
     entry trapped.
+
+    If the first play call reaches no modelled entry (a wrapper that alternates
+    entries or skips the player), ``entry`` starts as the lowest of ``entries(view)``;
+    :class:`~pysidtracker.SidParseError` is raised only when that set is empty. Frames
+    are unaffected: each call dispatches on the entry the CPU reaches.
+
+    A spec call advances no cycles, so with ``cycles_per_frame`` scheduling the
+    player plays a call the real routine would have overrun and had dropped, and runs
+    one call ahead from there.
     """
 
     def __init__(
@@ -140,11 +149,14 @@ class SpecPlayer(EmuPlayer):
         self._due = self._mpu.processorCycles
         self._bus = self._obs._subject  # pylint: disable=protected-access
         play = self._play_addr
-        self.entry = play if play in self._entries() else self._probe(play)
+        entries = self._entries()
+        self.entry = play if play in entries else self._probe(play)
         if self.entry is None:
-            raise SidParseError(
-                f"the play routine at ${play:04x} reaches no modelled entry"
-            )
+            if not entries:
+                raise SidParseError(
+                    f"the play routine at ${play:04x} reaches no modelled entry"
+                )
+            self.entry = min(entries)  # the probed call skipped the player
 
     def _host(self, subtune: int) -> None:
         """Boot the tune's interrupts on a host that traps modelled entries."""
