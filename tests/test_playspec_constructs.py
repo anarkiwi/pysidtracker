@@ -100,7 +100,7 @@ def body(decls="", stmts="", top=""):
         (body("", "stream s = 0 @ 0; let q = s;"), "is a stream"),
         (body("", "stream s = 0 @ 0; s.base := 1;"), "cannot assign to s.base"),
         (body("", 'stream s = 0 @ 0 grammar "abc";'), "grammar is"),
-        (body("", 'native 0x1000(b = 1) resumes 0x1000;'), "native arguments"),
+        (body("", "native 0x1000(b = 1) resumes 0x1000;"), "native arguments"),
         (
             body("cell t: u8[2] @ L.a;", "let q = t[true];"),
             "a truth value cannot index",

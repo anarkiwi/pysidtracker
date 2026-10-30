@@ -146,7 +146,9 @@ class SpecPlayer(EmuPlayer):
             if mpu.sp > mine["base"]:
                 raise NativeEscape()
             if mpu.processorCycles - start >= self._max_cycles:
-                raise SidParseError(f"native code at ${addr:04x} never reaches ${resume:04x}")
+                raise SidParseError(
+                    f"native code at ${addr:04x} never reaches ${resume:04x}"
+                )
             mpu.step()
 
     def _run(self, entry: int) -> bool:
