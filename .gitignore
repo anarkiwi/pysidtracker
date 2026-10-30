@@ -236,3 +236,6 @@ core.[0-9]*
 
 # Claude Code worktrees (never committed)
 .claude/worktrees/
+
+# built wheels (never committed)
+*.whl
