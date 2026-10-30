@@ -56,7 +56,8 @@ return_: "return" [expr] ";"
 goto: "goto" NAME ";"
 in_: "in" NAME "{" arm+ "}"
 arm: NAME "=>" block
-stream: "stream" NAME "=" expr "@" expr ("grammar" STRING)? ";"
+stream: "stream" NAME "=" expr "@" expr ("grammar" gsel ("," gsel)*)? ";"
+gsel: STRING ("if" expr)?
 assert_: "assert" expr ";"
 
 lval: NAME                 -> lname

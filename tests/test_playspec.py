@@ -593,3 +593,16 @@ def cli_binding(view, entry):
     """The binding the CLI tests pass by module:attr."""
     del view, entry
     return {"freq": 0x1300, "sid": 0xD400}
+
+
+def test_stream_grammar_rule_follows_layout():
+    spec = parse(
+        "spec g;\nlayout { p: addr; ext: flag; }\ncell q: u8 @ L.p;\nmachine m { step { "
+        'stream s = 0x2000 @ 0 grammar "tests.test_bytegrammar:TOY:ext" if L.ext, '
+        '"tests.test_bytegrammar:TOY:seq"; let v = next s; q := v; } }\nschedule { m; }'
+    )
+    for ext, rule in ((1, "ext"), (0, "seq")):
+        program = elaborate(spec, {"p": 0x1000, "ext": ext})
+        assert program.grammars == [
+            (f"tests.test_bytegrammar:TOY:{rule}", program.grammars[0][1])
+        ]

@@ -220,8 +220,11 @@ class _ToAst(Transformer):
         return str(c[0]), c[1]
 
     def stream(self, meta, c):
-        grammar = str(c[3])[1:-1] if len(c) > 3 else None
-        return self._n("stream", meta, str(c[0]), c[1], c[2], grammar)
+        return self._n("stream", meta, str(c[0]), c[1], c[2], c[3:])
+
+    def gsel(self, meta, c):
+        del meta
+        return str(c[0])[1:-1], c[1] if len(c) > 1 else None
 
     def assert_(self, meta, c):
         return self._n("assert", meta, c[0])
