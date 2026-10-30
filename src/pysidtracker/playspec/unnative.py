@@ -74,9 +74,8 @@ class Stater:
         self.uses[key] = self.uses.get(key, 0) + 1
         if key in self.reads:
             return self.reads[key]
-        reads = z3.is_select(term) or any(
-            [self._count(term.arg(i)) for i in range(term.num_args())]
-        )
+        below = [self._count(term.arg(i)) for i in range(term.num_args())]
+        reads = z3.is_select(term) or any(below)
         self.reads[key] = reads
         return reads
 

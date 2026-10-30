@@ -340,7 +340,11 @@ def validate(
     )
     spec_state: State = step(program, mem0, env)
     for load in cpu.loads:
-        solver.add(*[load != a for a in sorted(cpu.pushed)])
+        # a constant address (a PLA/PLP/RTS pull) reads its slot on purpose
+        if not z3.is_bv_value(z3.simplify(load)):
+            solver.add(*[load != a for a in sorted(cpu.pushed)])
+    if solver.check() == z3.unsat:
+        raise TVError("the assumptions are contradictory, so nothing can be proven")
     memo: dict = {}
     pairs = []
     for at in _distinct(spec_state.writes + cpu.writes):

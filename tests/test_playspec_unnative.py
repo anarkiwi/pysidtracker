@@ -290,3 +290,28 @@ def test_arithmetic_carries_shifts_and_compares_match(value):
     new = unnative(old, binding, make(old).view())
     assert "native" not in new.source
     equivalent(make, old, new, 20)
+
+
+_INDEXED = """
+spec repro;
+layout { s, r: addr; }
+machine m[x in 0..1] {
+  step { native L.s(x = x) resumes L.r; }
+}
+schedule { m[0]; }
+"""
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        [0xBD, 0x76, 0x10, 0x85, 0x30],
+        [0xBC, 0x76, 0x10, 0xC8, 0xB9, 0x58, 0x22, 0x85, 0x30],
+    ],
+)
+def test_index_register_and_loaded_index_are_stated(code):
+    image = bytearray(0x10000)
+    image[0x1000 : 0x1000 + len(code)] = bytes(code)
+    binding = {"s": 0x1000, "r": 0x1000 + len(code)}
+    out = unnative(parse(_INDEXED), binding, bytes(image))
+    assert "mem[" in out.source

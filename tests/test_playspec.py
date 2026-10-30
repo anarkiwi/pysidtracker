@@ -870,3 +870,38 @@ def test_translation_validation_assume_constrains_initial_memory():
         *args, registers={"X": 0}, assume=[lambda mem, regs: z3.Select(mem, cell) == 4]
     )
     assert assumed.proven, assumed.counterexample
+
+
+_PHA_PLA = """
+split: LDA $1000
+       PHA
+       AND #$0F
+       STA $1010
+       PLA
+       AND #$F0
+       STA $1011
+       RTS
+"""
+_PHA_PLA_SPEC = """
+spec t;
+layout {{ src, dst: addr; }}
+cell a: u8 @ L.src;
+cell low: u8 @ L.dst;
+cell high: u8 @ L.dst + 1;
+machine m {{
+  proc split() {{ low := a & 0x0F; high := {high}; }}
+  step {{ split(); }}
+}}
+schedule {{ m; }}
+"""
+
+
+@pytest.mark.parametrize("high,proven", [("a & 0xF0", True), ("(a & 0xF0) ^ 1", False)])
+def test_pha_pla_routine_is_not_vacuously_proven(high, proven):
+    code, _ = assemble(_PHA_PLA, 0x2000)
+    image = bytearray(0x10000)
+    image[0x2000 : 0x2000 + len(code)] = code
+    spec = parse(_PHA_PLA_SPEC.format(high=high))
+    binding = {"src": 0x1000, "dst": 0x1010}
+    result = validate(spec, binding, "m.split", bytes(image), 0x2000)
+    assert result.proven is proven
