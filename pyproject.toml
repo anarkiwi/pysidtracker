@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.46.0"
+version = "0.47.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -36,7 +36,7 @@ classifiers = [
 # lark: the LALR parsers of tracker byte-stream grammars (bytegrammar) and playspec.
 # z3-solver: playspec model checking and translation validation.
 dependencies = [
-  "jennings>=0.2.0",
+  "jennings>=0.4.0",
   "pydexomizer>=0.1",
   "pyresidfp>=0.17",
   "vagrant-moses[cpu]>=0.4.0",
