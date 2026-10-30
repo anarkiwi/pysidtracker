@@ -24,10 +24,8 @@ def frequency(note: int, clock_hz: int) -> int:
 @lru_cache(maxsize=None)
 def table(clock_hz: int, part: int, offset: int, size: int) -> Tuple[int, ...]:
     """``size`` entries; entry ``i`` is ``part`` (see :data:`PARTS`) of the word of
-    note ``i + offset``, 0 for a negative note."""
-    words = (
-        frequency(i + offset, clock_hz) if i + offset >= 0 else 0 for i in range(size)
-    )
+    note ``i + offset``."""
+    words = (frequency(i + offset, clock_hz) for i in range(size))
     if part == PARTS["word"]:
         return tuple(words)
     shift = 8 * part
