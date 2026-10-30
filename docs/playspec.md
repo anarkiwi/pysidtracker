@@ -59,6 +59,10 @@ schedule {
     - `operand`: the cell lives in an instruction operand (self-modified code).
     - `scratch`: excluded from translation-validation comparison.
     - `latched`: a reader must not follow another instance's store in the same call.
+    - `volatile`: an input register whose value comes from outside the spec (voice 3's
+      `$D41B`/`$D41C`, a raster poll). Each read is a separate read of memory that is
+      never folded, shared or reordered; a store to it is an error. The spec says
+      nothing about *when* in the call the read happens (see "Volatile inputs").
     - `notes(lo|hi|word, K)`: the `ro` table holds the native note table; index `i` means standard note `i + K` (`K` a static, possibly negative). `lo`/`hi` mark a `u8[n]` as the low/high byte of the note word, `word` a `u16[n]`/`ptr[n]` as the whole word. Cells aliasing one table may declare different `K`.
 - `machine m [x in a..b] { cell/signal/control/proc/step }` declares a machine
   and its instances; `x` is the static instance index.
@@ -189,6 +193,21 @@ What goes where:
 - **A variant:** what a build does differently. Other statements, procs or schedule, rather than an `L.flag` guarding both code paths in one spec.
 - **`native`:** code the spec has not stated yet. [`unnative`](#removing-native-hooks) states it as a variant.
 
+## Volatile inputs
+
+A `volatile` cell is an input of the call. The k-th read of volatile cells in a call
+returns the k-th input, whatever the cycle:
+- `SpecPlayer` reads it through the bus as any other cell. With `inputs=f`, `f(address)`
+  supplies the value instead.
+- `EmuPlayer(record_reads=addresses)` records `(address, value)` for each read its
+  6502 code makes of those addresses in the last call (`reads`). Feeding those values to
+  a `SpecPlayer`'s `inputs` compares the two players given the same inputs, so
+  agreement does not depend on the cycle either reads at.
+- Translation validation treats each read as a fresh input. The obligation is that the
+  spec and the 6502 code read volatile addresses the same number of times, at the same
+  addresses in the same order; there are no cycle terms. Reads on a path that is not
+  taken do not count.
+
 ## Execution
 
 The lowered IR is one structured program per call:
@@ -312,9 +331,8 @@ The tests exercise each construct with small generic specs on synthetic memory.
 | SID register mirrors | MA | binding folds the mirror (layout) |
 
 Not expressed, by design or not yet implemented:
-- **Timing inside a call.** A call is an instant, so a read of `$D41B`/`$D41C`
-  (oscillator 3 / envelope 3) or a raster poll sees the value at the call's
-  start cycle, not the cycle the 6502 would reach it.
+- **Timing inside a call.** A call is an instant: a read of a `volatile` cell is
+  an input whose value the spec does not tie to a cycle (see "Volatile inputs").
 - **Timing of a trapped call under interrupts.** A tune with play address 0 runs
   on an `InterruptPlayer` (its interrupts live, `render_grid` framed at the play
   source's raises) and `SpecPlayer` traps each call into an `entries(view)` entry

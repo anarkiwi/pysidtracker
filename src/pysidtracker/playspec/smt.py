@@ -21,6 +21,16 @@ BV16 = z3.BitVecSort(16)
 BV8 = z3.BitVecSort(8)
 
 
+def volatile_inputs():
+    """The stream of values the volatile reads of a call return, in order."""
+    return z3.Array("volatile_input", BV16, BV8)
+
+
+def volatile_log():
+    """``(count, addresses)`` of volatile reads made so far: none, over all addresses."""
+    return z3.BitVecVal(0, 16), z3.K(BV16, z3.BitVecVal(0, 16))
+
+
 def symbolic_memory(name: str = "mem0"):
     """A fully unconstrained 64 KiB memory."""
     return z3.Array(name, BV16, BV8)
@@ -97,6 +107,9 @@ class State:
     old: object = None
     writes: List[object] = field(default_factory=list)
     done: object = None
+    reads: object = field(default_factory=lambda: volatile_log()[0])
+    read_log: object = field(default_factory=lambda: volatile_log()[1])
+    read_sites: int = 0
 
 
 def _bool(term):
@@ -106,8 +119,44 @@ def _bool(term):
 class Executor:
     """Guarded symbolic execution of lowered statements."""
 
-    def __init__(self, procs: Optional[Dict[str, list]] = None):
+    def __init__(self, procs: Optional[Dict[str, list]] = None, quiet: bool = False):
         self.procs = procs or {}
+        self.quiet = quiet
+        self.guard = None
+
+    def volatile(self, addr, st: State):
+        """A volatile read: the next value of the input stream, logged with its
+        address under the path condition it executes under."""
+        if self.quiet:
+            return z3.Select(st.mem, addr)
+        value = z3.Select(volatile_inputs(), st.reads)
+        logged = z3.Store(st.read_log, st.reads, addr)
+        counted = st.reads + 1
+        if self.guard is not None:
+            logged = z3.If(self.guard, logged, st.read_log)
+            counted = z3.If(self.guard, counted, st.reads)
+        st.read_log, st.reads = logged, counted
+        st.read_sites += 1
+        return value
+
+    def lazy(self, op, args, st: State):
+        """``land``/``lor``/``ite`` evaluate an operand only on the paths that reach it."""
+        first = self.expr(args[0], st)
+        saved = self.guard
+        test = _bool(first)
+        arms = {
+            "land": [(test, 1)],
+            "lor": [(z3.Not(test), 1)],
+            "ite": [(test, 1), (z3.Not(test), 2)],
+        }[op]
+        rest = {}
+        for cond, index in arms:
+            self.guard = _and(saved, cond)
+            rest[index] = self.expr(args[index], st)
+        self.guard = saved
+        if op == "ite":
+            return z3.If(test, rest[1], rest[2])
+        return (z3.And if op == "land" else z3.Or)(test, rest[1])
 
     def expr(self, e, st: State):
         """The z3 term of ``e`` in ``st``."""
@@ -123,14 +172,14 @@ class Executor:
         op, args = e.op, e.a
         if op == "note":
             raise SidError("standard note mode is not supported by the solver")
+        if op == "vol":
+            return self.volatile(self.expr(args[0], st), st)
+        if op in ("land", "lor", "ite"):
+            return self.lazy(op, args, st)
         if op == "old":
             inner = State(st.old if st.old is not None else st.mem, st.env)
             return self.expr(args[0], inner)
         vals = [self.expr(a, st) for a in args]
-        if op == "ite":
-            return z3.If(vals[0], vals[1], vals[2])
-        if op in ("land", "lor"):
-            return (z3.And if op == "land" else z3.Or)(vals[0], vals[1])
         if op == "lnot":
             return z3.Not(vals[0])
         if op == "zext":
@@ -159,6 +208,7 @@ class Executor:
             tag = s[0]
             if st.done is not None:  # a ``finish`` ended the call on some paths
                 guard = _and(guard, z3.Not(st.done))
+            self.guard = guard
             if tag == "finish":
                 now = z3.BoolVal(True) if guard is None else guard
                 st.done = now if st.done is None else z3.Or(st.done, now)
@@ -202,12 +252,15 @@ class Executor:
         """A bounded loop, unrolled; running past the bound is an obligation."""
         _tag, cond, body, bound, line = s
         for _ in range(bound):
+            self.guard = guard
             live = z3.simplify(_and(guard, self.expr(cond, st)))
             if z3.is_false(live):
                 return
             self.run(body, st, live)
             guard = live
+        self.quiet, quiet = True, self.quiet
         live = _and(guard, self.expr(cond, st))
+        self.quiet = quiet
         st.obligations.append(
             (live, f"loop at line {line} runs past its bound {bound}")
         )
@@ -265,7 +318,7 @@ def transition(program: Program):
 def check_property(expr, mem, old=None, env=None):
     """The z3 truth of a lowered ``expr`` on ``mem`` (``old``: frame-start memory)."""
     st = State(mem, dict(env or {}), old=old)
-    return Executor().expr(expr, st)
+    return Executor(quiet=True).expr(expr, st)
 
 
 @dataclass

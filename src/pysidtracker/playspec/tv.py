@@ -18,7 +18,15 @@ from deity_informant import lift
 from ..errors import SidError
 from .ir import Program
 from .lower import elaborate
-from .smt import State, check_property, select, step, symbolic_memory
+from .smt import (
+    State,
+    check_property,
+    select,
+    step,
+    symbolic_memory,
+    volatile_inputs,
+    volatile_log,
+)
 from .syntax import Spec
 
 REGS = {"A": 0, "X": 1, "Y": 2, "SP": 3}
@@ -59,6 +67,8 @@ class Path:
     pc: int
     calls: Tuple[int, ...] = ()
     steps: int = 0
+    reads: object = None
+    read_log: object = None
 
 
 @dataclass
@@ -77,7 +87,16 @@ class TVResult:
 class Machine6502:
     """Forking, merging symbolic execution of 6502 code from a concrete image."""
 
-    def __init__(self, image: bytes, operands: Iterable[int], solver: z3.Solver, mem0):
+    def __init__(
+        self,
+        image: bytes,
+        operands: Iterable[int],
+        solver: z3.Solver,
+        mem0,
+        volatile: Iterable[int] = (),
+    ):
+        self.volatile = sorted(volatile)
+        self.volatile_loads = 0
         self.image = image
         self.mem0 = mem0
         self.operands = set(operands)
@@ -144,6 +163,8 @@ class Machine6502:
             if name == "LOAD":
                 self.loads.append(args[0])
                 value = z3.Select(path.mem, args[0])
+                if self.volatile:
+                    value = self.volatile_load(path, args[0], value)
             elif name == "COPY":
                 value = args[0]
             elif name == "INT_ZEXT":
@@ -161,6 +182,20 @@ class Machine6502:
             (path.regs if dst[0] == "r" else uniq)[dst[1]] = value
         path.steps += 1
         return self.control(path, rec)
+
+    def volatile_load(self, path: Path, addr, value):
+        """``value`` of a load, or the next volatile input if ``addr`` is a volatile
+        cell's; the read is logged with its address like the spec side's."""
+        hit = z3.simplify(z3.Or([addr == a for a in self.volatile]))
+        if z3.is_false(hit):
+            return value
+        self.volatile_loads += 1
+        value = z3.If(hit, z3.Select(volatile_inputs(), path.reads), value)
+        path.read_log = z3.If(
+            hit, z3.Store(path.read_log, path.reads, addr), path.read_log
+        )
+        path.reads = z3.If(hit, path.reads + 1, path.reads)
+        return value
 
     def store(self, path: Path, addr, value) -> None:
         """A byte store; a constant store into lifted code is refused."""
@@ -220,7 +255,14 @@ class Machine6502:
                     continue
                 out.append(
                     Path(
-                        both, dict(path.regs), path.mem, target, path.calls, path.steps
+                        both,
+                        dict(path.regs),
+                        path.mem,
+                        target,
+                        path.calls,
+                        path.steps,
+                        path.reads,
+                        path.read_log,
                     )
                 )
             return out
@@ -274,6 +316,8 @@ def merge(a: Path, b: Path) -> Path:
         a.pc,
         a.calls,
         max(a.steps, b.steps),
+        None if a.reads is None else z3.If(a.cond, a.reads, b.reads),
+        None if a.read_log is None else z3.If(a.cond, a.read_log, b.read_log),
     )
 
 
@@ -322,9 +366,12 @@ def validate(
     scratch = {a for c in program.cells if "scratch" in c.attrs for a in c.extent()}
     mem0 = symbolic_memory("M0")
     solver = z3.Solver()
-    cpu = Machine6502(bytes(image), operands, solver, mem0)
+    volatile = {a for c in program.cells if "volatile" in c.attrs for a in c.extent()}
+    cpu = Machine6502(bytes(image), operands, solver, mem0, volatile)
     regs = entry_registers(dict(registers or {}))
-    end = cpu.run(Path(z3.BoolVal(True), dict(regs), mem0, pc), budget, stop)
+    reads, read_log = volatile_log() if volatile else (None, None)
+    start = Path(z3.BoolVal(True), dict(regs), mem0, pc, reads=reads, read_log=read_log)
+    end = cpu.run(start, budget, stop)
     if stop is not None:
         if end is not None:
             raise TVError(f"a path returns without reaching ${stop:04x}")
@@ -360,6 +407,10 @@ def validate(
     claims = [z3.And(keep, a != b) for _at, keep, a, b in pairs]
     claims += [end.regs[REGS[r]] != regs[REGS[r]] for r in preserve]
     claims += [cond for cond, _what in spec_state.obligations]
+    if volatile:
+        claims += _read_claims(
+            spec_state, end, max(spec_state.read_sites, cpu.volatile_loads)
+        )
     result = TVResult(True, routine, pc, cpu.paths)
     if solver.check(z3.Or(claims)) == z3.unsat:
         return result
@@ -387,6 +438,21 @@ def validate(
         )
     result.counterexample = out
     return result
+
+
+def _read_claims(spec_state: State, end: Path, sites: int) -> list:
+    """The two sides read volatile cells the same number of times, at the same
+    addresses in the same order (the k-th reads then return the same input)."""
+    claims = [spec_state.reads != end.reads]
+    for k in range(sites):
+        index = z3.BitVecVal(k, 16)
+        claims.append(
+            z3.And(
+                z3.ULT(index, spec_state.reads),
+                z3.Select(spec_state.read_log, index) != z3.Select(end.read_log, index),
+            )
+        )
+    return claims
 
 
 def _truth(term):

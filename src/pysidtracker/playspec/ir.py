@@ -1,6 +1,7 @@
 """The bound, instance-specialised playspec IR both backends execute.
 
-Expressions: :class:`K`, :class:`Rd`, :class:`V`, :class:`Op`. Statements: ``("wr", a, v)``,
+Expressions: :class:`K`, :class:`Rd`, :class:`V`, :class:`Op` (``vol``: a read of a
+``volatile`` cell, an input of the call that is never folded or shared). Statements: ``("wr", a, v)``,
 ``("set", n, v)``, ``("if", c, then, else)``, ``("loop", c, body, bound, line)``,
 ``("assert", c, what)``, ``("hook", stream_index, base)`` and
 ``("native", addr, ((reg, v), ...), resume)`` (run 6502 code from ``addr`` until it

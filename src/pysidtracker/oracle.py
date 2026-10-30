@@ -32,13 +32,29 @@ import subprocess
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple, Union
+from typing import (
+    Collection,
+    Dict,
+    Iterable,
+    List,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 from vagrant_moses import memmap as mm
 
 from . import registers as reg
 from .cadence import cadence_from_latch, playroutine_cadence
-from .emu import run_to_rts, run_to_rts_until, set_iomap, wire_mpu
+from .emu import (
+    observe_data_access,
+    run_to_rts,
+    run_to_rts_until,
+    set_iomap,
+    wire_mpu,
+)
 from .errors import SidError, SidParseError
 from .image import SidImage
 from .player import MemPlayer
@@ -265,6 +281,10 @@ class EmuPlayer(MemPlayer):
     (:data:`PAL_FLAG`) is set for ``ntsc`` unless the image covers it, as
     :func:`boot_flat` sets it.
 
+    With ``record_reads`` (addresses), :attr:`reads` lists the ``(address, value)`` the
+    last play call's 6502 code read from them, in order: the inputs a playspec's
+    ``volatile`` reads (``SpecPlayer(inputs=...)``) take in their place.
+
     :attr:`~pysidtracker.player.MemPlayer.MASK_PW_HI` is set: ``snapshot``
     masks the pulse-width-high registers to a nibble (the SID ignores their
     upper bits), so the per-frame grid matches the reference-grid convention.
@@ -290,7 +310,10 @@ class EmuPlayer(MemPlayer):
         sid_model: str = "6581",
         cycles_per_frame: Optional[int] = None,
         ntsc: bool = False,
+        record_reads: Collection[int] = (),
     ):
+        self._record = frozenset(record_reads)
+        self.reads: List[Tuple[int, int]] = []
         self._pal_flag = None if load <= PAL_FLAG < load + len(image) else int(not ntsc)
         self._init_addr = init & 0xFFFF
         self._play_addr = play & 0xFFFF
@@ -312,8 +335,15 @@ class EmuPlayer(MemPlayer):
         run_to_rts(self._mpu, self._obs, self._init_addr, subtune, self._max_cycles)
         set_iomap(self._mpu, psid_play_bank(self._play_addr))
         self._due = self._mpu.processorCycles
+        if self._record:
+            observe_data_access(self._mpu, on_read=self._note_read)
+
+    def _note_read(self, addr: int) -> None:
+        if addr in self._record:
+            self.reads.append((addr, self._obs[addr]))
 
     def _frame(self) -> None:
+        self.reads = []
         if self._period:
             late = self._mpu.processorCycles > self._due
             self._mpu.processorCycles = max(self._mpu.processorCycles, self._due)
