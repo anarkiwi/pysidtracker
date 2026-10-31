@@ -237,18 +237,12 @@ class SpecPlayer(EmuPlayer):
                 raise SidParseError(
                     f"native code at ${addr:04x} never reaches ${resume:04x}"
                 )
-            if (
-                run_until(
-                    mpu,
-                    (resume,),
-                    mine["base"],
-                    self._max_cycles - (mpu.processorCycles - start) - 1,
-                )
-                == "jam"
-            ):
-                raise SidParseError(
-                    f"native code at ${addr:04x} never reaches ${resume:04x}"
-                )
+            run_until(
+                mpu,
+                (resume,),
+                mine["base"],
+                self._max_cycles - (mpu.processorCycles - start) - 1,
+            )
 
     def _run(self, entry: int) -> bool:
         """Run the spec at ``entry``; True if native code left it and the CPU finished the call."""

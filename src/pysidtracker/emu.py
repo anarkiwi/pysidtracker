@@ -105,13 +105,15 @@ def observe_data_access(
     callbacks. ``on_read(address)`` fires per byte read (value readable from the
     subject); ``on_write(address, value)`` per byte written, masked. ``reads`` and
     ``writes`` optionally limit the callbacks to those address sets. A native MPU
-    uses the core's own observer, which also skips ``PHA``/``PLA``/``PHP``/``PLP``
-    page-1 accesses; the Python engine reports those through its P-Code hook.
+    uses the core's own observer with ``stack=True``, so ``PHA``/``PLA``/``PHP``/``PLP``
+    page-1 accesses are reported as the Python engine's P-Code hook reports them.
     """
     if on_read is None and on_write is None:
         return
     if getattr(mpu, "native", False):
-        mpu.memory.observe_data_access(on_read, on_write, reads=reads, writes=writes)
+        mpu.memory.observe_data_access(
+            on_read, on_write, reads=reads, writes=writes, stack=True
+        )
         return
     if reads is not None and on_read is not None:
         reads, read_cb = frozenset(reads), on_read
@@ -192,7 +194,7 @@ def run_until(mpu, stop_pcs=(), sp_above=None, max_cycles=None) -> str:
     """Step ``mpu`` until a stop condition holds before an instruction; say which.
 
     ``"sp"``: SP exceeds ``sp_above``; ``"cycles"``: more than ``max_cycles`` have
-    elapsed since the call; ``"pc"``: PC is in ``stop_pcs``; ``"jam"``: a JAM ran.
+    elapsed since the call; ``"pc"``: PC is in ``stop_pcs``; ``"jam"``: a JAM ran (it skips a byte, as ``step`` does).
     A native MPU runs this in its own driver, otherwise the same checks are stepped.
     """
     if getattr(mpu, "native", False):
@@ -292,8 +294,7 @@ class SidWriteLog:
 
     Attaches to ``mpu`` with :func:`observe_data_access`; ``mirrors`` also logs
     the ``$20``-mirrored band, else only ``$D400-$D418``. :meth:`start` opens a call.
-    On a native MPU the address read last is the core's ``last_load`` (``None`` while
-    it is ``$0000``, the CPU port DDR, which no table is read from).
+    On a native MPU the address read last is the core's ``last_load``.
     """
 
     def __init__(self, mpu, mirrors: bool = True):
@@ -318,7 +319,7 @@ class SidWriteLog:
     def _write(self, addr: int, value: int) -> None:
         if self.calls:
             if getattr(self.mpu, "native", False):
-                self._last = self.mpu.memory.last_load or None
+                self._last = self.mpu.memory.last_load
             self.calls[-1].append(
                 (self.registers[addr], self._last, self.mpu.pc, value)
             )

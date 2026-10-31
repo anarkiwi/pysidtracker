@@ -515,7 +515,7 @@ class _Machine:
             if pc not in stops:
                 limit = min(end, due[0] if due else end) - now - 1
                 mpu.stop, self.brk = False, False
-                reason = mpu.run_until(
+                mpu.run_until(
                     max_cycles=limit,
                     stop_pcs=stops,
                     sp_above=self.frames[-1] if inside else None,
@@ -524,9 +524,7 @@ class _Machine:
                     handlers.append(handlers[-1])
                     self.frames.append(mpu.sp)
                 self._unwind()
-                if reason != "jam":
-                    continue
-                pc, sp = mpu.pc, mpu.sp
+                continue
             else:
                 brk = ram[pc] == _BRK
                 mpu.step()

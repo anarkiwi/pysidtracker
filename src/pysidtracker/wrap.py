@@ -118,8 +118,7 @@ def measure_wrap(
                 stops, above = (
                     (entries, depth - 1) if entered is None else ((), entered)
                 )
-                if run_until(mpu, stops, above, left) == "jam":
-                    break
+                run_until(mpu, stops, above, left)
                 continue
             mpu.step()
     inner = flags
@@ -150,8 +149,7 @@ def count_entries(
         if pc in jumps:
             break
         left = max_cycles - (mpu.processorCycles - start)
-        if run_until(mpu, jumps, depth - 1, left) == "jam":
-            return 1
+        run_until(mpu, jumps, depth - 1, left)
     else:
         return 1
     target = ram[pc + 1] | ram[pc + 2] << 8

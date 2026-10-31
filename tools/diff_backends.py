@@ -21,6 +21,7 @@ from pysidtracker.image import SidImage
 
 GRID_FRAMES = 16
 MACHINE_CYCLES = 3_000_000
+CALL_CYCLES = 100_000
 
 
 @contextlib.contextmanager
@@ -62,12 +63,12 @@ def results(data: bytes, native: bool) -> dict:
     with engine(native):
         out["cadence"] = dataclasses.astuple(cadence.playroutine_cadence(data))
         out["machine"] = machine(image, native, stepped=not native)
-        out["grid"] = oracle.register_grid(data, GRID_FRAMES)
-        out["trace"] = trace.trace_init(image, play_calls=4)
-        effects = init_effects(image, 0)
+        out["grid"] = oracle.register_grid(data, GRID_FRAMES, max_cycles=CALL_CYCLES)
+        out["trace"] = trace.trace_init(image, play_calls=4, max_cycles=CALL_CYCLES)
+        effects = init_effects(image, 0, max_cycles=CALL_CYCLES)
         out["effects"] = (effects.writes, effects.reads, effects.jumps)
         ran = SidImage.from_bytes(data)
-        run_init(ran)
+        run_init(ran, max_cycles=CALL_CYCLES)
         out["init_mem"] = bytes(ran.mem)
     return out
 

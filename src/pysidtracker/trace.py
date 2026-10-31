@@ -26,7 +26,7 @@ from typing import Dict, Optional, Set, Tuple
 from vagrant_moses import memmap as mm
 
 from . import registers as reg
-from .emu import run_to_rts, run_to_rts_until, set_iomap, wire_mpu
+from .emu import run_to_rts, run_to_rts_until, set_iomap, sync_ram, wire_mpu
 from .errors import SidParseError
 from .poweron import psid_init_bank, psid_play_bank
 from .registers import sid_model_for_flags
@@ -178,6 +178,7 @@ def trace_init(
             if play_cia2 is not None and play_cia2 != init_cia2:
                 cia2_rewritten = play_cia2
 
+    sync_ram(mpu)
     return _build_trace(writes, cia1_rewritten, cia2_rewritten)
 
 
