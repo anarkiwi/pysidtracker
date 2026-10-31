@@ -24,6 +24,8 @@ from pysidtracker import cadence, oracle, paths, trace, variants, wrap
 from pysidtracker.detect import init_effects, run_init
 from pysidtracker.image import SidImage
 from pysidtracker.irqhost import InterruptHost, to_rows
+from pysidtracker.provenance import trace_frames
+from pysidtracker.whydiff import cpu_history
 
 GRID_FRAMES = 16
 MACHINE_CYCLES = 3_000_000
@@ -112,6 +114,10 @@ def results(data: bytes, native: bool) -> dict:
             )
         )
         out["host"] = attempt(lambda: hosted(data))
+        out["history"] = attempt(lambda: cpu_history(image, 1, max_cycles=CALL_CYCLES))
+        out["provenance"] = attempt(
+            lambda: trace_frames(image, 2, max_cycles=CALL_CYCLES).frames
+        )
         out["boot"] = attempt(lambda: booted(SidImage.from_bytes(data)))
     return out
 

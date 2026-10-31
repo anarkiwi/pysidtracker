@@ -8,12 +8,22 @@ and SID write. ``explain`` names each write's instruction, load chain and cycle;
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 from vagrant_moses import memmap as mm
 
 from . import registers as reg
-from .emu import live_ram, run_to_rts, set_iomap, wire_mpu
+from .emu import (
+    live_ram,
+    observe_data_access,
+    run_to_rts,
+    set_iomap,
+    unobserve_data_access,
+    wire_mpu,
+)
 from .errors import EmulatorUnavailable, SidParseError
 from .image import SidImage
 from .poweron import place_tune, power_on_ram, psid_init_bank, psid_play_bank
@@ -314,7 +324,38 @@ class _PlaycallTracer:
                 (self._mpu.pc, offset, value & 0xFF, self._mpu.processorCycles)
             )
 
+    def _run_native(self, play, max_cycles):
+        """:meth:`run` from one traced native call: the decode sees the memory and the
+        index registers as they stood before each instruction, rebuilt from the
+        recorded stores and the registers each instruction left."""
+        mpu = self._mpu
+        stores: List[Tuple[int, int, int]] = []
+        base = [mpu.steps]
+        observe_data_access(
+            mpu, on_write=lambda a, v: stores.append((mpu.steps - base[0], a, v))
+        )
+        replica = bytearray(self._subject)
+        x, y = mpu.x, mpu.y
+        start = mpu.processorCycles
+        self._captures = []
+        trace = mpu.run_to_rts_traced(play, 0, max_cycles, regs=True)
+        unobserve_data_access(mpu)
+        insns: List[Insn] = []
+        at = 0
+        after = zip(*(np.asarray(c).tolist() for c in (trace.x, trace.y)))
+        for i, pc in enumerate(np.asarray(trace.pc).tolist()):
+            while at < len(stores) and stores[at][0] < i:
+                replica[stores[at][1]] = stores[at][2]
+                at += 1
+            insns.append(decode_insn(pc, SimpleNamespace(x=x, y=y), replica))
+            x, y = next(after)
+        writes = [(pc, r, v, c - start) for pc, r, v, c in self._captures]
+        return insns, writes
+
     def run(self, play, max_cycles):
+        """The decoded instructions and SID writes of one call of ``play``."""
+        if self._mpu.native:
+            return self._run_native(play, max_cycles)
         mpu, mem, subject = self._mpu, self._mem, self._subject
         start_sp = mpu.sp
         mem[0x0100 + mpu.sp] = 0x00

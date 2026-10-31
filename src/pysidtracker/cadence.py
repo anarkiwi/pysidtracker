@@ -8,12 +8,9 @@ taken as the C64 would; see ``docs/cadence.md`` for the driver and the model.
 from __future__ import annotations
 
 import enum
-import zlib
 from collections import Counter
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
-
-import numpy as np
 
 from vagrant_moses import memmap as mm
 from vagrant_moses.c64 import dispatch_vector
@@ -34,10 +31,6 @@ _RET, _EXCEPTION = 0xA0, 0xC4
 _KERNAL_ACK, _KERNAL_NMI = 0xEA7E, 0xFE47
 _BRK, _RTI, _I_FLAG = 0x00, 0x40, 0x04
 _VIC = (-1, 0)
-# Opcodes that can end a masked IRQ's wait (CLI, PLP, RTI) or spin on one address.
-_UNMASK = (0x58, 0x28, 0x40)
-_JMP, _JMP_IND = 0x4C, 0x6C
-_SELF_BRANCH = (0x10, 0x30, 0x50, 0x70, 0x90, 0xB0, 0xD0, 0xF0)
 _KERNAL_RANGE = ((mm.KERNAL_BASE, 0x10000),)
 _RMW = frozenset(
     (0x0E, 0x1E, 0x2E, 0x3E, 0x4E, 0x5E, 0x6E, 0x7E, 0xCE, 0xDE, 0xEE, 0xFE)
@@ -456,19 +449,6 @@ class _Machine:
             return self.execute_events(frames)
         return self.execute_stepped(frames)
 
-    def _watch(self, masked: bool) -> frozenset:
-        """Addresses the native run stops before: possible spins, and while an
-        asserted IRQ is masked, the instructions that can unmask it."""
-        ram = np.frombuffer(self.ram, np.uint8)
-        nxt, last = np.roll(ram, -1).astype(np.uint16), np.roll(ram, -2)
-        here = np.arange(0x10000, dtype=np.uint16)
-        spin = (ram == _JMP) & (nxt | last.astype(np.uint16) << 8 == here)
-        spin |= np.isin(ram, _SELF_BRANCH) & (nxt == 0xFE)
-        spin |= ram == _JMP_IND
-        if masked:
-            spin |= np.isin(ram, _UNMASK)
-        return frozenset(np.flatnonzero(spin).tolist())
-
     def _unwind(self) -> None:
         """Leave the handlers whose frames the stack pointer has climbed past."""
         mpu, handlers, frames = self.mpu, self.handlers, self.frames
@@ -481,14 +461,12 @@ class _Machine:
 
         An event is a source falling due, a callback marking the interrupt state
         ``dirty`` (or a ``$00``/``$01`` write, or a BRK), the stack climbing out of
-        a handler's frame, or the next instruction being one the reference loop
-        examines (a possible spin, a possible unmask of an asserted IRQ, the ROM-less
-        KERNAL in a handler): that one instruction is stepped from Python.
+        a handler's frame, the ROM-less KERNAL entered in a handler, an asserted IRQ
+        unmasked, or an instruction that leaves ``pc`` and ``sp`` unchanged (idle).
         """
-        mpu, ram, bus = self.mpu, self.ram, self.bus
+        mpu, bus = self.mpu, self.bus
         end, nmi, due, irq = self.max_cycles, False, None, False
         handlers = self.handlers
-        watched = {}
         while mpu.processorCycles < end:
             now = mpu.processorCycles
             if self.dirty:
@@ -501,40 +479,23 @@ class _Machine:
                 self.take(nmi)
                 nmi = False
                 continue
-            pc, sp = mpu.pc, mpu.sp
             inside = len(handlers) > 1
-            if inside and bus.bits & mm.HIRAM and pc >= mm.KERNAL_BASE:
-                mpu.pc = self.base + _IRQRET + _kernal_exit(pc)
+            if inside and bus.bits & mm.HIRAM and mpu.pc >= mm.KERNAL_BASE:
+                mpu.pc = self.base + _IRQRET + _kernal_exit(mpu.pc)
                 continue
-            asserted = irq and bool(mpu.p & _I_FLAG)
-            key = zlib.crc32(ram), asserted
-            if key not in watched:
-                watched = {key: self._watch(asserted)}
-            stops = watched[key]
-            limit = min(end, due[0] if due else end) - now - 1
-            if pc not in stops:
-                mpu.stop, self.brk = False, False
-                mpu.run_until(
-                    max_cycles=limit,
-                    stop_pcs=stops,
-                    stop_ranges=(
-                        _KERNAL_RANGE if inside and bus.bits & mm.HIRAM else None
-                    ),
-                    sp_above=self.frames[-1] if inside else None,
-                )
-                if self.brk:
-                    handlers.append(handlers[-1])
-                    self.frames.append(mpu.sp)
-                self._unwind()
-                continue
-            else:
-                brk = ram[pc] == _BRK
-                mpu.step()
-                if brk:
-                    handlers.append(handlers[-1])
-                    self.frames.append(mpu.sp)
-                self._unwind()
-            if mpu.pc == pc and mpu.sp == sp:
+            mpu.stop, self.brk = False, False
+            reason = mpu.run_until(
+                max_cycles=min(end, due[0] if due else end) - now - 1,
+                stop_ranges=_KERNAL_RANGE if inside and bus.bits & mm.HIRAM else None,
+                sp_above=self.frames[-1] if inside else None,
+                stop_on_idle=True,
+                stop_on_irq=irq,
+            )
+            if self.brk:
+                handlers.append(handlers[-1])
+                self.frames.append(mpu.sp)
+            self._unwind()
+            if reason == "idle":
                 end = min(end, mpu.processorCycles + frames * self.frame)
                 if due is None:
                     break

@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import numpy as np
 import z3
 from deity_informant import lift
 
@@ -466,6 +467,44 @@ def _memory(model, mem0) -> bytes:
     return bytes(_byte(model, z3.Select(mem0, a)) for a in range(0x10000))
 
 
+def _cpu(memory: bytearray):
+    """A jennings MPU over ``memory``: the native core sharing the buffer, else the Python engine."""
+    from jennings import memory as jmem  # pylint: disable=import-outside-toplevel
+    from jennings.devices.mpu6502 import MPU  # pylint: disable=import-outside-toplevel
+
+    if jmem.NATIVE:
+        return MPU(memory=jmem.NativeMemory(memory, share=True))
+    return MPU(memory=memory)
+
+
+def _run_routine(mpu, memory: bytearray) -> None:
+    """Step ``mpu`` until the ``RTS`` that closes the routine (at JSR/RTS depth 0, not
+    executed) or :data:`BUDGET` instructions; a native MPU runs between the JSR/RTS."""
+    if not mpu.native:
+        depth = 0
+        for _ in range(BUDGET):
+            opcode = memory[mpu.pc]
+            if opcode == 0x60 and depth == 0:
+                break
+            depth += {0x20: 1, 0x60: -1}.get(opcode, 0)
+            mpu.step()
+        return
+    depth, first = 0, mpu.steps
+    while (need := BUDGET - (mpu.steps - first)) > 0:
+        ops = np.isin(np.frombuffer(memory, np.uint8), (0x20, 0x60))
+        # at least two cycles an instruction: no more than ``need`` run
+        reason = mpu.run_until(
+            max_cycles=2 * need - 2, stop_pcs=np.flatnonzero(ops).tolist()
+        )
+        if reason != "pc":
+            continue
+        opcode = memory[mpu.pc]
+        if opcode == 0x60 and depth == 0:
+            break
+        depth += 1 if opcode == 0x20 else -1
+        mpu.step()
+
+
 def replay(
     spec: Spec,
     binding: dict,
@@ -477,8 +516,6 @@ def replay(
     """The addresses (bar the stack page) where the spec routine and the jennings run
     of the code at ``pc`` leave ``memory`` differently: a concrete counterexample check.
     """
-    from jennings.devices.mpu6502 import MPU  # pylint: disable=import-outside-toplevel
-
     from .pyexec import run  # pylint: disable=import-outside-toplevel
 
     regs = {k.lower(): v for k, v in (registers or {}).items()}
@@ -486,16 +523,11 @@ def replay(
         elaborate(spec, binding, routine=routine), bytearray(memory), registers=regs
     )
     cpu_mem = bytearray(memory)
-    mpu = MPU(memory=cpu_mem)
+    mpu = _cpu(cpu_mem)
     for name, value in (registers or {}).items():
         setattr(mpu, name.lower(), value)
-    mpu.sp, mpu.pc, depth = 0xFF, pc, 0
-    for _ in range(BUDGET):
-        opcode = cpu_mem[mpu.pc]
-        if opcode == 0x60 and depth == 0:
-            break
-        depth += {0x20: 1, 0x60: -1}.get(opcode, 0)
-        mpu.step()
+    mpu.sp, mpu.pc = 0xFF, pc
+    _run_routine(mpu, cpu_mem)
     return [a for a in range(0x10000) if spec_mem[a] != cpu_mem[a] and a not in STACK]
 
 
