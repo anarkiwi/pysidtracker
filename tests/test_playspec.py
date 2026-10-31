@@ -1210,3 +1210,35 @@ def test_spec_player_clock_follows_the_tune_header(monkeypatch):
 
     assert hz(pal) == PAL_CLOCK_HZ and hz(ntsc) == NTSC_CLOCK_HZ
     assert hz(ntsc, clock="PAL") == PAL_CLOCK_HZ
+
+
+_MEM_LOOP = """
+count: LDX #0
+loop:  LDA $3000,X
+       BEQ done
+       INX
+       BNE loop
+done:  STX $1000
+       RTS
+"""
+_MEM_LOOP_SPEC = """
+spec t;
+layout { out: addr; }
+cell out: u8 @ L.out;
+machine m {
+  proc count() { out := 0; }
+  step { count(); }
+}
+schedule { m; }
+"""
+
+
+def test_translation_validation_assume_bounds_memory_driven_loop():
+    code, _ = assemble(_MEM_LOOP, 0x2000)
+    image = bytearray(0x10000)
+    image[0x2000 : 0x2000 + len(code)] = code
+    args = (parse(_MEM_LOOP_SPEC), {"out": 0x1000}, "m.count", bytes(image), 0x2000)
+    result = validate(
+        *args, budget=20, assume=[lambda mem, regs: z3.Select(mem, 0x3000) == 0]
+    )
+    assert result.proven, result.counterexample
