@@ -422,7 +422,7 @@ def cell_var(addr: int) -> V:
 
 def frame_local(body, keep: np.ndarray) -> List[int]:
     """Constant-address cells ``body`` stores that no call reads before storing, outside
-    ``keep`` (a 64 KiB mask) and any bounded non-constant access."""
+    ``keep`` (a mask over the address space) and any bounded non-constant access."""
     livein = keep.copy()
     stored = np.zeros(0x10000, bool)
 
@@ -1056,16 +1056,20 @@ def compare(make, order, frames: int, base: int = SID, **options) -> Tuple:
     """``(verdict, results)``: ``verdict`` None if the player ``make(transform)`` builds
     plays the same grid rescheduled to ``order`` as without (``make(None)``), each call
     writing exactly the original's kept writes in order, else where they first differ;
-    ``results`` the :class:`Reordered` of each program. ``options`` go to :func:`reorder`.
+    ``results`` the :class:`Reordered` of each program. ``options`` go to :func:`reorder`;
+    where the tune's own 6502 code runs around the spec, no cell is promoted.
     """
     slots = parse_order(order) if isinstance(order, str) else tuple(order)
     results: List[Reordered] = []
+    player = make(None)
+    grid, writes = played(player, frames, base)
+    if player.entry != player._play_addr:  # pylint: disable=protected-access
+        options.setdefault("observed", [(0, 0xFFFF)])
 
     def transform(program: Program, memory: bytes) -> Program:
         results.append(reorder(program, slots, base=base, memory=memory, **options))
         return results[-1].program
 
-    grid, writes = played(make(None), frames, base)
     new_grid, new_writes = played(make(transform), frames, base)
     for frame, (old, new) in enumerate(zip(writes, new_writes)):
         if kept(old, slots) != new:
