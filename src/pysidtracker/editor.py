@@ -1,6 +1,6 @@
 """Run a tracker editor's own code on its decrunched RAM as a fidelity oracle.
 
-:func:`run_editor` boots 64 KiB of editor RAM on :func:`~pysidtracker.oracle.boot_flat`,
+:func:`run_editor` boots the editor's whole address space on :func:`~pysidtracker.oracle.boot_flat`,
 places a payload as the KERNAL ``LOAD`` leaves it and runs editor entry points;
 :func:`editor_replay` wraps the editor's live player over the result as a PSID.
 """
@@ -27,7 +27,7 @@ FLAGS_6581 = 0x10
 def ram_image(
     ram: bytes, init: int, play: Optional[int] = None, flags: int = FLAGS_6581
 ) -> SidImage:
-    """The whole 64 KiB ``ram`` as a flat :class:`SidImage` loaded at ``$0000``.
+    """The whole ``ram`` address space as a flat :class:`SidImage` loaded at ``$0000``.
 
     Its header carries ``init``, ``play`` (default ``init``) and ``flags``, so
     :func:`~pysidtracker.oracle.boot_flat` runs ``init`` over the RAM as it is.

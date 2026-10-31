@@ -462,7 +462,7 @@ def _truth(term):
 
 
 def _memory(model, mem0) -> bytes:
-    """The counterexample's initial 64 KiB as the model assigns it."""
+    """The counterexample's initial memory as the model assigns it."""
     return bytes(_byte(model, z3.Select(mem0, a)) for a in range(0x10000))
 
 

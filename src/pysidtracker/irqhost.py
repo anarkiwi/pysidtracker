@@ -12,6 +12,7 @@ from collections import Counter
 from typing import Callable, Dict, Iterator, List, Optional, Tuple, Type, Union
 
 from vagrant_moses import memmap as mm
+from vagrant_moses import machine as vagrant_machine
 from vagrant_moses.machine import SOURCES, Machine, boot_cycle
 from vagrant_moses.roms import KERNAL_VECTORS
 
@@ -139,11 +140,13 @@ class _Sid:
     logs it; the chip's queue is flushed once it holds ``0xFFFF`` writes.
     """
 
-    __slots__ = ("rows", "chip", "reads", "last")
+    __slots__ = ("rows", "chip", "reads", "last", "queue", "push")
 
     def __init__(self, rows: List[tuple], chip: int, model: str):
         self.rows, self.chip = rows, chip
         self.reads, self.last = SidReads(model), bytearray(0x20)
+        self.queue = self.reads.queue
+        self.push = self.queue.append
 
     def read(self, cycle: int, register: int) -> int:
         """The chip's ``register`` at ``cycle``."""
@@ -151,11 +154,12 @@ class _Sid:
 
     def write(self, cycle: int, register: int, value: int) -> None:
         """Log a changed value and queue the write to the chip."""
-        if value != self.last[register]:
+        last = self.last
+        if value != last[register]:
             self.rows.append((cycle, self.chip, register, value))
-            self.last[register] = value
-        self.reads.write(cycle, register, value)
-        if self.reads.pending() > 0xFFFF:
+            last[register] = value
+        self.push(cycle << 16 | register << 8 | value)
+        if len(self.queue) > 0xFFFF:
             self.reads.flush(cycle)
 
 
@@ -169,9 +173,12 @@ class _Anywhere:
 _STALE = _Anywhere()
 
 
-class _TrapMachine(Machine):
-    """A :class:`~vagrant_moses.machine.Machine` that hands a fetch at a watched
-    address to ``trap(machine)`` before decoding it.
+class _PyTrapMachine(Machine):
+    """The pure-Python :class:`~vagrant_moses.machine.Machine` with a trap: a fetch at
+    a watched address goes to ``trap(machine)`` before decoding it.
+
+    The native machine does this itself (``set_trap``/``arm_at``/``on_port_write``);
+    this is the same contract for the Python backend.
 
     ``trap`` returns True once it has run the call (it has set ``mpu.pc``), and the
     fetch is made again at the new ``pc``. Nothing is watched until the CPU reaches
@@ -180,7 +187,7 @@ class _TrapMachine(Machine):
     """
 
     def __init__(self, *args, trap: Callable[[Machine], bool], **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs, backend="python")
         self.trap, self.idle, self.armed = trap, None, False
         self.watch = frozenset()
 
@@ -195,6 +202,11 @@ class _TrapMachine(Machine):
         while self.mpu.pc in self.watch and self.trap(self):
             pass
         super()._decode()
+
+
+def _stale(machine) -> None:
+    """A CPU port write: the trap's watch set is for the old banking."""
+    machine.watch = machine.WATCH_ALL
 
 
 def _boot(
@@ -283,6 +295,7 @@ class InterruptHost:
         cia_new: bool = False,
         poweron=None,
         trap: Optional[Callable[[Machine], bool]] = None,
+        backend: Optional[str] = None,
     ):
         image = data if isinstance(data, SidImage) else SidImage.from_bytes(bytes(data))
         header = image.header
@@ -302,14 +315,19 @@ class InterruptHost:
         sids.update(
             {a & 0xFFE0: _Sid(self.raw, i, models[i]) for i, a in enumerate(extra, 1)}
         )
-        if trap is None:
-            self.machine = Machine(ntsc, sids, cia_new, self._event)
+        native = backend != "python" and vagrant_machine.NATIVE
+        if trap is None or native:
+            self.machine = Machine(ntsc, sids, cia_new, self._event, backend=backend)
         else:
-            self.machine = _TrapMachine(ntsc, sids, cia_new, self._event, trap=trap)
+            self.machine = _PyTrapMachine(ntsc, sids, cia_new, self._event, trap=trap)
         if poweron is None and header.is_rsid:
             poweron = poweron_writes() or KERNAL_VECTORS
         self.start, idle = _boot(self.machine, image, subtune, tune_ntsc, poweron)
-        if trap is not None:
+        if trap is not None and native:
+            self.machine.set_trap(trap, self.machine.WATCH_ALL)
+            self.machine.arm_at(idle)
+            self.machine.on_port_write(_stale)
+        elif trap is not None:
             self.machine.idle = idle
         video = mm.video(ntsc)
         self.clock_hz, self.frame_cycles = video.clock_hz, video.cycles_per_frame
@@ -453,8 +471,10 @@ class InterruptPlayer(MemPlayer):
         *,
         clock: Optional[str] = None,
         trap: Optional[Callable[[Machine], bool]] = None,
+        backend: Optional[str] = None,
     ):
         self._data, self._clock, self._trap = data, clock, trap
+        self._backend = backend
         self.host: Optional[InterruptHost] = None
         self._iter: Optional[Iterator[List[int]]] = None
         self._row = [0] * reg.SID_REG_COUNT
@@ -463,7 +483,11 @@ class InterruptPlayer(MemPlayer):
 
     def _init(self, subtune: int) -> None:
         self.host = InterruptHost(
-            self._data, subtune, clock=self._clock, trap=self._trap
+            self._data,
+            subtune,
+            clock=self._clock,
+            trap=self._trap,
+            backend=self._backend,
         )
 
     def _frame(self) -> None:

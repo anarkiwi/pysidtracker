@@ -25,7 +25,7 @@ from .detect import (
     _count_written_outside,
     run_init,
 )
-from .emu import run_to_rts, wire_mpu
+from .emu import run_to_rts, sync_ram, wire_mpu
 from .errors import KernalHostError, SidError, SidParseError
 from .facets import Entry, Facet, inferred
 from .image import MEM_SIZE, SidImage
@@ -202,10 +202,11 @@ class _Stages:
         if not header.play_address:
             raise SidParseError("no play address to run (IRQ-driven tune)")
         play = header.play_address
-        mpu, mem = wire_mpu(img.mem, sid_model=sid_model_for_flags(header.flags))
         img.mem[1] = psid_init_bank(play)
+        mpu, mem = wire_mpu(img.mem, sid_model=sid_model_for_flags(header.flags))
         for _ in range(self._frames):
             run_to_rts(mpu, mem, play, 0, 1_000_000)
+        sync_ram(mpu)
         return img
 
     def get(self, stage: str) -> SidImage:

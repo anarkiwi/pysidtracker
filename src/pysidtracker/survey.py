@@ -21,7 +21,7 @@ import re
 import sys
 import tempfile
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -129,8 +129,20 @@ def songlengths(hvsc_root):
     return out
 
 
+THREADS = {"on": False}
+THREADS_HELP = "run on a thread pool in this process, not worker processes"
+
+
 def pool(jobs, initializer=None, initargs=()):
-    """A spawn-context process pool whose workers start with one BLAS thread."""
+    """A spawn-context process pool whose workers start with one BLAS thread.
+
+    With ``THREADS["on"]`` (the ``--threads`` option) a thread pool in this process
+    instead, its initializer run once: for GIL-free work, and read-only worker state.
+    """
+    if THREADS["on"]:
+        if initializer is not None:
+            initializer(*initargs)
+        return ThreadPoolExecutor(jobs)
     for var in THREAD_VARS:
         os.environ.setdefault(var, "1")
     return ProcessPoolExecutor(
@@ -1177,6 +1189,7 @@ def main(argv=None):
     p.add_argument("--out", required=True)
     p.add_argument("--player", help="case-insensitive regex on the SIDId player name")
     p.add_argument("--jobs", type=int, default=os.cpu_count())
+    p.add_argument("--threads", action="store_true", help=THREADS_HELP)
     for name, fn in (
         ("run", run),
         ("diff", diff),
@@ -1290,6 +1303,7 @@ def main(argv=None):
     p = sub.add_parser("triage", help=triage.__doc__)
     p.add_argument("work")
     p.add_argument("--jobs", type=int, default=os.cpu_count())
+    p.add_argument("--threads", action="store_true", help=THREADS_HELP)
     p.add_argument("--top", type=int, default=15)
     for name in ("leads", "report", "triage", "compare"):
         sub.choices[name].add_argument(
@@ -1303,6 +1317,7 @@ def main(argv=None):
     if a.cmd in ("run", "diff", "file", "scope") and not (a.render or a.format):
         ap.error(f"{a.cmd} needs a renderer or --format")
     render = renderer(getattr(a, "render", None), getattr(a, "format", None))
+    THREADS["on"] = getattr(a, "threads", False)
     if a.cmd == "find":
         out = find(a.hvsc, a.out, a.sidid_cfg, a.player, a.jobs)
     elif a.cmd == "run":

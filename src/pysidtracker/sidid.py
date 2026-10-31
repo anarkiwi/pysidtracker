@@ -94,16 +94,23 @@ def scan(paths, jobs, cfg=None, multi=False):
 
 def main(argv=None):
     """``python -m pysidtracker.sidid PATH...``: ``path<TAB>player`` per tune."""
+    from .survey import (  # pylint: disable=import-outside-toplevel
+        THREADS,
+        THREADS_HELP,
+    )
+
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0])
     ap.add_argument("paths", nargs="+", help=".sid files or directories")
     ap.add_argument("--cfg", help="sidid.cfg (default: the bundled one)")
     ap.add_argument("--player", help="only players matching this regex")
     ap.add_argument("-m", "--multi", action="store_true", help="every match")
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
+    ap.add_argument("--threads", action="store_true", help=THREADS_HELP)
     a = ap.parse_args(argv)
     # pylint: disable-next=import-outside-toplevel
     from tqdm import tqdm
 
+    THREADS["on"] = a.threads
     paths = list(sid_paths(a.paths))
     want = re.compile(a.player or "", re.I)
     tally = Counter()

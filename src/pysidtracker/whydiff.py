@@ -32,7 +32,7 @@ from vagrant_moses import memmap as mm
 
 from . import gridcmp
 from . import registers as reg
-from .emu import observe_data_access, run_to_rts
+from .emu import observe_data_access, run_to_rts, unobserve_data_access
 from .errors import SidParseError
 from .image import SidImage
 from .oracle import boot_flat, register_grid
@@ -819,7 +819,7 @@ def cpu_history(
     writes: List[Tuple[int, int]] = []
     observe_data_access(
         mpu,
-        on_read=lambda addr: reads.append((addr, mem[addr] & 0xFF)),
+        on_read=lambda addr: reads.append((addr, subject[addr] & 0xFF)),
         on_write=lambda addr, value: writes.append((addr, value)),
     )
     steps: List[CpuStep] = []
@@ -855,7 +855,7 @@ def cpu_history(
         )
         reads.clear()
         writes.clear()
-    mpu._vm._on_read = mpu._vm._on_write = None  # pylint: disable=protected-access
+    unobserve_data_access(mpu)
     return steps
 
 

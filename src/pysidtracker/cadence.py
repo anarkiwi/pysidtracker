@@ -8,15 +8,18 @@ taken as the C64 would; see ``docs/cadence.md`` for the driver and the model.
 from __future__ import annotations
 
 import enum
+import zlib
 from collections import Counter
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
+
+import numpy as np
 
 from vagrant_moses import memmap as mm
 from vagrant_moses.c64 import dispatch_vector
 
 from . import registers as reg
-from .emu import access_cycle, wire_mpu
+from .emu import access_cycle, live_ram, wire_mpu
 from .errors import EmulatorUnavailable, SidParseError
 from .header import RSID_MAGIC
 from .image import SidImage
@@ -31,6 +34,11 @@ _RET, _EXCEPTION = 0xA0, 0xC4
 _KERNAL_ACK, _KERNAL_NMI = 0xEA7E, 0xFE47
 _BRK, _RTI, _I_FLAG = 0x00, 0x40, 0x04
 _VIC = (-1, 0)
+# Opcodes that can end a masked IRQ's wait (CLI, PLP, RTI) or spin on one address.
+_UNMASK = (0x58, 0x28, 0x40)
+_JMP, _JMP_IND = 0x4C, 0x6C
+_SELF_BRANCH = (0x10, 0x30, 0x50, 0x70, 0x90, 0xB0, 0xD0, 0xF0)
+_KERNAL_RANGE = ((mm.KERNAL_BASE, 0x10000),)
 _RMW = frozenset(
     (0x0E, 0x1E, 0x2E, 0x3E, 0x4E, 0x5E, 0x6E, 0x7E, 0xCE, 0xDE, 0xEE, 0xFE)
 )
@@ -198,12 +206,22 @@ class _Cia:
 class _Machine:
     """A tune on jennings in psiddrv's environment, raising and taking interrupts."""
 
-    def __init__(self, image: SidImage, ntsc: bool, max_cycles: int):
+    def __init__(
+        self,
+        image: SidImage,
+        ntsc: bool,
+        max_cycles: int,
+        native: Optional[bool] = None,
+    ):
         header = image.header
-        self.ram = bytearray(image.mem)
+        ram = bytearray(image.mem)
         self.mpu, self.mem = wire_mpu(
-            self.ram, sid_model=reg.sid_model_for_flags(header.flags), ntsc=ntsc
+            ram,
+            sid_model=reg.sid_model_for_flags(header.flags),
+            ntsc=ntsc,
+            native=native,
         )
+        self.ram = live_ram(self.mpu, ram)
         self.bus = self.mem._subject  # pylint: disable=protected-access
         video = mm.video(ntsc)
         self.frame, self.line = video.cycles_per_frame, video.cycles_per_line
@@ -238,6 +256,10 @@ class _Machine:
             ],
             self._read,
         )
+        self.brk = False
+        if self.mpu.native:
+            self.mem.subscribe_to_write((mm.CPU_DDR, mm.CPU_PORT), self._rebank)
+            self.mem.subscribe_to_read((mm.CPU_IRQ_VECTOR,), self._vector)
         self.passthrough = (mm.VIC_CONTROL_1, mm.VIC_RASTER)
         self.passthrough += (mm.SID_BASE + 0x1B, mm.SID_BASE + 0x1C)
         self.span = slice(image.load, image.end)
@@ -248,7 +270,7 @@ class _Machine:
             self.handlers[-1][2] |= 1 << (addr & 0x1F)
 
     def _write(self, addr, value):
-        self.dirty = True
+        self.dirty = self.mpu.stop = True
         if not self.bus.io:
             return
         if addr == mm.VIC_IRQ_ENABLE:
@@ -262,6 +284,15 @@ class _Machine:
         elif mm.CIA1_BASE <= addr <= mm.CIA2_LAST:
             cia = self.cias[addr >= mm.CIA2_BASE]
             cia.write(addr & 0xF, value, access_cycle(self.mpu))
+
+    def _rebank(self, _addr, _value):
+        """A ``$00``/``$01`` write: the KERNAL window may have moved."""
+        self.mpu.stop = True
+
+    def _vector(self, _addr):
+        """The executing instruction read the IRQ vector: a BRK, if it is one."""
+        if self.ram[self.mpu.pc] == _BRK:
+            self.brk = self.mpu.stop = True
 
     def _rmw(self) -> int:
         """1 if the executing instruction is a read-modify-write, whose dummy write
@@ -284,7 +315,7 @@ class _Machine:
             return cia.cr[offset - 0xE]
         if offset != 0xD:
             return cia.counter(offset - 4 >> 1, now) >> 8 * (offset & 1) & 0xFF
-        self.dirty = True
+        self.dirty = self.mpu.stop = True
         return cia.read_icr(now)
 
     def _next_match(self, now: int) -> int:
@@ -298,7 +329,7 @@ class _Machine:
         initiomap, playiomap = _iomap(header, init), _iomap(header, header.play_address)
         clock_bits = (header.flags >> 2) & 3
         tune_ntsc = ntsc if clock_bits in (0, 3) else clock_bits == 2
-        tune = ram[self.span]
+        tune = bytes(ram[self.span])
         ram[0:0x400] = bytes(0x400)
         ram[0x02A6] = 0 if ntsc else 1
         ram[mm.RAM_IRQ_VECTOR_LO : mm.RAM_NMI_VECTOR_HI + 1] = (
@@ -417,7 +448,101 @@ class _Machine:
             self.opaque.add(self.handlers[-1][1])
 
     def execute(self, frames: int) -> int:
-        """Run until ``frames`` frames after init first idles; return the last cycle."""
+        """Run until ``frames`` frames after init first idles; return the last cycle.
+
+        A native MPU runs to the next event (:meth:`execute_events`).
+        """
+        if self.mpu.native:
+            return self.execute_events(frames)
+        return self.execute_stepped(frames)
+
+    def _watch(self, masked: bool) -> frozenset:
+        """Addresses the native run stops before: possible spins, and while an
+        asserted IRQ is masked, the instructions that can unmask it."""
+        ram = np.frombuffer(self.ram, np.uint8)
+        nxt, last = np.roll(ram, -1).astype(np.uint16), np.roll(ram, -2)
+        here = np.arange(0x10000, dtype=np.uint16)
+        spin = (ram == _JMP) & (nxt | last.astype(np.uint16) << 8 == here)
+        spin |= np.isin(ram, _SELF_BRANCH) & (nxt == 0xFE)
+        spin |= ram == _JMP_IND
+        if masked:
+            spin |= np.isin(ram, _UNMASK)
+        return frozenset(np.flatnonzero(spin).tolist())
+
+    def _unwind(self) -> None:
+        """Leave the handlers whose frames the stack pointer has climbed past."""
+        mpu, handlers, frames = self.mpu, self.handlers, self.frames
+        while len(handlers) > 1 and mpu.sp > frames[-1]:
+            handlers.pop()
+            frames.pop()
+
+    def execute_events(self, frames: int) -> int:
+        """:meth:`execute_stepped` in native runs between the events that need Python.
+
+        An event is a source falling due, a callback marking the interrupt state
+        ``dirty`` (or a ``$00``/``$01`` write, or a BRK), the stack climbing out of
+        a handler's frame, or the next instruction being one the reference loop
+        examines (a possible spin, a possible unmask of an asserted IRQ, the ROM-less
+        KERNAL in a handler): that one instruction is stepped from Python.
+        """
+        mpu, ram, bus = self.mpu, self.ram, self.bus
+        end, nmi, due, irq = self.max_cycles, False, None, False
+        handlers = self.handlers
+        watched = {}
+        while mpu.processorCycles < end:
+            now = mpu.processorCycles
+            if self.dirty:
+                due, irq, self.dirty = self.pending(now), self.irq_line(), False
+            if due and now >= due[0]:
+                nmi |= self.raise_(*due) and due[1][0] == 1
+                due, irq = self.pending(now + 1), self.irq_line()
+                continue
+            if nmi or irq and not mpu.p & _I_FLAG:
+                self.take(nmi)
+                nmi = False
+                continue
+            pc, sp = mpu.pc, mpu.sp
+            inside = len(handlers) > 1
+            if inside and bus.bits & mm.HIRAM and pc >= mm.KERNAL_BASE:
+                mpu.pc = self.base + _IRQRET + _kernal_exit(pc)
+                continue
+            asserted = irq and bool(mpu.p & _I_FLAG)
+            key = zlib.crc32(ram), asserted
+            if key not in watched:
+                watched = {key: self._watch(asserted)}
+            stops = watched[key]
+            limit = min(end, due[0] if due else end) - now - 1
+            if pc not in stops:
+                mpu.stop, self.brk = False, False
+                mpu.run_until(
+                    max_cycles=limit,
+                    stop_pcs=stops,
+                    stop_ranges=(
+                        _KERNAL_RANGE if inside and bus.bits & mm.HIRAM else None
+                    ),
+                    sp_above=self.frames[-1] if inside else None,
+                )
+                if self.brk:
+                    handlers.append(handlers[-1])
+                    self.frames.append(mpu.sp)
+                self._unwind()
+                continue
+            else:
+                brk = ram[pc] == _BRK
+                mpu.step()
+                if brk:
+                    handlers.append(handlers[-1])
+                    self.frames.append(mpu.sp)
+                self._unwind()
+            if mpu.pc == pc and mpu.sp == sp:
+                end = min(end, mpu.processorCycles + frames * self.frame)
+                if due is None:
+                    break
+                mpu.processorCycles = max(mpu.processorCycles, due[0])
+        return mpu.processorCycles if end == self.max_cycles else end
+
+    def execute_stepped(self, frames: int) -> int:
+        """:meth:`execute`, one instruction at a time (the reference loop)."""
         mpu, ram, bus = self.mpu, self.ram, self.bus
         end, nmi, due = self.max_cycles, False, None
         handlers = self.handlers

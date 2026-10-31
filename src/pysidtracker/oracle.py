@@ -49,6 +49,7 @@ from vagrant_moses import memmap as mm
 from . import registers as reg
 from .cadence import cadence_from_latch, playroutine_cadence
 from .emu import (
+    live_ram,
     observe_data_access,
     run_to_rts,
     run_to_rts_until,
@@ -130,6 +131,7 @@ def boot_flat(
     mpu, mem = wire_mpu(
         subject, illegal_opcodes, reg.sid_model_for_flags(image.header.flags)
     )
+    subject = live_ram(mpu, subject)
     if setup is not None:
         setup(mpu, subject)
     (init_run or run_to_rts)(mpu, mem, init, subtune, max_cycles)
@@ -332,6 +334,7 @@ class EmuPlayer(MemPlayer):
         # The driver banks the init's ROM space before calling it (KERNAL/BASIC in).
         self._mem[1] = psid_init_bank(self._init_addr)
         self._mpu, self._obs = wire_mpu(self._mem, self._illegal, self._sid_model)
+        self._mem = live_ram(self._mpu, self._mem)
         run_to_rts(self._mpu, self._obs, self._init_addr, subtune, self._max_cycles)
         set_iomap(self._mpu, psid_play_bank(self._play_addr))
         self._due = self._mpu.processorCycles

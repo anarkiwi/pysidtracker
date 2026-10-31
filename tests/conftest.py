@@ -33,3 +33,15 @@ def songlengths(request, tmp_path_factory, monkeypatch):
     lengths = Songlengths(tmp_path_factory.mktemp("hvsc"))
     monkeypatch.setenv("HVSC", str(lengths.path.parent.parent))
     return lengths
+
+
+@pytest.fixture(autouse=True, params=["native", "python"])
+def backend(request, monkeypatch):
+    """Run every test on jennings' native core and on its pure-Python engine."""
+    memory = pytest.importorskip("jennings.memory")
+    if request.param == "native" and not memory.NATIVE:
+        pytest.skip("jennings was installed without its native core")
+    monkeypatch.setattr(memory, "NATIVE", request.param == "native")
+    machine = pytest.importorskip("vagrant_moses.machine")
+    monkeypatch.setattr(machine, "NATIVE", machine.NATIVE and request.param == "native")
+    return request.param

@@ -45,7 +45,7 @@ BIND = {"a": 0x1000, "b": 0x1100, "c": 0x1200, "d": 0x00FB, "f": 1, "n": 3, "l":
 
 
 def mem64(**cells):
-    """A zeroed 64 KiB memory with ``cells`` (``0x1000=...`` style keys ``m1000``)."""
+    """A zeroed memory with ``cells`` (``0x1000=...`` style keys ``m1000``)."""
     mem = bytearray(0x10000)
     for key, value in cells.items():
         addr = int(key[1:], 16)

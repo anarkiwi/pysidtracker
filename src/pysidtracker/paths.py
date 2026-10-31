@@ -398,7 +398,7 @@ def cpu_paths(
     """
     from tqdm import tqdm
 
-    from .emu import observe_data_access, run_to_rts
+    from .emu import observe_data_access, trace_pcs, unobserve_data_access
 
     subject, mpu, mem, play, code, entries = _booted(data, subtune, max_cycles)
     pcs: List[int] = []
@@ -411,30 +411,31 @@ def cpu_paths(
     mask = np.full(_NREG, 0xFF, np.int16)
     mask[list(reg.PW_HI_REGS)] = 0x0F
 
+    index = {"base": 0}
+
+    def step_index():
+        if mpu.native:
+            return mpu.steps - index["base"]
+        return len(pcs) - 1
+
     def on_write(addr, _value):
         if _SID <= addr < _SID + _NREG:
-            wsteps.append(len(pcs) - 1)
+            wsteps.append(step_index())
             waddrs.append(addr - _SID)
         elif code.lo <= addr < code.hi:
             code.smc.add(addr)
 
     observe_data_access(mpu, on_read=reads.append, on_write=on_write)
-    step = mpu.step
-
-    def traced(append=pcs.append):
-        append(mpu.pc)
-        step()
-
-    mpu.step = traced
     try:
         for f in tqdm(range(nframes), unit="frame", disable=not progress):
-            run_to_rts(mpu, mem, play, 0, max_cycles)
+            if mpu.native:
+                index["base"] = mpu.steps - len(pcs)
+            trace_pcs(mpu, mem, play, 0, max_cycles, pcs)
             pc_bounds.append(len(pcs))
             read_bounds.append(len(reads))
             grid[f] = view[_SID : _SID + _NREG] & mask
     finally:
-        mpu.step = step
-        mpu._vm._on_read = mpu._vm._on_write = None  # pylint: disable=protected-access
+        unobserve_data_access(mpu)
 
     p = np.asarray(pcs, np.int64)
     frame_of = np.repeat(np.arange(nframes), np.diff(pc_bounds))
