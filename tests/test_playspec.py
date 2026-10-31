@@ -786,6 +786,48 @@ def test_spec_player_traps_entries_under_the_interrupt_host(container, monkeypat
     assert more.snapshot()[0] == more.regs[0]
 
 
+def _spinning_player(backend_native, monkeypatch):
+    """A play-0 tune whose init never returns; its IRQ calls the entry."""
+    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
+    monkeypatch.setattr(irqhost.vagrant_machine, "NATIVE", backend_native)
+    src = HOSTED.replace("  CLI\n  RTS", "  CLI\nspin: JMP spin")
+    code, labels = assemble(src, 0x1000)
+    data = build_psid(code, 0x1000, init=labels["init"], play=0, magic=b"RSID")
+    player = SpecPlayer(
+        parse(PLAY_SPEC),
+        code,
+        0x1000,
+        labels["init"],
+        0,
+        bind=lambda v, e: {"freq": 0x1300, "sid": 0xD400},
+        entries=lambda view: {labels["play"]},
+        psid=False,
+        sid=data,
+    )
+    calls = []
+    run = player._run
+    player._run = lambda entry: calls.append(entry) or run(entry)
+    return player, calls, labels
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_spec_runs_when_init_never_returns(native, monkeypatch):
+    player, calls, labels = _spinning_player(native, monkeypatch)
+    machine = player._hosted.host.machine
+    assert isinstance(machine, irqhost._PyTrapMachine) != native
+    grid = player.render_grid(whole_song(30))
+    assert set(calls) == {labels["play"]} and len(calls) >= 25
+    assert len({row[0] for row in grid}) > 20
+
+
+def test_spec_host_backends_agree(monkeypatch):
+    grids = []
+    for native in (False, True):
+        player, calls, _ = _spinning_player(native, monkeypatch)
+        grids.append((player.render_grid(whole_song(30)), len(calls), player._hosted.host.cycle))
+    assert grids[0] == grids[1]
+
+
 def test_hosted_spec_replaces_the_trapped_entry(monkeypatch):
     monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
     _, labels, code = _hosted_tune()
