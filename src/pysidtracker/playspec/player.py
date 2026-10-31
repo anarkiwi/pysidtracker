@@ -4,19 +4,23 @@
 call runs the spec directly at the modelled entry, else the 6502 play routine runs
 with every call into a modelled entry trapped and run as the spec. A tune with play
 address 0 boots on an :class:`~pysidtracker.irqhost.InterruptPlayer`, its interrupts
-live, with each call its handlers make into a modelled entry run as the spec.
+live, with each call its handlers make into a modelled entry run as the spec. Once
+the interrupts have been taken ``MIN_RAISES`` times (the raises ``play_source`` needs
+to call a source the play source) without any call reaching a modelled entry, the tune
+is playing only its own code and ``SidParseError`` is raised.
 """
 
 from __future__ import annotations
 
 import struct
+from collections import Counter
 from typing import Callable, Collection, Dict, List, Optional, Tuple, Union
 
 from ..emu import live_ram, run_to_rts, run_until, set_iomap, wire_mpu
 from ..errors import SidParseError
 from ..image import SidImage
 from ..irqhost import InterruptPlayer
-from ..oracle import PAL_FLAG, EmuPlayer
+from ..oracle import ENTRY_SOURCES, PAL_FLAG, EmuPlayer
 from ..poweron import psid_init_bank, psid_play_bank
 from .ir import Program
 from .lower import elaborate
@@ -25,6 +29,7 @@ from .syntax import Spec
 from .validate import StreamValidator
 
 MAX_CYCLES = 8_000_000
+MIN_RAISES = 3
 _FLAGS = {"c": 0x01, "z": 0x02, "i": 0x04, "d": 0x08, "v": 0x40, "n": 0x80}
 Binder = Callable[[bytes, int], Union[dict, Tuple[Spec, dict]]]
 _HEADER = 0x7C
@@ -301,11 +306,28 @@ class SpecPlayer(EmuPlayer):
     def render_grid(self, nframes: int) -> List[List[int]]:
         if self._hosted is None:
             return super().render_grid(nframes)
-        return self._hosted.render_grid(nframes)
+        grid = self._hosted.render_grid(nframes)
+        self._require_entry()
+        return grid
+
+    def _require_entry(self) -> None:
+        """Raise if the hosted tune's interrupts have never reached a modelled entry."""
+        if self.entry is not None:
+            return
+        taken = Counter(
+            r.value
+            for r in self._hosted.host.rows()
+            if r.chip is None and r.value in ENTRY_SOURCES
+        )
+        if max(taken.values(), default=0) >= MIN_RAISES:
+            raise SidParseError(
+                "the interrupts reach no modelled entry: the tune plays only its own code"
+            )
 
     def _frame(self) -> None:
         if self._hosted is not None:
             self._hosted.play_frame()
+            self._require_entry()
         elif self._play_addr == self.entry:
             self._in_call = False
             self._run(self.entry)
