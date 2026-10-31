@@ -824,7 +824,9 @@ def test_spec_host_backends_agree(monkeypatch):
     grids = []
     for native in (False, True):
         player, calls, _ = _spinning_player(native, monkeypatch)
-        grids.append((player.render_grid(whole_song(30)), len(calls), player._hosted.host.cycle))
+        grids.append(
+            (player.render_grid(whole_song(30)), len(calls), player._hosted.host.cycle)
+        )
     assert grids[0] == grids[1]
 
 
