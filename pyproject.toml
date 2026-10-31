@@ -36,10 +36,10 @@ classifiers = [
 # lark: the LALR parsers of tracker byte-stream grammars (bytegrammar) and playspec.
 # z3-solver: playspec model checking and translation validation.
 dependencies = [
-  "jennings>=0.6.1",
+  "jennings>=0.7.0",
   "pydexomizer>=0.1",
   "pyresidfp>=0.17",
-  "vagrant-moses[cpu]>=0.5.0",
+  "vagrant-moses[cpu]>=0.6.0",
   "numpy>=1.23",
   "scipy>=1.10",
   "networkx>=3",

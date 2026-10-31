@@ -32,9 +32,8 @@ reports them. `SidWriteLog` observes SID writes only and reads `mem.last_load`.
 
 ## What still steps from Python
 
-- `cadence._Machine` runs to the next event (`execute_events`); `execute_stepped` is the
-  reference loop. A run shorter than `_SHORT_RUN` cycles, or starting at a watched address
-  (possible self-spin, instruction that can unmask a pending IRQ), is stepped.
+- `cadence._Machine` runs to the next event (`execute_events`, the KERNAL window as a `stop_ranges` entry); `execute_stepped` is the
+  reference loop. A run starting at a watched address (possible self-spin, instruction that can unmask a pending IRQ) is stepped.
 - `whydiff.cpu_history`, `provenance` and `playspec/tv.replay` decode or compare memory at
   each instruction, so they step.
 - `irqhost.InterruptHost` stays on `vagrant_moses.machine.Machine`.
