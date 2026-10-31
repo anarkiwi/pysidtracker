@@ -120,6 +120,10 @@ class Lowerer:
         self.latched: Optional[list] = None
         self.inputs: Dict[str, int] = {}
         self.stack: List[str] = []
+        self.proc = ""
+        self.decls: Dict[int, tuple] = {}
+        self.variants: Dict[Tuple[int, str], Cell] = {}
+        self.place_of: Optional[Tuple[str, str]] = None
         self.inst: Instance = Instance("", None, None)
         self.ret: Optional[Tuple[str, Optional[str], int]] = None
         self.allow_old = False
@@ -174,10 +178,13 @@ class Lowerer:
             return (
                 UNKNOWN_LIST if kind == "list" else K(None, 1 if kind == "flag" else 0)
             )
-        if name not in self.binding:
+        key = name
+        if self.place_of is not None and name == self.place_of[0]:
+            key = self.place_of[1]
+        if key not in self.binding:
             self.error(line, f"binding has no layout field {name!r}")
             return UNKNOWN_LIST if kind == "list" else K(None, 0)
-        value = self.binding[name]
+        value = self.binding[key]
         if kind == "list":
             return tuple(int(v) for v in value)
         if kind == "flag":
@@ -202,7 +209,7 @@ class Lowerer:
         if bad:
             self.error(line, f"cell {name} cannot be both ro and out")
         place16 = tuple(None if a is None else a & 0xFFFF for a in addrs)
-        return Cell(
+        cell = Cell(
             name,
             owner,
             typ,
@@ -212,6 +219,27 @@ class Lowerer:
             line,
             self.bind_notes(name, typ, length, attrs, notes, scope, line),
         )
+        if "per_proc" in attrs:
+            self.decls[id(cell)] = (decl, owner, scope)
+        return cell
+
+    def in_proc(self, cell: Cell) -> Cell:
+        """``cell`` as the current proc addresses it: a ``per_proc`` cell whose binding
+        has ``<cell>@<proc>`` is rebound there (``L.<cell>`` read as that field)."""
+        known = self.decls.get(id(cell))
+        key = f"{cell.name}@{self.proc}"
+        if known is None or self.binding is None or key not in self.binding:
+            return cell
+        if (id(cell), self.proc) not in self.variants:
+            decl, owner, scope = known
+            self.place_of = (cell.name, key)
+            try:
+                self.variants[(id(cell), self.proc)] = self.bind_cell(
+                    decl, owner, scope
+                )
+            finally:
+                self.place_of = None
+        return self.variants[(id(cell), self.proc)]
 
     def bind_notes(self, name, typ, length, attrs, notes, scope: Scope, line: int):
         """``(part, offset)`` of a cell's ``notes(part, offset)`` (None: undeclared)."""
@@ -307,6 +335,7 @@ class Lowerer:
 
     def read_cell(self, cell: Cell, index, line: int):
         """The value of ``cell`` (``[index]``)."""
+        cell = self.in_proc(cell)
         self.check_latched(cell, line)
         index = self.index_expr(index, line)
         if cell.notes is not None and self.standard is not None and index is not None:
@@ -348,6 +377,7 @@ class Lowerer:
 
     def write_cell(self, cell: Cell, index, value, line: int) -> list:
         """Statements storing ``value`` to ``cell`` (``[index]``)."""
+        cell = self.in_proc(cell)
         if "ro" in cell.attrs:
             self.error(line, f"write to read-only cell {cell.name}")
         if "volatile" in cell.attrs:
@@ -1245,6 +1275,7 @@ class Lowerer:
         w = WIDTHS.get(ret, 8) if ret else 0
         result = (self.fresh(f"r_{name}"), w) if valued else (None, w)
         saved = self.ret, self.inst, self.latched
+        proc_saved, self.proc = self.proc, name
         before = {k: set(v) for k, v in self.writers.items()}
         self.ret = (flag, result[0], w)
         self.inst = owner
@@ -1254,6 +1285,7 @@ class Lowerer:
         self.stack.pop()
         reads = self.latched
         self.ret, self.inst, self.latched = saved
+        self.proc = proc_saved
         writes = {
             k: new - before.get(k, set())
             for k, new in self.writers.items()
@@ -1326,7 +1358,7 @@ class Lowerer:
         out = list(self.shared.values())
         for inst in self.instances.values():
             out += inst.cells.values()
-        return out
+        return out + list(self.variants.values())
 
     def bind_checks(self) -> List[str]:
         """Bind-time checks: private cells unique per instance; notes on aliasing."""
