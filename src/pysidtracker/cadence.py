@@ -38,6 +38,8 @@ _VIC = (-1, 0)
 _UNMASK = (0x58, 0x28, 0x40)
 _JMP, _JMP_IND = 0x4C, 0x6C
 _SELF_BRANCH = (0x10, 0x30, 0x50, 0x70, 0x90, 0xB0, 0xD0, 0xF0)
+# Cycles below which stepping from Python is cheaper than a driver call carrying a stop set.
+_SHORT_RUN = 64
 _KERNAL_PCS = frozenset(range(mm.KERNAL_BASE, 0x10000))
 _RMW = frozenset(
     (0x0E, 0x1E, 0x2E, 0x3E, 0x4E, 0x5E, 0x6E, 0x7E, 0xCE, 0xDE, 0xEE, 0xFE)
@@ -509,11 +511,11 @@ class _Machine:
             asserted = irq and bool(mpu.p & _I_FLAG)
             key = zlib.crc32(ram), asserted
             if key not in watched:
-                watched = {key: self._watch(asserted)}
-            watch = watched[key]
-            stops = watch | _KERNAL_PCS if inside and bus.bits & mm.HIRAM else watch
-            if pc not in stops:
-                limit = min(end, due[0] if due else end) - now - 1
+                watch = self._watch(asserted)
+                watched = {key: (watch, watch | _KERNAL_PCS)}
+            stops = watched[key][inside and bool(bus.bits & mm.HIRAM)]
+            limit = min(end, due[0] if due else end) - now - 1
+            if pc not in stops and limit >= _SHORT_RUN:
                 mpu.stop, self.brk = False, False
                 mpu.run_until(
                     max_cycles=limit,

@@ -3,7 +3,13 @@
 import pytest
 
 from pysidtracker import observe_data_access, run_to_rts, set_iomap, wire_mpu
-from pysidtracker.emu import sync_ram
+from pysidtracker.emu import (
+    run_until,
+    step_to_rts,
+    sync_ram,
+    trace_pcs,
+    unobserve_data_access,
+)
 from pysidtracker.emu import SidReads
 from pysidtracker.errors import EmulatorUnavailable
 
@@ -317,3 +323,58 @@ def test_sid_reads_flush_queued_writes():
     chip.flush(20)
     assert chip.pending() == 0
     assert chip.read(30, 0x19) == chip.read(30, 0x19)
+
+
+def _routine(code):
+    subject = bytearray(0x10000)
+    subject[CODE : CODE + len(code)] = bytes(code)
+    mpu, mem = wire_mpu(subject)
+    return subject, mpu, mem
+
+
+def test_trace_pcs_lists_each_instruction_start():
+    _, mpu, mem = _routine([0xA9, 0x05, 0xAA, 0xE8, 0x60])  # LDA #5 / TAX / INX / RTS
+    pcs = []
+    trace_pcs(mpu, mem, CODE, 0, 1000, pcs)
+    assert pcs == [CODE, CODE + 2, CODE + 3, CODE + 4]
+    assert mpu.x == 6
+
+
+def test_step_to_rts_runs_the_routine_from_python():
+    _, mpu, mem = _routine([0xE8, 0xE8, 0x60])
+    step_to_rts(mpu, mem, CODE, 0, 1000)
+    assert mpu.x == 2
+
+
+@pytest.mark.parametrize(
+    "kwargs,reason",
+    [
+        ({"stop_pcs": {CODE + 2}}, "pc"),
+        ({"max_cycles": 3}, "cycles"),
+        ({"sp_above": 0x80}, "sp"),
+    ],
+)
+def test_run_until_reasons(kwargs, reason):
+    _, mpu, _ = _routine([0xEA, 0xEA, 0xEA, 0xEA])
+    mpu.pc, mpu.sp = CODE, 0xFF
+    assert run_until(mpu, **kwargs) == reason
+    expected = {"pc": CODE + 2, "cycles": CODE + 2, "sp": CODE}[reason]
+    assert mpu.pc == expected
+
+
+def test_unobserve_stops_the_callbacks():
+    _, mpu, mem = _routine([0xA9, 0x01, 0x8D, 0x00, 0x20, 0x60])  # LDA #1 / STA $2000
+    seen = []
+    observe_data_access(mpu, on_write=lambda a, v: seen.append((a, v)))
+    run_to_rts(mpu, mem, CODE, 0, 1000)
+    unobserve_data_access(mpu)
+    run_to_rts(mpu, mem, CODE, 0, 1000)
+    assert seen == [(0x2000, 1)]
+
+
+def test_observe_data_access_limits_to_the_given_addresses():
+    _, mpu, mem = _routine([0xA9, 1, 0x8D, 0, 0x20, 0x8D, 1, 0x20, 0x60])
+    seen = []
+    observe_data_access(mpu, on_write=lambda a, v: seen.append(a), writes={0x2001})
+    run_to_rts(mpu, mem, CODE, 0, 1000)
+    assert seen == [0x2001]

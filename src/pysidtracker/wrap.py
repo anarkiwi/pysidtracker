@@ -67,9 +67,22 @@ def idle_init(mpu, mem, address: int, song: int, max_cycles: int) -> None:
     depth, start = enter(mpu, mem, address, song), mpu.processorCycles
     pcs, steps = set(), 0
     while _running(mpu, depth, start, max_cycles):
-        mpu.step()
-        pcs.add(mpu.pc)
-        steps += 1
+        if mpu.native:
+            # at least two cycles an instruction: no more than the window's remainder run
+            left = max_cycles - (mpu.processorCycles - start)
+            need = _SPIN_STEPS - steps
+            _, ran = mpu.run_until(
+                max_cycles=min(2 * need - 2, left), sp_above=depth - 1, trace=True
+            )
+            visited = np.asarray(ran.pc).tolist()
+            if not visited:
+                break
+            pcs.update(visited[1:] + [mpu.pc])
+            steps += len(visited)
+        else:
+            mpu.step()
+            pcs.add(mpu.pc)
+            steps += 1
         if steps == _SPIN_STEPS:
             if len(pcs) <= _SPIN_PCS:
                 return

@@ -9,13 +9,14 @@ Exit status is the number of differing (tune, result) pairs.
 import argparse
 import contextlib
 import dataclasses
+import re
 import sys
 from pathlib import Path
 
 from tqdm import tqdm
 
 import jennings.memory as jmem
-from pysidtracker import cadence, oracle, trace
+from pysidtracker import cadence, oracle, paths, trace, variants, wrap
 from pysidtracker.detect import init_effects, run_init
 from pysidtracker.image import SidImage
 
@@ -56,6 +57,20 @@ def machine(image: SidImage, native: bool, stepped: bool):
     }
 
 
+def attempt(fn):
+    """``fn()``, or the exception it raised, so both engines are compared on failures too."""
+    try:
+        return fn()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return type(exc).__name__, str(exc)
+
+
+def booted(image: SidImage):
+    """The state :func:`pysidtracker.wrap.boot` leaves: RAM, registers and cycles."""
+    ram, mpu, _, play = wrap.boot(image, 0, CALL_CYCLES)
+    return bytes(ram), mpu.pc, mpu.sp, mpu.a, mpu.processorCycles, play
+
+
 def results(data: bytes, native: bool) -> dict:
     """Every result compared, for one engine."""
     image = SidImage.from_bytes(data)
@@ -70,6 +85,17 @@ def results(data: bytes, native: bool) -> dict:
         ran = SidImage.from_bytes(data)
         run_init(ran, max_cycles=CALL_CYCLES)
         out["init_mem"] = bytes(ran.mem)
+        out["offsets"] = attempt(
+            lambda: variants.executed_offsets(image, nframes=4, max_cycles=CALL_CYCLES)
+        )
+        out["paths"] = attempt(
+            lambda: re.sub(
+                r" at 0x[0-9a-f]+",
+                "",
+                repr(paths.cpu_paths(data, 4, max_cycles=CALL_CYCLES)),
+            )
+        )
+        out["boot"] = attempt(lambda: booted(SidImage.from_bytes(data)))
     return out
 
 

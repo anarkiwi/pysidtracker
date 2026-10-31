@@ -11,6 +11,7 @@ import weakref
 from array import array
 from typing import Callable, Dict, List, Optional, Tuple
 
+import numpy as np
 from vagrant_moses import memmap as mm
 from vagrant_moses.cpu import access_cycle, flat_mpu, run_to_rts
 
@@ -212,6 +213,26 @@ def run_until(mpu, stop_pcs=(), sp_above=None, max_cycles=None) -> str:
         mpu.step()
 
 
+def trace_pcs(mpu, mem, pc: int, acc: int, max_cycles: int, sink: list) -> None:
+    """:func:`run_to_rts`, appending the PC of each executed instruction to ``sink``.
+
+    A native MPU records them in its driver and extends ``sink`` once at the end;
+    otherwise the PC is appended as each instruction is about to run.
+    """
+    if getattr(mpu, "native", False):
+        sink.extend(np.asarray(mpu.run_to_rts_traced(pc, acc, max_cycles).pc).tolist())
+        return
+    start_sp = mpu.sp
+    for byte in (0x00, 0x01):
+        mem[0x0100 + mpu.sp] = byte
+        mpu.sp = (mpu.sp - 1) & 0xFF
+    mpu.a, mpu.pc = acc & 0xFF, pc
+    start = mpu.processorCycles
+    while mpu.sp < start_sp and mpu.processorCycles - start <= max_cycles:
+        sink.append(mpu.pc)
+        mpu.step()
+
+
 def live_ram(mpu, subject):
     """The buffer ``mpu`` runs on: its own RAM when native, else ``subject``."""
     return memoryview(mpu.memory) if getattr(mpu, "native", False) else subject
@@ -364,6 +385,7 @@ __all__ = [
     "live_ram",
     "set_iomap",
     "step_to_rts",
+    "trace_pcs",
     "sync_ram",
     "unobserve_data_access",
 ]
