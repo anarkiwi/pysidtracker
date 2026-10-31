@@ -341,7 +341,10 @@ Not expressed, by design or not yet implemented:
   reaches it, so the cycles the 6502 would spend in it are not spent, and a
   handler that reaches an entry by a vector or `JMP` rather than `JSR` is
   returned from as an `RTS`. Pass `sid=` (the PSID/RSID) for the header's SID
-  model and extra SIDs; without it a header is built around the image.
+  model and extra SIDs; without it a header is built around the image. A tune
+  whose interrupts are taken 3 times (the raises `play_source` needs to name a
+  play source) with no call reaching an entry plays only its own code, and
+  `SpecPlayer` raises `SidParseError` (from `play_frame` or `render_grid`).
 - **Opcodes.** Translation validation keeps opcodes constant: a routine that
   rewrites an opcode it then executes is refused, not modelled. The DSL still
   expresses such a choice as an `operand` cell.

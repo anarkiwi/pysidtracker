@@ -820,6 +820,20 @@ def test_spec_runs_when_init_never_returns(native, monkeypatch):
     assert len({row[0] for row in grid}) > 20
 
 
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("grid", [False, True])
+def test_hosted_tune_reaching_no_entry_raises(native, grid, monkeypatch):
+    player, calls, labels = _spinning_player(native, monkeypatch)
+    player._entries = lambda: {labels["play"] + 0x100}
+    with pytest.raises(SidParseError, match="reach no modelled entry"):
+        if grid:
+            player.render_grid(whole_song(30))
+        else:
+            for _ in range(30):
+                player.play_frame()
+    assert not calls and player.entry is None
+
+
 def test_spec_host_backends_agree(monkeypatch):
     grids = []
     for native in (False, True):
