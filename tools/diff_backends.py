@@ -9,8 +9,10 @@ Exit status is the number of differing (tune, result) pairs.
 import argparse
 import contextlib
 import dataclasses
+import os
 import re
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from tqdm import tqdm
@@ -110,23 +112,29 @@ def tunes(paths):
     yield from ((n, irqhost_tunes.build(n)) for n in irqhost_tunes.TUNES)
 
 
+def compare(item) -> list:
+    """The result names that differ between the engines for one ``(name, bytes)``."""
+    name, data = item
+    native, python = results(data, True), results(data, False)
+    return [f"{name}: {key} differs" for key in native if native[key] != python[key]]
+
+
 def main(argv=None) -> int:
-    """Diff the engines over the tunes; print each difference; return their count."""
+    """Diff the engines over the tunes, a process each; print differences; return their count."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", maxsplit=1)[0])
     parser.add_argument("tunes", nargs="*")
+    parser.add_argument("--jobs", type=int, default=os.cpu_count())
     args = parser.parse_args(argv)
     if not jmem.NATIVE:
         parser.error("jennings was installed without its native core")
     corpus = list(tunes(args.tunes))
-    differing = 0
-    for name, data in tqdm(corpus, unit="tune"):
-        native, python = results(data, True), results(data, False)
-        for key in native:
-            if native[key] != python[key]:
-                differing += 1
-                tqdm.write(f"{name}: {key} differs")
-    print(f"{len(corpus)} tunes, {differing} differences")
-    return differing
+    differing = []
+    with ProcessPoolExecutor(args.jobs) as pool:
+        for found in tqdm(pool.map(compare, corpus), total=len(corpus), unit="tune"):
+            differing += found
+    print("\n".join(differing))
+    print(f"{len(corpus)} tunes, {len(differing)} differences")
+    return len(differing)
 
 
 if __name__ == "__main__":
