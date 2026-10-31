@@ -130,9 +130,8 @@ def trace(data, start, end, song=0, out=None):
     host = InterruptHost(data, song)
     machine = host.machine
     dis = Disassembler(MPU(memory=machine))
-    decode = machine._decode  # pylint: disable=protected-access
 
-    def traced():
+    def traced(*_):
         mpu = machine.mpu
         if start <= machine.t <= end:
             text = dis.instruction_at(mpu.pc)[1]
@@ -142,9 +141,17 @@ def trace(data, start, end, song=0, out=None):
                 f"$01={machine.port_data:02X}",
                 file=out,
             )
-        decode()
 
-    machine._decode = traced  # pylint: disable=protected-access
+    if hasattr(machine, "set_decode_hook"):
+        machine.set_decode_hook(traced)
+    else:
+        decode = machine._decode  # pylint: disable=protected-access
+
+        def decoded():
+            traced()
+            decode()
+
+        machine._decode = decoded  # pylint: disable=protected-access
     host.run(max(0, end - host.cycle))
     return host
 

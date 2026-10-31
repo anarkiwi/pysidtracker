@@ -9,6 +9,7 @@ Exit status is the number of differing (tune, result) pairs.
 import argparse
 import contextlib
 import dataclasses
+import itertools
 import os
 import re
 import sys
@@ -18,24 +19,27 @@ from pathlib import Path
 from tqdm import tqdm
 
 import jennings.memory as jmem
+import vagrant_moses.machine as vmachine
 from pysidtracker import cadence, oracle, paths, trace, variants, wrap
 from pysidtracker.detect import init_effects, run_init
 from pysidtracker.image import SidImage
+from pysidtracker.irqhost import InterruptHost, to_rows
 
 GRID_FRAMES = 16
 MACHINE_CYCLES = 3_000_000
 CALL_CYCLES = 100_000
+HOST_CYCLES = 300_000
 
 
 @contextlib.contextmanager
 def engine(native: bool):
     """Build every MPU inside the block on the native core or the Python engine."""
-    saved = jmem.NATIVE
-    jmem.NATIVE = native and saved
+    saved, machine_saved = jmem.NATIVE, vmachine.NATIVE
+    jmem.NATIVE, vmachine.NATIVE = native and saved, native and machine_saved
     try:
         yield
     finally:
-        jmem.NATIVE = saved
+        jmem.NATIVE, vmachine.NATIVE = saved, machine_saved
 
 
 def machine(image: SidImage, native: bool, stepped: bool):
@@ -73,6 +77,16 @@ def booted(image: SidImage):
     return bytes(ram), mpu.pc, mpu.sp, mpu.a, mpu.processorCycles, play
 
 
+def hosted(data: bytes):
+    """Rows, grid and the first frames of an :class:`InterruptHost` run."""
+    host = InterruptHost(data)
+    host.run(HOST_CYCLES)
+    rows = [tuple(r) for r in to_rows(host.raw)]
+    grid = InterruptHost(data).grid(4)
+    frames = list(itertools.islice(InterruptHost(data).frames(), 6))
+    return rows, host.cycle, grid, frames
+
+
 def results(data: bytes, native: bool) -> dict:
     """Every result compared, for one engine."""
     image = SidImage.from_bytes(data)
@@ -97,6 +111,7 @@ def results(data: bytes, native: bool) -> dict:
                 repr(paths.cpu_paths(data, 4, max_cycles=CALL_CYCLES)),
             )
         )
+        out["host"] = attempt(lambda: hosted(data))
         out["boot"] = attempt(lambda: booted(SidImage.from_bytes(data)))
     return out
 

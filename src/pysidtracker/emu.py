@@ -39,7 +39,7 @@ class SidReads:
         chip = {"6581": ChipModel.MOS6581, "8580": ChipModel.MOS8580}[model]
         self._sid = SID(chip, SamplingMethod.DECIMATE, mm.PAL.clock_hz, 8000.0)
         self._now = 0
-        self._queue = array("Q")
+        self.queue = array("Q")
 
     def _clock(self, cycle: int) -> None:
         if cycle > self._now:
@@ -48,19 +48,19 @@ class SidReads:
 
     def write(self, cycle: int, register: int, value: int) -> None:
         """Queue a write to SID ``register`` (offset) at CPU ``cycle``."""
-        self._queue.append(cycle << 16 | register << 8 | value)
+        self.queue.append(cycle << 16 | register << 8 | value)
 
     def flush(self, cycle: int) -> None:
         """Clock the chip through every queued write up to CPU ``cycle``."""
-        for word in self._queue:
+        for word in self.queue:
             self._clock(word >> 16)
             self._sid.write((word >> 8) & 0xFF, word & 0xFF)
-        del self._queue[:]
+        del self.queue[:]
         self._clock(cycle)
 
     def pending(self) -> int:
         """Writes queued since the last read or flush."""
-        return len(self._queue)
+        return len(self.queue)
 
     def read(self, cycle: int, register: int) -> int:
         """The chip's value of ``register`` (offset) at CPU ``cycle``."""

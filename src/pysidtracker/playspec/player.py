@@ -182,7 +182,7 @@ class SpecPlayer(EmuPlayer):
         if data is None:
             data = _container(self._raw, self._load, self._init_addr, self._psid)
         self._hosted = InterruptPlayer(
-            data, subtune, clock=self._clock, trap=self._trap
+            data, subtune, clock=self._clock, trap=self._trap, backend="python"
         )
         machine = self._hosted.host.machine
         self._mpu = machine.mpu

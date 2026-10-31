@@ -42,4 +42,6 @@ def backend(request, monkeypatch):
     if request.param == "native" and not memory.NATIVE:
         pytest.skip("jennings was installed without its native core")
     monkeypatch.setattr(memory, "NATIVE", request.param == "native")
+    machine = pytest.importorskip("vagrant_moses.machine")
+    monkeypatch.setattr(machine, "NATIVE", machine.NATIVE and request.param == "native")
     return request.param
