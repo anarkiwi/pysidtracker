@@ -170,13 +170,21 @@ class _PyTrapMachine(Machine):
 
     ``trap`` returns True once it has run the call (it has set ``mpu.pc``), and the
     fetch is made again at the new ``pc``. Nothing is watched until the CPU reaches
-    ``idle`` (the tune's init has returned); after that the watch is stale at each
-    write to the CPU port, and ``trap`` rebuilds it for the new banking.
+    ``idle`` (the tune's init has returned) or the first interrupt is taken; after
+    that the watch is stale at each write to the CPU port, and ``trap`` rebuilds it
+    for the new banking.
     """
 
-    def __init__(self, *args, trap: Callable[[Machine], bool], **kwargs):
+    def __init__(
+        self,
+        *args,
+        trap: Callable[[Machine], bool],
+        interrupted: Callable[[], bool],
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs, backend="python")
-        self.trap, self.idle, self.armed = trap, None, False
+        self.trap, self.interrupted, self.idle = trap, interrupted, None
+        self.armed = False
         self.watch = frozenset()
 
     def __setitem__(self, addr: int, value: int) -> None:
@@ -185,7 +193,7 @@ class _PyTrapMachine(Machine):
             self.watch = _STALE
 
     def _decode(self) -> None:
-        if not self.armed and self.mpu.pc == self.idle:
+        if not self.armed and (self.mpu.pc == self.idle or self.interrupted()):
             self.armed, self.watch = True, _STALE
         while self.mpu.pc in self.watch and self.trap(self):
             pass
@@ -269,9 +277,10 @@ class InterruptHost:
 
     :meth:`rows` are what sidtrace logs for the same tune; :meth:`grid` and
     :meth:`frames` frame them at the play source's raises as the oracle is framed.
-    With ``trap``, once init has returned a fetch at an address in the machine's
-    ``watch`` set is handed to ``trap(machine)``. The trap sets ``watch`` (stale after
-    each banking change) and returns True after running a call and moving ``mpu.pc``.
+    With ``trap``, once init has returned or the first interrupt is taken, a fetch at
+    an address in the machine's ``watch`` set is handed to ``trap(machine)``. The trap
+    sets ``watch`` (stale after each banking change) and returns True after running a
+    call and moving ``mpu.pc``.
     """
 
     def __init__(
@@ -304,10 +313,19 @@ class InterruptHost:
         sids = {mm.SID_BASE: self._chips[0]}
         sids.update({a & 0xFFE0: self._chips[i] for i, a in enumerate(extra, 1)})
         native = backend != "python" and vagrant_machine.NATIVE
+        self.interrupted = False
+        event = self._event if trap is None else self._trapped_event
         if trap is None or native:
-            self.machine = Machine(ntsc, sids, cia_new, self._event, backend=backend)
+            self.machine = Machine(ntsc, sids, cia_new, event, backend=backend)
         else:
-            self.machine = _PyTrapMachine(ntsc, sids, cia_new, self._event, trap=trap)
+            self.machine = _PyTrapMachine(
+                ntsc,
+                sids,
+                cia_new,
+                event,
+                trap=trap,
+                interrupted=lambda: self.interrupted,
+            )
         if poweron is None and header.is_rsid:
             poweron = poweron_writes() or KERNAL_VECTORS
         self.start, idle = _boot(self.machine, image, subtune, tune_ntsc, poweron)
@@ -315,11 +333,23 @@ class InterruptHost:
             self.machine.set_trap(trap, self.machine.WATCH_ALL)
             self.machine.arm_at(idle)
             self.machine.on_port_write(_stale)
+            self.machine.set_decode_hook(self._arm_on_interrupt)
         elif trap is not None:
             self.machine.idle = idle
         video = mm.video(ntsc)
         self.clock_hz, self.frame_cycles = video.clock_hz, video.cycles_per_frame
         self.framed: Optional[Tuple[str, int]] = None
+
+    def _trapped_event(self, cycle: int, name: str) -> None:
+        self._event(cycle, name)
+        self.interrupted |= name.endswith("_entry")
+
+    def _arm_on_interrupt(self, machine) -> None:
+        """Native decode hook: arm at the first fetch after an interrupt is taken."""
+        if self.interrupted or machine.armed:
+            if not machine.armed:
+                machine.arm_at(machine.mpu.pc)
+            machine.set_decode_hook(None)
 
     def _event(self, cycle: int, name: str) -> None:
         self._events.append((cycle, None, None, name))
