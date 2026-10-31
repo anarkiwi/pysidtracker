@@ -20,6 +20,7 @@ from pysidtracker import cadence, oracle
 from pysidtracker.detect import detect_playroutine
 from pysidtracker.image import SidImage
 
+AVAILABLE = jmem.NATIVE
 PLAY_SECOND_FRAMES = 50
 CALL_CYCLES = 100_000
 
@@ -61,7 +62,7 @@ def tunes(paths):
 def bench_one(job) -> tuple:
     """``(name, native, stage seconds)`` for one ``(name, bytes, native)``, in this process."""
     name, data, native = job
-    jmem.NATIVE = native and jmem.NATIVE
+    jmem.NATIVE = native and AVAILABLE
     return name, native, measure(data)
 
 
@@ -86,6 +87,7 @@ def thread_test(data: bytes, count: int) -> tuple:
     def detect():
         detect_playroutine(SidImage.from_bytes(data), lambda _: None, init=True)
 
+    detect()
     alone = timed(detect)
 
     def parallel():
