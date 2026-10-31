@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+import numpy as np
 from vagrant_moses import memmap as mm
 
 from . import gridcmp
@@ -789,6 +791,76 @@ def cpu_slice(
     return sorted(keep), {loc: values.get(loc) for loc in order}
 
 
+def _cpu_history_native(mpu, subject, play, labels, max_cycles) -> List[CpuStep]:
+    """:func:`cpu_history` from one native traced call.
+
+    The core records each instruction's PC and the registers after it; the data
+    accesses carry the instruction counter, and the code as it stood at each
+    instruction is rebuilt by replaying the stores onto a copy of the memory.
+    """
+    from jennings.dataflow import flow
+    from jennings.devices.mpu6502 import MPU
+    from jennings.disassembler import Disassembler
+    from jennings.utils.addressing import AddressParser
+
+    events: List[tuple] = []
+    base = {"steps": 0}
+
+    def on_read(addr):
+        events.append((mpu.steps - base["steps"], 0, addr, subject[addr] & 0xFF))
+
+    def on_write(addr, value):
+        events.append((mpu.steps - base["steps"], 1, addr, value))
+
+    observe_data_access(mpu, on_read=on_read, on_write=on_write)
+    replica = bytearray(subject)
+    dis = Disassembler(
+        MPU(memory=replica), AddressParser(labels=dict(labels or {}, PLAY=play))
+    )
+    start = mpu.processorCycles
+    base["steps"] = mpu.steps
+    trace = mpu.run_to_rts_traced(play, 0, max_cycles, regs=True)
+    unobserve_data_access(mpu)
+    pcs = np.asarray(trace.pc).tolist()
+    cycles = np.asarray(trace.cycles).tolist() + [mpu.processorCycles]
+    regs = [
+        np.asarray(c).tolist() for c in (trace.a, trace.x, trace.y, trace.sp, trace.p)
+    ]
+    steps: List[CpuStep] = []
+    code = bytearray(0x10000)
+    at = 0
+    for i, pc in enumerate(pcs):
+        reads: List[Tuple[int, int]] = []
+        writes: List[Tuple[int, int]] = []
+        while at < len(events) and events[at][0] < i:
+            _, is_write, addr, value = events[at]
+            if is_write:
+                replica[addr] = value
+            at += 1
+        size, text = dis.instruction_at(pc)
+        raw = bytes(replica[pc : pc + size])
+        for j, byte in enumerate(raw):
+            code[(pc + j) & 0xFFFF] = byte
+        for k in range(at, len(events)):
+            if events[k][0] != i:
+                break
+            _, is_write, addr, value = events[k]
+            (writes if is_write else reads).append((addr, value))
+        steps.append(
+            CpuStep(
+                pc,
+                raw,
+                text,
+                *(column[i] for column in regs),
+                cycles[i + 1] - start,
+                reads,
+                writes,
+                flow(code, pc, [a for a, _ in reads], [a for a, _ in writes]),
+            )
+        )
+    return steps
+
+
 def cpu_history(
     data,
     frame: int,
@@ -815,6 +887,8 @@ def cpu_history(
     dis = Disassembler(
         MPU(memory=subject), AddressParser(labels=dict(labels or {}, PLAY=play))
     )
+    if mpu.native:
+        return _cpu_history_native(mpu, subject, play, labels, max_cycles)
     reads: List[Tuple[int, int]] = []
     writes: List[Tuple[int, int]] = []
     observe_data_access(

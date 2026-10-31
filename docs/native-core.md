@@ -34,8 +34,10 @@ reports them. `SidWriteLog` observes SID writes only and reads `mem.last_load`.
 
 - `cadence._Machine` runs to the next event (`execute_events`, the KERNAL window as a `stop_ranges` entry); `execute_stepped` is the
   reference loop. A run starting at a watched address (possible self-spin, instruction that can unmask a pending IRQ) is stepped.
-- `whydiff.cpu_history`, `provenance` and `playspec/tv.replay` decode or compare memory at
-  each instruction, so they step.
+- `whydiff.cpu_history` and `provenance` run one traced native call (`run_to_rts_traced`, registers
+  on) and rebuild the code as it stood at each instruction by replaying the recorded stores
+  onto a copy of the memory; `playspec/tv.replay` runs natively between JSR/RTS opcodes with the
+  instruction budget kept by cycle-bounded chunks.
 - `irqhost.InterruptHost` stays on `vagrant_moses.machine.Machine`.
 
 ## Tools
