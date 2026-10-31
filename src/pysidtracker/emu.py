@@ -168,6 +168,53 @@ def sync_ram(mpu) -> None:
         subject[:] = memoryview(mpu.memory)
 
 
+def unobserve_data_access(mpu) -> None:
+    """Remove the callbacks :func:`observe_data_access` installed."""
+    if getattr(mpu, "native", False):
+        mpu.memory.observe_data_access(None, None)
+    elif hasattr(mpu._vm, "_on_read"):  # pylint: disable=protected-access
+        mpu._vm._on_read = mpu._vm._on_write = None  # pylint: disable=protected-access
+
+
+def step_to_rts(mpu, mem, pc: int, acc: int, max_cycles: int) -> None:
+    """:func:`run_to_rts` stepped from Python, so a ``mpu.step`` hook sees every instruction."""
+    start_sp = mpu.sp
+    for byte in (0x00, 0x01):
+        mem[0x0100 + mpu.sp] = byte
+        mpu.sp = (mpu.sp - 1) & 0xFF
+    mpu.a, mpu.pc = acc & 0xFF, pc
+    start = mpu.processorCycles
+    while mpu.sp < start_sp and mpu.processorCycles - start <= max_cycles:
+        mpu.step()
+
+
+def run_until(mpu, stop_pcs=(), sp_above=None, max_cycles=None) -> str:
+    """Step ``mpu`` until a stop condition holds before an instruction; say which.
+
+    ``"sp"``: SP exceeds ``sp_above``; ``"cycles"``: more than ``max_cycles`` have
+    elapsed since the call; ``"pc"``: PC is in ``stop_pcs``; ``"jam"``: a JAM ran.
+    A native MPU runs this in its own driver, otherwise the same checks are stepped.
+    """
+    if getattr(mpu, "native", False):
+        return mpu.run_until(
+            max_cycles=max_cycles, stop_pcs=stop_pcs, sp_above=sp_above
+        )
+    start = mpu.processorCycles
+    while True:
+        if sp_above is not None and mpu.sp > sp_above:
+            return "sp"
+        if max_cycles is not None and mpu.processorCycles - start > max_cycles:
+            return "cycles"
+        if mpu.pc in stop_pcs:
+            return "pc"
+        mpu.step()
+
+
+def live_ram(mpu, subject):
+    """The buffer ``mpu`` runs on: its own RAM when native, else ``subject``."""
+    return memoryview(mpu.memory) if getattr(mpu, "native", False) else subject
+
+
 def wire_mpu(
     subject,
     illegal_opcodes: bool = True,
@@ -312,6 +359,10 @@ __all__ = [
     "wire_mpu",
     "run_to_rts",
     "run_to_rts_until",
+    "run_until",
+    "live_ram",
     "set_iomap",
+    "step_to_rts",
     "sync_ram",
+    "unobserve_data_access",
 ]

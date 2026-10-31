@@ -30,7 +30,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from vagrant_moses import memmap as mm
 
-from .emu import observe_data_access, run_to_rts, wire_mpu
+from .emu import live_ram, observe_data_access, run_to_rts, sync_ram, wire_mpu
 from .errors import SidParseError
 from .poweron import psid_init_bank
 from .registers import sid_model_for_flags
@@ -210,6 +210,7 @@ def run_init(image: SidImage, subtune: int = 0, max_cycles: int = 8_000_000) -> 
     image.mem[1] = psid_init_bank(init_address)
     mpu, mem = wire_mpu(image.mem, sid_model=sid_model_for_flags(image.header.flags))
     run_to_rts(mpu, mem, init_address, subtune, max_cycles)
+    sync_ram(mpu)
 
 
 # init effects: what one song's init leaves behind (song -> subtune resolution).
@@ -328,6 +329,7 @@ def init_effects(
     # The driver banks the init's ROM space before calling it (KERNAL/BASIC in).
     mem[1] = psid_init_bank(init_address)
     mpu, obsmem = wire_mpu(mem, sid_model=sid_model_for_flags(image.header.flags))
+    mem = live_ram(mpu, mem)
 
     writes: Dict[int, CellWrite] = {}
     reads: Dict[int, List[CellRead]] = {}

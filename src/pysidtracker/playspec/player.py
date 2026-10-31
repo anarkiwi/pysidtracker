@@ -12,7 +12,7 @@ from __future__ import annotations
 import struct
 from typing import Callable, Collection, Dict, List, Optional, Tuple, Union
 
-from ..emu import run_to_rts, set_iomap, wire_mpu
+from ..emu import live_ram, run_to_rts, run_until, set_iomap, wire_mpu
 from ..errors import SidParseError
 from ..image import SidImage
 from ..irqhost import InterruptPlayer
@@ -156,11 +156,16 @@ class SpecPlayer(EmuPlayer):
             self._mem[PAL_FLAG] = self._pal_flag
         self._mem[1] = psid_init_bank(self._init_addr) if self._psid else 0x37
         self._mpu, self._obs = wire_mpu(self._mem, self._illegal, self._sid_model)
+        self._mem = live_ram(self._mpu, self._mem)
         run_to_rts(self._mpu, self._obs, self._init_addr, subtune, self._max_cycles)
         if self._psid:
             set_iomap(self._mpu, psid_play_bank(self._play_addr))
         self._due = self._mpu.processorCycles
         self._bus = self._obs._subject  # pylint: disable=protected-access
+        if self._mpu.native:  # a bank change moves the entry set: hand back to Python
+            self._obs.subscribe_to_write(
+                (0, 1), lambda *_: setattr(self._mpu, "stop", True)
+            )
         play = self._play_addr
         entries = self._entries()
         self.entry = play if play in entries else self._probe(play)
@@ -232,7 +237,18 @@ class SpecPlayer(EmuPlayer):
                 raise SidParseError(
                     f"native code at ${addr:04x} never reaches ${resume:04x}"
                 )
-            mpu.step()
+            if (
+                run_until(
+                    mpu,
+                    (resume,),
+                    mine["base"],
+                    self._max_cycles - (mpu.processorCycles - start) - 1,
+                )
+                == "jam"
+            ):
+                raise SidParseError(
+                    f"native code at ${addr:04x} never reaches ${resume:04x}"
+                )
 
     def _run(self, entry: int) -> bool:
         """Run the spec at ``entry``; True if native code left it and the CPU finished the call."""
@@ -312,8 +328,14 @@ class SpecPlayer(EmuPlayer):
         mpu.pc = play
         start = mpu.processorCycles
         while mpu.sp < top and mpu.processorCycles - start < self._max_cycles:
-            if mpu.pc not in self._entries():
-                mpu.step()
+            entries = self._entries()
+            if mpu.pc not in entries:
+                run_until(
+                    mpu,
+                    entries,
+                    top - 1,
+                    self._max_cycles - (mpu.processorCycles - start) - 1,
+                )
                 continue
             if probe:
                 return mpu.pc

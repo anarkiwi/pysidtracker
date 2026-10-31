@@ -214,7 +214,7 @@ def executed_offsets(
 
 def _executed_direct(image, subtune, ntsc, nframes, max_cycles) -> List[int]:
     """The executed offsets of a direct (init + per-frame play) tune."""
-    from .emu import run_to_rts, set_iomap, wire_mpu
+    from .emu import set_iomap, step_to_rts, wire_mpu
     from .poweron import place_tune, power_on_ram, psid_init_bank, psid_play_bank
     from .registers import sid_model_for_flags
 
@@ -227,10 +227,10 @@ def _executed_direct(image, subtune, ntsc, nframes, max_cycles) -> List[int]:
     subject[1] = psid_init_bank(init)
     mpu, mem = wire_mpu(subject, sid_model=sid_model_for_flags(header.flags), ntsc=ntsc)
     with _Tracer(mpu, image.load, image.end) as tracer:
-        run_to_rts(mpu, mem, init, subtune & 0xFF, max_cycles)
+        step_to_rts(mpu, mem, init, subtune & 0xFF, max_cycles)
         set_iomap(mpu, psid_play_bank(play))
         for _ in range(nframes):
-            run_to_rts(mpu, mem, play, 0, max_cycles)
+            step_to_rts(mpu, mem, play, 0, max_cycles)
     return tracer.offsets
 
 

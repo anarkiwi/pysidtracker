@@ -32,7 +32,7 @@ from vagrant_moses import memmap as mm
 
 from . import gridcmp
 from . import registers as reg
-from .emu import observe_data_access, run_to_rts
+from .emu import observe_data_access, run_to_rts, unobserve_data_access
 from .errors import SidParseError
 from .image import SidImage
 from .oracle import boot_flat, register_grid
@@ -789,6 +789,18 @@ def cpu_slice(
     return sorted(keep), {loc: values.get(loc) for loc in order}
 
 
+# PHA, PHP push; PLA, PLP pull. The Python engine reports their page-1 access as a
+# data access; the native observer does not, so it is added here.
+_STACK_OPS = {0x48: 1, 0x08: 1, 0x68: 0, 0x28: 0}
+
+
+def _stack_access(ram, op, sp_before, sp_after, acc, flags, reads, writes) -> None:
+    if _STACK_OPS[op]:
+        writes.append((0x0100 + sp_before, (acc if op == 0x48 else flags | 0x30)))
+    else:
+        reads.append((0x0100 + sp_after, ram[0x0100 + sp_after]))
+
+
 def cpu_history(
     data,
     frame: int,
@@ -819,7 +831,7 @@ def cpu_history(
     writes: List[Tuple[int, int]] = []
     observe_data_access(
         mpu,
-        on_read=lambda addr: reads.append((addr, mem[addr] & 0xFF)),
+        on_read=lambda addr: reads.append((addr, subject[addr] & 0xFF)),
         on_write=lambda addr, value: writes.append((addr, value)),
     )
     steps: List[CpuStep] = []
@@ -836,7 +848,10 @@ def cpu_history(
         raw = bytes(subject[pc : pc + size])
         for i, byte in enumerate(raw):
             code[(pc + i) & 0xFFFF] = byte
+        sp, acc, flags = mpu.sp, mpu.a, mpu.p
         mpu.step()
+        if mpu.native and subject[pc] in _STACK_OPS:
+            _stack_access(subject, subject[pc], sp, mpu.sp, acc, flags, reads, writes)
         steps.append(
             CpuStep(
                 pc,
@@ -855,7 +870,7 @@ def cpu_history(
         )
         reads.clear()
         writes.clear()
-    mpu._vm._on_read = mpu._vm._on_write = None  # pylint: disable=protected-access
+    unobserve_data_access(mpu)
     return steps
 
 

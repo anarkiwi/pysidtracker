@@ -398,7 +398,7 @@ def cpu_paths(
     """
     from tqdm import tqdm
 
-    from .emu import observe_data_access, run_to_rts
+    from .emu import observe_data_access, step_to_rts, unobserve_data_access
 
     subject, mpu, mem, play, code, entries = _booted(data, subtune, max_cycles)
     pcs: List[int] = []
@@ -428,13 +428,13 @@ def cpu_paths(
     mpu.step = traced
     try:
         for f in tqdm(range(nframes), unit="frame", disable=not progress):
-            run_to_rts(mpu, mem, play, 0, max_cycles)
+            step_to_rts(mpu, mem, play, 0, max_cycles)
             pc_bounds.append(len(pcs))
             read_bounds.append(len(reads))
             grid[f] = view[_SID : _SID + _NREG] & mask
     finally:
         mpu.step = step
-        mpu._vm._on_read = mpu._vm._on_write = None  # pylint: disable=protected-access
+        unobserve_data_access(mpu)
 
     p = np.asarray(pcs, np.int64)
     frame_of = np.repeat(np.arange(nframes), np.diff(pc_bounds))

@@ -1,5 +1,7 @@
 """Tests for the content-addressed render cache (pysidtracker.rendercache)."""
 
+import sys
+
 import numpy as np
 
 from pysidtracker import rendercache
@@ -44,6 +46,8 @@ def test_player_code_change_invalidates(tmp_path, monkeypatch):
 
 
 def test_player_version_follows_player_modules(tmp_path, monkeypatch):
+    monkeypatch.delitem(sys.modules, "tmp_player_mod", raising=False)
+    rendercache._modules_digest.cache_clear()  # pylint: disable=protected-access
     mod = tmp_path / "tmp_player_mod.py"
     mod.write_text("X = 1\n")
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -56,6 +60,8 @@ def test_player_version_follows_player_modules(tmp_path, monkeypatch):
 
 
 def test_player_version_follows_package_data_files(tmp_path, monkeypatch):
+    monkeypatch.delitem(sys.modules, "tmp_data_pkg", raising=False)
+    rendercache._modules_digest.cache_clear()  # pylint: disable=protected-access
     pkg = tmp_path / "tmp_data_pkg"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")
