@@ -28,8 +28,6 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-
-import numpy as np
 from vagrant_moses import memmap as mm
 
 from . import gridcmp

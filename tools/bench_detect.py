@@ -7,9 +7,10 @@ Without arguments the synthetic tunes of ``tests/irqhost_tunes.py`` are used.
 """
 
 import argparse
+import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 
 from tqdm import tqdm
@@ -57,13 +58,26 @@ def tunes(paths):
     return [(n, irqhost_tunes.build(n)) for n in irqhost_tunes.TUNES]
 
 
-def run(corpus, native: bool) -> dict:
-    """``{name: stage seconds}`` over the corpus on one engine."""
-    saved, jmem.NATIVE = jmem.NATIVE, native and jmem.NATIVE
-    try:
-        return {n: measure(d) for n, d in tqdm(corpus, unit="tune", desc=str(native))}
-    finally:
-        jmem.NATIVE = saved
+def bench_one(job) -> tuple:
+    """``(name, native, stage seconds)`` for one ``(name, bytes, native)``, in this process."""
+    name, data, native = job
+    jmem.NATIVE = native and jmem.NATIVE
+    return name, native, measure(data)
+
+
+def run(corpus, jobs: int) -> tuple:
+    """``(python, native)``: ``{name: stage seconds}`` over the corpus, one tune a process.
+
+    Each timing is one tune on one core; tunes run side by side only to finish sooner.
+    """
+    work = [(n, d, native) for n, d in corpus for native in (False, True)]
+    out = {False: {}, True: {}}
+    with ProcessPoolExecutor(jobs) as pool:
+        for name, native, stages in tqdm(
+            pool.map(bench_one, work), total=len(work), unit="run"
+        ):
+            out[native][name] = stages
+    return out[False], out[True]
 
 
 def thread_test(data: bytes, count: int) -> tuple:
@@ -87,9 +101,10 @@ def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", maxsplit=1)[0])
     parser.add_argument("tunes", nargs="*")
     parser.add_argument("--threads", type=int, default=0)
+    parser.add_argument("--jobs", type=int, default=os.cpu_count())
     args = parser.parse_args(argv)
     corpus = tunes(args.tunes)
-    python, native = run(corpus, False), run(corpus, True)
+    python, native = run(corpus, args.jobs)
     print(f"{'tune':28}{'python s':>10}{'native s':>10}{'speedup':>9}")
     total = [0.0, 0.0]
     for name, _ in corpus:

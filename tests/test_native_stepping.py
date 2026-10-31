@@ -54,7 +54,7 @@ def test_replay_routine_matches(engines):
         image = bytearray(rng.getrandbits(8) for _ in range(0x10000))
         image[0x1000:0x1400] = bytes(rng.choice(ops) for _ in range(0x400))
 
-        def run():
+        def run(image=image):
             memory = bytearray(image)
             cpu = tv._cpu(memory)  # pylint: disable=protected-access
             cpu.sp, cpu.pc = 0xFF, 0x1000
