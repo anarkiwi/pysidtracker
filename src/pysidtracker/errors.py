@@ -46,9 +46,9 @@ class KernalHostError(SidError, _kernal.KernalHostError):
 
 
 class AudioUnavailable(SidError):
-    """The SID audio backend (``pyresidfp``) is needed but not importable.
+    """The SID audio backend (``pylibresidfp``) is needed but not importable.
 
-    ``pyresidfp`` is a core dependency, so this only fires on a broken install;
+    ``pylibresidfp`` is a core dependency, so this only fires on a broken install;
     raised by :mod:`pysidtracker.audio` when a WAV/sample render needs an
     emulated SID and it cannot be imported.
     """

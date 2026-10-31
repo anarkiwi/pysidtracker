@@ -1,7 +1,7 @@
 """The SID half of the flat jennings host every init/replay path runs on.
 
 The machine half (banked bus, raster reads, :func:`run_to_rts`) is
-:mod:`vagrant_moses.cpu`; :func:`wire_mpu` adds a reSIDfp chip answering the SID's
+:mod:`vagrant_moses.cpu`; :func:`wire_mpu` adds a pylibresidfp chip answering the SID's
 readable registers, and :func:`observe_data_access` hooks the jennings engine.
 """
 
@@ -34,17 +34,18 @@ class SidReads:
     """
 
     def __init__(self, model: str = "6581"):
-        from pyresidfp._pyresidfp import SID, ChipModel, SamplingMethod
+        from pylibresidfp import SID
 
-        chip = {"6581": ChipModel.MOS6581, "8580": ChipModel.MOS8580}[model]
-        self._sid = SID(chip, SamplingMethod.DECIMATE, mm.PAL.clock_hz, 8000.0)
-        self._now = 0
+        self._sid = SID(model, clock_hz=mm.PAL.clock_hz, sampling_hz=8000.0)
         self.queue = array("Q")
 
-    def _clock(self, cycle: int) -> None:
-        if cycle > self._now:
-            self._sid.clock(cycle - self._now)
-            self._now = cycle
+    def _drain(self, cycle: int) -> Tuple[np.ndarray, int]:
+        """The queued writes as monotone absolute cycles, and the cycle to run to."""
+        words = np.frombuffer(self.queue, dtype=np.uint64).astype(np.int64)
+        cycles = np.maximum.accumulate(np.maximum(words >> 16, self._sid.cycle))
+        del self.queue[:]
+        writes = np.column_stack([cycles, (words >> 8) & 0xFF, words & 0xFF])
+        return writes, max(cycle, self._sid.cycle, *cycles[-1:])
 
     def write(self, cycle: int, register: int, value: int) -> None:
         """Queue a write to SID ``register`` (offset) at CPU ``cycle``."""
@@ -52,11 +53,7 @@ class SidReads:
 
     def flush(self, cycle: int) -> None:
         """Clock the chip through every queued write up to CPU ``cycle``."""
-        for word in self.queue:
-            self._clock(word >> 16)
-            self._sid.write((word >> 8) & 0xFF, word & 0xFF)
-        del self.queue[:]
-        self._clock(cycle)
+        self._sid.run(*self._drain(cycle))
 
     def pending(self) -> int:
         """Writes queued since the last read or flush."""
@@ -64,8 +61,8 @@ class SidReads:
 
     def read(self, cycle: int, register: int) -> int:
         """The chip's value of ``register`` (offset) at CPU ``cycle``."""
-        self.flush(cycle)
-        return self._sid.read(register)
+        writes, until = self._drain(cycle)
+        return self._sid.serve(writes, until, register)
 
 
 _WIRED_VM: Dict[type, type] = {}

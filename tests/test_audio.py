@@ -1,15 +1,16 @@
-"""Tests for the pyresidfp WAV/sample render.
+"""Tests for the pylibresidfp WAV/sample render.
 
-``pyresidfp`` is a core dependency, so the real-backend tests always run; the
-"no backend" tests hide ``pyresidfp`` from ``sys.modules`` to cover the
+``pylibresidfp`` is a core dependency, so the real-backend tests always run; the
+"no backend" tests hide ``pylibresidfp`` from ``sys.modules`` to cover the
 broken-install error path too -- neither branch is skipped.
 """
 
 import sys
 import wave
-from datetime import timedelta
 
+import numpy as np
 import pytest
+from pylibresidfp import SID
 
 from pysidtracker import (
     PAL_CLOCK_HZ,
@@ -23,37 +24,113 @@ from pysidtracker.errors import AudioUnavailable
 
 
 class FakeSID:
-    """A minimal SID device: one sample per clock call."""
+    """A minimal run-based SID device: one sample per 1000 cycles."""
 
-    def __init__(self, sampling_frequency=44100):
-        self.sampling_frequency = sampling_frequency
+    def __init__(self, sampling_hz=44100):
+        self.sampling_hz = sampling_hz
+        self.cycle = 0
         self.writes = []
-        self.clock_seconds = []
+        self.runs = []
 
-    def write_register(self, reg, val):
-        self.writes.append((reg, val))
-
-    def clock(self, delta: timedelta):
-        self.clock_seconds.append(delta.total_seconds())
-        return [len(self.writes) & 0x7FFF]
+    def run(self, writes, until):
+        self.writes.extend(map(tuple, writes))
+        self.runs.append(until)
+        count = (until - self.cycle) // 1000
+        self.cycle = until
+        return np.zeros(count, dtype=np.int16)
 
 
 def _frames():
     return [[(0, 0x11), (1, 0x22)], [(4, 0x33)]]
 
 
-def test_render_samples_clocking():
+def test_render_samples_places_writes_at_absolute_cycles():
     dev = FakeSID()
+    spacing = 43
     samples = render_samples(
         _frames(),
         cycles_per_frame=PAL_CYCLES_PER_FRAME,
         clock_frequency=PAL_CLOCK_HZ,
+        write_spacing=spacing,
         device=dev,
     )
-    assert dev.writes == [(0, 0x11), (1, 0x22), (4, 0x33)]
-    # 3 per-write clocks + one remainder clock per frame (2 frames) = 5 samples.
-    assert len(samples) == 5
-    assert len(dev.clock_seconds) == 5
+    frame = PAL_CYCLES_PER_FRAME
+    assert dev.writes == [
+        (0, 0, 0x11),
+        (spacing, 1, 0x22),
+        (frame, 4, 0x33),
+    ]
+    assert dev.runs == [2 * frame]
+    assert len(samples) == 2 * frame // 1000
+
+
+def test_render_samples_overlong_frame_extends_time():
+    dev = FakeSID()
+    render_samples(
+        [[(0, 1)] * 5, []],
+        cycles_per_frame=100,
+        clock_frequency=PAL_CLOCK_HZ,
+        write_spacing=40,
+        device=dev,
+    )
+    assert dev.runs == [300]
+    assert [w[0] for w in dev.writes] == [0, 40, 80, 120, 160]
+
+
+def test_render_samples_batches_frames_per_run():
+    dev = FakeSID()
+    nframes = audio_mod.FRAMES_PER_RUN * 2 + 1
+    render_samples(
+        [[(0, 1)]] * nframes,
+        cycles_per_frame=1000,
+        clock_frequency=PAL_CLOCK_HZ,
+        device=dev,
+    )
+    assert len(dev.runs) == 3
+    assert dev.runs[-1] == nframes * 1000
+
+
+def test_render_samples_matches_manual_pylibresidfp_run():
+    frames = [[(0, 0x0F), (4, 0x41), (1, 0x20)], [], [(4, 0x40)], [(24, 0x0F)] * 3]
+    cpf, spacing = 19656, 43
+    got = render_samples(
+        frames,
+        model="6581",
+        sampling_frequency=44100,
+        cycles_per_frame=cpf,
+        clock_frequency=PAL_CLOCK_HZ,
+        write_spacing=spacing,
+    )
+    sid = SID("6581", PAL_CLOCK_HZ, 44100.0, "resample")
+    writes = [
+        (f * cpf + i * spacing, reg, val)
+        for f, frame in enumerate(frames)
+        for i, (reg, val) in enumerate(frame)
+    ]
+    want = sid.run(writes, len(frames) * cpf)
+    assert got.dtype == np.int16
+    assert np.array_equal(got, want)
+    assert np.any(got)
+
+
+def test_render_is_deterministic():
+    kwargs = dict(
+        model="8580",
+        cycles_per_frame=PAL_CYCLES_PER_FRAME,
+        clock_frequency=PAL_CLOCK_HZ,
+    )
+    frames = [[(24, 15), (4, 0x21), (1, 0x30)], [(4, 0x20)]] * 3
+    assert np.array_equal(
+        render_samples(frames, **kwargs), render_samples(frames, **kwargs)
+    )
+
+
+def test_default_device_rates():
+    dev = default_device("8580")
+    assert dev.sampling_hz == audio_mod.DEFAULT_SAMPLING_HZ
+    assert dev.clock_hz == PAL_CLOCK_HZ
+    dev = default_device("6581", 22050, 1022727.0)
+    assert (dev.sampling_hz, dev.clock_hz) == (22050.0, 1022727.0)
 
 
 def test_render_samples_bad_model():
@@ -68,7 +145,7 @@ def test_render_samples_bad_model():
 
 
 def test_render_wav(tmp_path):
-    dev = FakeSID(sampling_frequency=22050)
+    dev = FakeSID(sampling_hz=22050)
     dst = tmp_path / "out.wav"
     path = render_wav(
         _frames(),
@@ -82,11 +159,11 @@ def test_render_wav(tmp_path):
         assert wav.getnchannels() == 1
         assert wav.getsampwidth() == 2
         assert wav.getframerate() == 22050
-        assert wav.getnframes() == 5
+        assert wav.getnframes() == 2 * PAL_CYCLES_PER_FRAME // 1000
 
 
-def test_default_device_requires_pyresidfp(monkeypatch):
-    monkeypatch.setitem(sys.modules, "pyresidfp", None)
+def test_default_device_requires_pylibresidfp(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pylibresidfp", None)
     with pytest.raises(AudioUnavailable):
         render_samples(
             _frames(),
@@ -95,8 +172,8 @@ def test_default_device_requires_pyresidfp(monkeypatch):
         )
 
 
-def test_default_device_public_accessor_requires_pyresidfp(monkeypatch):
-    monkeypatch.setitem(sys.modules, "pyresidfp", None)
+def test_default_device_public_accessor_requires_pylibresidfp(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pylibresidfp", None)
     with pytest.raises(AudioUnavailable):
         default_device("8580", 44100, PAL_CLOCK_HZ)
 
@@ -106,14 +183,8 @@ def test_default_device_bad_model():
         default_device("bogus")
 
 
-def test_default_device_private_alias_is_public():
-    # Back-compat: the old private name aliases the public accessor.
-    assert audio_mod._default_device is audio_mod.default_device
-
-
 def test_device_sampling_frequency_accessor():
-    dev = FakeSID(sampling_frequency=48000)
-    assert audio_mod.device_sampling_frequency(dev) == 48000.0
+    assert audio_mod.device_sampling_frequency(FakeSID(sampling_hz=48000)) == 48000.0
 
 
 def test_default_device_returns_device_with_sampling_frequency():
@@ -121,7 +192,7 @@ def test_default_device_returns_device_with_sampling_frequency():
     assert audio_mod.device_sampling_frequency(dev) > 0
 
 
-def test_render_with_real_pyresidfp(tmp_path):
+def test_render_with_real_pylibresidfp(tmp_path):
     dst = render_wav(
         _frames(),
         tmp_path / "real.wav",
@@ -152,11 +223,13 @@ def test_render_player_samples_uses_player_cadence():
     samples, sampling_frequency = audio_mod.render_player_samples(
         player, seconds=0.05, device=dev
     )
-    assert sampling_frequency == dev.sampling_frequency
-    # One frame per play_frame call, each contributing exactly one write.
+    assert sampling_frequency == dev.sampling_hz
     assert player.calls > 0
-    assert dev.writes == [(0, (i + 1) & 0xFF) for i in range(player.calls)]
-    assert len(samples) == len(dev.clock_seconds)
+    assert [w[1:] for w in dev.writes] == [
+        (0, (i + 1) & 0xFF) for i in range(player.calls)
+    ]
+    assert dev.runs[-1] == player.calls * PAL_CYCLES_PER_FRAME
+    assert len(samples) == player.calls * PAL_CYCLES_PER_FRAME // 1000
 
 
 def test_render_player_samples_default_cadence_without_attr():

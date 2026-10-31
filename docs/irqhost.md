@@ -79,7 +79,7 @@ devices into it and logs the machine's interrupt events as sidtrace rows.
   cycles. Writes to I/O land on their bus cycle, read-modify-write
   instructions writing the unmodified value first.
 - **SID** writes are logged when the value changes (as sidtrace logs them);
-  reads come from reSIDfp chips fed every write (`emu.SidReads`), so osc3, env3
+  reads come from pylibresidfp chips fed every write (`emu.SidReads`), so osc3, env3
   and the bus value of write-only registers match. Second and third SIDs map at
   their header addresses.
 

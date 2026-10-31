@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysidtracker"
-version = "0.53.1"
+version = "0.54.0"
 description = "Shared base for pure-Python C64 SID tracker parsers: PSID/RSID container, loaded-image model, and packed/relocating playroutine detection"
 readme = "README.md"
 # pydexomizer (a core dependency) requires Python >= 3.11.
@@ -26,7 +26,7 @@ classifiers = [
 # 6502/6510 MPU that decodes the NMOS illegal opcodes natively (stock py65 stubs
 # them as NOPs and silently mis-executes packed/crunched playroutines).
 # pydexomizer: native pure-Python exomizer decrunch (native_decrunch), the
-# init-free alternative unpack path. pyresidfp: the emulated SID every tracker's
+# init-free alternative unpack path. pylibresidfp: the emulated SID every tracker's
 # WAV render (pysidtracker.audio) drives -- core, not an extra, because rendering
 # audio is core functionality. vagrant-moses: the C64 machine model -- memory map,
 # banked bus, ROMs, the cycle-exact machine the interrupt host runs on, the KERNAL
@@ -38,7 +38,7 @@ classifiers = [
 dependencies = [
   "jennings>=0.8.0",
   "pydexomizer>=0.1",
-  "pyresidfp>=0.17",
+  "pylibresidfp>=0.1.0",
   "vagrant-moses[cpu]>=0.7.0",
   "numpy>=1.23",
   "scipy>=1.10",

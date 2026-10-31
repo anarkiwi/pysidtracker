@@ -1,9 +1,9 @@
 """Render a SID player (or write stream) through an emulated SID to WAV/samples.
 
-The emulated SID is `pyresidfp <https://pypi.org/project/pyresidfp/>`_, a core
-dependency. Any object exposing ``write_register(reg, value)``,
-``clock(timedelta) -> samples`` and a ``sampling_frequency`` attribute may be
-passed as ``device`` instead (e.g. a test double or a different emulator).
+The emulated SID is `pylibresidfp <https://pypi.org/project/pylibresidfp/>`_, a
+core dependency. Any object exposing ``run(writes, until) -> int16 samples``
+(``writes`` an ``(N, 3)`` array of absolute ``(cycle, reg, value)``) and a
+``sampling_hz`` attribute may be passed as ``device`` instead.
 
 :func:`render_player_wav` / :func:`render_player_samples` drive any
 :class:`~pysidtracker.player.MemPlayer` (the shared per-frame player surface)
@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import wave
 from array import array
-from datetime import timedelta
 from pathlib import Path
+from itertools import islice
 from typing import Iterable, Tuple
 
 import numpy as _np
@@ -30,42 +30,33 @@ from .errors import AudioUnavailable
 from .reglog import DEFAULT_WRITE_SPACING
 
 CHIP_MODELS = ("6581", "8580")
+DEFAULT_SAMPLING_HZ = 48000.0
+FRAMES_PER_RUN = 256
 
 
 def default_device(model: str, sampling_frequency=None, clock_frequency=None):
-    """Construct the default pyresidfp SID device for ``model``.
+    """Construct the default pylibresidfp SID device for ``model``.
 
     ``model`` is one of :data:`CHIP_MODELS`. ``sampling_frequency`` selects the
-    output rate (pyresidfp's own default when falsy). ``clock_frequency`` is
-    accepted for signature symmetry with the render helpers and forwarded to
-    pyresidfp when it supports it; it is optional and ignored otherwise. Use
-    :func:`device_sampling_frequency` to read back the device's actual rate.
+    output rate (:data:`DEFAULT_SAMPLING_HZ` when falsy) and ``clock_frequency``
+    the chip clock (the PAL system clock when falsy). Use
+    :func:`device_sampling_frequency` to read back the device's rate.
 
-    Raises :class:`~pysidtracker.errors.AudioUnavailable` if pyresidfp is not
+    Raises :class:`~pysidtracker.errors.AudioUnavailable` if pylibresidfp is not
     installed and ``ValueError`` for an unknown model.
     """
     if model not in CHIP_MODELS:
         raise ValueError(f"chip model must be one of {CHIP_MODELS}")
     try:
-        from pyresidfp import SoundInterfaceDevice
-        from pyresidfp.sound_interface_device import ChipModel
-    except ImportError as exc:  # pragma: no cover - pyresidfp is a core dependency
-        raise AudioUnavailable("pyresidfp is required to render audio") from exc
-    chip = {"6581": ChipModel.MOS6581, "8580": ChipModel.MOS8580}[model]
-    kwargs = {"model": chip}
-    if sampling_frequency:
-        kwargs["sampling_frequency"] = float(sampling_frequency)
-    if clock_frequency:
-        kwargs["clock_frequency"] = float(clock_frequency)
-    try:
-        return SoundInterfaceDevice(**kwargs)
-    except TypeError:  # pragma: no cover - older pyresidfp without clock kwarg
-        kwargs.pop("clock_frequency", None)
-        return SoundInterfaceDevice(**kwargs)
-
-
-# Back-compat private alias for any internal caller that imported the old name.
-_default_device = default_device
+        from pylibresidfp import SID
+    except ImportError as exc:
+        raise AudioUnavailable("pylibresidfp is required to render audio") from exc
+    return SID(
+        model,
+        clock_hz=float(clock_frequency or PAL.clock_hz),
+        sampling_hz=float(sampling_frequency or DEFAULT_SAMPLING_HZ),
+        method="resample",
+    )
 
 
 def resolve_device(
@@ -73,11 +64,11 @@ def resolve_device(
 ):
     """Return a render device, validating ``model`` and building the default.
 
-    Centralises the model-in-:data:`CHIP_MODELS` check plus default pyresidfp
+    Centralises the model-in-:data:`CHIP_MODELS` check plus default pylibresidfp
     device creation every leaf's ``audio.py`` duplicated. When ``device`` is
     given it is validated (``model``) and returned as-is; otherwise the default
     device is built at ``clock_frequency`` (which raises
-    :class:`~pysidtracker.errors.AudioUnavailable` if pyresidfp is missing).
+    :class:`~pysidtracker.errors.AudioUnavailable` if pylibresidfp is missing).
     Raises ``ValueError`` for an unknown ``model``.
     """
     if model not in CHIP_MODELS:
@@ -106,7 +97,7 @@ def frames_to_seconds(
 
 def device_sampling_frequency(device) -> float:
     """The output sampling frequency (Hz) of a rendered ``device``."""
-    return float(device.sampling_frequency)
+    return float(device.sampling_hz)
 
 
 def render_samples(
@@ -125,27 +116,29 @@ def render_samples(
     Each write is applied then the SID is clocked ``write_spacing`` cycles; any
     remaining cycles of the frame are clocked after the frame's last write.
     Returns signed-16-bit mono samples as a ``numpy.ndarray`` (int16) when numpy
-    is present, else a ``list``. ``device`` overrides the default pyresidfp SID.
+    is present, else a ``list``. ``device`` overrides the default pylibresidfp SID.
 
     Raises :class:`~pysidtracker.errors.AudioUnavailable` if the default backend
-    is needed and pyresidfp is missing, and ``ValueError`` for an unknown model.
+    is needed and pylibresidfp is missing, and ``ValueError`` for an unknown model.
     """
     if model not in CHIP_MODELS:
         raise ValueError(f"chip model must be one of {CHIP_MODELS}")
     if device is None:
         device = default_device(model, sampling_frequency, clock_frequency)
-    write_q = write_spacing / clock_frequency
-    frame_seconds = cycles_per_frame / clock_frequency
-    samples = array("h")
-    for writes in frame_iter:
-        remainder = frame_seconds
-        for reg, val in writes:
-            device.write_register(reg, val)
-            samples.extend(device.clock(timedelta(seconds=write_q)))
-            remainder -= write_q
-        if remainder > 0:
-            samples.extend(device.clock(timedelta(seconds=remainder)))
-    return _np.frombuffer(samples.tobytes(), dtype=_np.int16)
+    frames = iter(frame_iter)
+    base = int(getattr(device, "cycle", 0))
+    out = []
+    while chunk := list(islice(frames, FRAMES_PER_RUN)):
+        rows = [_np.asarray(list(w), dtype=_np.int64).reshape(-1, 2) for w in chunk]
+        count = _np.fromiter((len(r) for r in rows), _np.int64, len(rows))
+        ends = base + _np.cumsum(_np.maximum(cycles_per_frame, count * write_spacing))
+        starts = _np.concatenate(([base], ends[:-1]))
+        slot = _np.arange(count.sum()) - _np.repeat(_np.cumsum(count) - count, count)
+        cycles = _np.repeat(starts, count) + slot * write_spacing
+        writes = _np.column_stack([cycles, _np.concatenate(rows)])
+        out.append(device.run(writes, int(ends[-1])))
+        base = int(ends[-1])
+    return _np.concatenate(out).astype(_np.int16) if out else _np.empty(0, _np.int16)
 
 
 def write_wav(dst, samples, sampling_frequency: float) -> None:
@@ -216,7 +209,7 @@ def render_player_samples(
             PAL.cycles_per_frame
         )
     if clock_frequency is None:
-        clock_frequency = float(getattr(device, "clock_frequency", PAL.clock_hz))
+        clock_frequency = float(getattr(device, "clock_hz", PAL.clock_hz))
     nframes = seconds_to_frames(seconds, cycles_per_frame, clock_frequency)
     frames = (
         player.play_frame()
