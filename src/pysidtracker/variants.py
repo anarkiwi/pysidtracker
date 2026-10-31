@@ -238,7 +238,9 @@ def _executed_irq(image, subtune, ntsc, nframes, base, hi) -> List[int]:
     """The executed offsets of an IRQ tune, run for ``nframes`` frames."""
     from .irqhost import InterruptHost
 
-    host = InterruptHost(image, subtune, clock="NTSC" if ntsc else "PAL")
+    host = InterruptHost(
+        image, subtune, clock="NTSC" if ntsc else "PAL", backend="python"
+    )
     with _Tracer(host.machine.mpu, base, hi) as tracer:
         host.run(nframes * host.frame_cycles)
     return tracer.offsets
