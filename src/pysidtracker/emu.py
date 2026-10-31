@@ -7,6 +7,7 @@ readable registers, and :func:`observe_data_access` hooks the jennings engine.
 
 from __future__ import annotations
 
+import weakref
 from array import array
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -95,16 +96,38 @@ def observe_data_access(
     mpu,
     on_read: Optional[Callable[[int], None]] = None,
     on_write: Optional[Callable[[int, int], None]] = None,
+    reads=None,
+    writes=None,
 ) -> None:
-    """Route the engine's data ``LOAD``/``STORE`` ops (pcode ``rd``/``wr``) to callbacks.
+    """Route the engine's data loads and stores to callbacks.
 
-    Instruction fetches and stack pushes never reach the callbacks.
-    ``on_read(address)`` fires per byte read (value readable from the subject);
-    ``on_write(address, value)`` per byte written, masked. No restoration needed.
+    Instruction fetches and interrupt/subroutine stack traffic never reach the
+    callbacks. ``on_read(address)`` fires per byte read (value readable from the
+    subject); ``on_write(address, value)`` per byte written, masked. ``reads`` and
+    ``writes`` optionally limit the callbacks to those address sets. A native MPU
+    uses the core's own observer, which also skips ``PHA``/``PLA``/``PHP``/``PLP``
+    page-1 accesses; the Python engine reports those through its P-Code hook.
     """
     if on_read is None and on_write is None:
         return
-    engine = mpu._vm
+    if getattr(mpu, "native", False):
+        mpu.memory.observe_data_access(on_read, on_write, reads=reads, writes=writes)
+        return
+    if reads is not None and on_read is not None:
+        reads, read_cb = frozenset(reads), on_read
+
+        def on_read(addr):  # pylint: disable=function-redefined
+            if addr in reads:
+                read_cb(addr)
+
+    if writes is not None and on_write is not None:
+        writes, write_cb = frozenset(writes), on_write
+
+        def on_write(addr, value):  # pylint: disable=function-redefined
+            if addr in writes:
+                write_cb(addr, value)
+
+    engine = mpu._vm  # pylint: disable=protected-access
     base = type(engine)
     for known_base, wired_cls in _WIRED_VM.items():
         if base is wired_cls or base in wired_cls.__mro__:
@@ -125,13 +148,32 @@ def observe_data_access(
             "wlog",
         ):
             setattr(wired, attr, getattr(engine, attr))
-        mpu._vm = wired
-    wired._on_read = on_read
-    wired._on_write = on_write
+        mpu._vm = wired  # pylint: disable=protected-access
+    wired._on_read = on_read  # pylint: disable=protected-access
+    wired._on_write = on_write  # pylint: disable=protected-access
+
+
+_SUBJECTS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def sync_ram(mpu) -> None:
+    """Copy a native MPU's RAM back into the buffer it was wired over.
+
+    The native core copies the buffer in and owns the RAM from then on; code that
+    reads the buffer after a run calls this first. A no-op on the Python engine,
+    which runs on the buffer itself.
+    """
+    subject = _SUBJECTS.get(mpu)
+    if subject is not None:
+        subject[:] = memoryview(mpu.memory)
 
 
 def wire_mpu(
-    subject, illegal_opcodes: bool = True, sid_model: str = "6581", ntsc: bool = False
+    subject,
+    illegal_opcodes: bool = True,
+    sid_model: str = "6581",
+    ntsc: bool = False,
+    native: Optional[bool] = None,
 ):  # pylint: disable=unused-argument
     """A jennings MPU over the C64 address-space buffer ``subject``; return ``(mpu, mem)``.
 
@@ -141,17 +183,22 @@ def wire_mpu(
     (``$D41B``/``$D41C``) reads come from a ``sid_model`` reSIDfp chip fed the CPU's
     own SID writes (:class:`SidReads`). ``illegal_opcodes`` is kept for API
     compatibility; jennings decodes the NMOS illegals natively regardless.
+    ``native`` picks the engine as in :func:`vagrant_moses.cpu.flat_mpu` (default:
+    jennings' native core when installed); a native MPU owns a copy of ``subject``,
+    which :func:`sync_ram` refreshes.
 
     Raises:
       EmulatorUnavailable: jennings (a core dependency) is not installed.
     """
     subject[mm.CPU_DDR] = mm.DDR_DEFAULT
     try:
-        mpu, mem = flat_mpu(subject, ntsc=ntsc)
+        mpu, mem = flat_mpu(subject, ntsc=ntsc, native=native)
     except ImportError as exc:  # pragma: no cover - jennings is a core dependency
         raise EmulatorUnavailable(
             "jennings is required to run a tune: pip install pysidtracker"
         ) from exc
+    if mpu.native:
+        _SUBJECTS[mpu] = subject
     chip = SidReads(sid_model)
 
     def _on_sidwrite(addr, value):
@@ -173,6 +220,8 @@ def run_to_rts_until(mpu, mem, pc: int, acc: int, pcs, max_cycles: int) -> bool:
     already in ``pcs`` stops at once. True if one was entered, False if the
     routine returned or ``max_cycles`` ran out first.
     """
+    if getattr(mpu, "native", False):
+        return mpu.run_to_rts_until(pc, acc, pcs, max_cycles)
     start_sp = mpu.sp
     for byte in (0x00, 0x01):
         mem[0x0100 + mpu.sp] = byte
@@ -196,6 +245,8 @@ class SidWriteLog:
 
     Attaches to ``mpu`` with :func:`observe_data_access`; ``mirrors`` also logs
     the ``$20``-mirrored band, else only ``$D400-$D418``. :meth:`start` opens a call.
+    On a native MPU the address read last is the core's ``last_load`` (``None`` while
+    it is ``$0000``, the CPU port DDR, which no table is read from).
     """
 
     def __init__(self, mpu, mirrors: bool = True):
@@ -207,15 +258,23 @@ class SidWriteLog:
         }
         self.calls: List[List[SidWrite]] = []
         self.mpu, self._last = mpu, None
-        observe_data_access(mpu, on_read=self._read, on_write=self._write)
+        if getattr(mpu, "native", False):
+            observe_data_access(mpu, on_write=self._write, writes=self.registers)
+        else:
+            observe_data_access(
+                mpu, on_read=self._read, on_write=self._write, writes=self.registers
+            )
 
     def _read(self, addr: int) -> None:
         self._last = addr
 
     def _write(self, addr: int, value: int) -> None:
-        register = self.registers.get(addr)
-        if register is not None and self.calls:
-            self.calls[-1].append((register, self._last, self.mpu.pc, value))
+        if self.calls:
+            if getattr(self.mpu, "native", False):
+                self._last = self.mpu.memory.last_load or None
+            self.calls[-1].append(
+                (self.registers[addr], self._last, self.mpu.pc, value)
+            )
 
     def start(self) -> List[SidWrite]:
         """Open a new call's write list and return it."""
@@ -254,4 +313,5 @@ __all__ = [
     "run_to_rts",
     "run_to_rts_until",
     "set_iomap",
+    "sync_ram",
 ]

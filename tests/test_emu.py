@@ -3,6 +3,7 @@
 import pytest
 
 from pysidtracker import observe_data_access, run_to_rts, set_iomap, wire_mpu
+from pysidtracker.emu import sync_ram
 from pysidtracker.emu import SidReads
 from pysidtracker.errors import EmulatorUnavailable
 
@@ -22,6 +23,7 @@ def _run(code, *, a=0, x=0, y=0, sp=0xFF, p=0x20, mem_at=None, illegals=True):
     mpu, _ = wire_mpu(subject, illegal_opcodes=illegals)
     mpu.a, mpu.x, mpu.y, mpu.sp, mpu.p, mpu.pc = a, x, y, sp, p, CODE
     mpu.step()
+    sync_ram(mpu)
     return mpu, subject
 
 
