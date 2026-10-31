@@ -3,11 +3,16 @@
     python tools/bench_detect.py [TUNE.sid ...] [--threads N]
 
 Without arguments the synthetic tunes of ``tests/irqhost_tunes.py`` are used.
-``--threads N`` also runs detection of N tunes in N threads against one tune alone.
+Per tune the native engine's wall time is split into Python and native seconds from a
+separate cProfile run (Python is its total less the time inside ``jennings._core``) and
+the SID writes seen by the host callbacks are counted; the flat path has no read hook,
+so SID reads are not reported. ``--threads N`` also runs detection of N tunes in N threads against one tune alone.
 """
 
 import argparse
+import cProfile
 import os
+import pstats
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -49,6 +54,20 @@ def measure(data: bytes) -> dict:
     }
 
 
+def profile(data: bytes) -> dict:
+    """Python and native seconds and SID writes of one profiled run of the stages."""
+    run = cProfile.Profile()
+    run.enable()
+    measure(data)
+    run.disable()
+    stats = pstats.Stats(run)
+    core = sum(v[2] for k, v in stats.stats.items() if "jennings._core" in k[2])
+    writes = sum(
+        v[0] for k, v in stats.stats.items() if k[2] in ("_on_sidwrite", "_sid")
+    )
+    return {"python": stats.total_tt - core, "native": core, "writes": writes}
+
+
 def tunes(paths):
     """``(name, bytes)`` of each given file, else of each synthetic test tune."""
     if paths:
@@ -63,7 +82,10 @@ def bench_one(job) -> tuple:
     """``(name, native, stage seconds)`` for one ``(name, bytes, native)``, in this process."""
     name, data, native = job
     jmem.NATIVE = native and AVAILABLE
-    return name, native, measure(data)
+    stages = measure(data)
+    if native and AVAILABLE:
+        stages["profile"] = profile(data)
+    return name, native, stages
 
 
 def run(corpus, jobs: int) -> tuple:
@@ -107,12 +129,20 @@ def main(argv=None) -> None:
     args = parser.parse_args(argv)
     corpus = tunes(args.tunes)
     python, native = run(corpus, args.jobs)
-    print(f"{'tune':28}{'python s':>10}{'native s':>10}{'speedup':>9}")
+    print(
+        f"{'tune':28}{'python s':>10}{'native s':>10}{'speedup':>9}"
+        f"{'py s':>8}{'core s':>8}{'writes':>10}"
+    )
     total = [0.0, 0.0]
     for name, _ in corpus:
+        prof = native[name].pop("profile", {})
         py, nat = sum(python[name].values()), sum(native[name].values())
         total[0], total[1] = total[0] + py, total[1] + nat
-        print(f"{name:28}{py:10.3f}{nat:10.3f}{py / nat:9.1f}x")
+        print(
+            f"{name:28}{py:10.3f}{nat:10.3f}{py / nat:9.1f}x"
+            f"{prof.get('python', 0):8.3f}{prof.get('native', 0):8.3f}"
+            f"{prof.get('writes', 0):10d}"
+        )
     print(f"{'total':28}{total[0]:10.3f}{total[1]:10.3f}{total[0] / total[1]:9.1f}x")
     if args.threads:
         alone, many = thread_test(corpus[0][1], args.threads)

@@ -39,13 +39,22 @@ reports them. `SidWriteLog` observes SID writes only and reads `mem.last_load`.
   on) and rebuild the code as it stood at each instruction by replaying the recorded stores
   onto a copy of the memory; `playspec/tv.replay` runs natively between JSR/RTS opcodes with the
   instruction budget kept by cycle-bounded chunks.
-- `irqhost.InterruptHost` stays on `vagrant_moses.machine.Machine`.
+- `irqhost.InterruptHost` runs on `vagrant_moses.machine.Machine` with one `NativeSid` per chip. The
+  device logs writes natively and answers every register but `$19-$1C` itself; a read of those calls
+  back into Python, which feeds the chip's logged writes to a pyresidfp `SidReads` and returns its value.
+  `raw` is built lazily from the devices' changed-write rows and the event sink, merged by cycle
+  (stable, writes before a raise at the same cycle).
 
 ## Tools
 
 - `tools/diff_backends.py`: every result on both engines; exit status is the number of differences.
 - `tools/bench_detect.py`: detection, cadence and one second of oracle play per tune on both
-  engines; `--threads N` runs detection of N tunes in N threads.
+  engines, with the native run's Python/native split and SID write count; `--threads N` runs
+  detection of N tunes in N threads.
+- `tools/bench_irqhost.py`: `InterruptHost` wall time, x-realtime, Python/native split and SID
+  write and `$19-$1C` read counts per tune.
+- `tools/dump_irqhost_rows.py`: pickles `InterruptHost.raw` of every fixture tune, to diff two
+  implementations.
 
 ## Threads
 
@@ -53,18 +62,23 @@ reports them. `SidWriteLog` observes SID writes only and reads `mem.last_load`.
 
 | Workload | Threads | Processes |
 |---|---|---|
-| detection with init emulation | 3.7x | 6.0x |
-| `InterruptHost`, 3 emulated seconds | 0.3x | 6.3x |
-| native core, no callbacks | 7.2x | 7.1x |
-| pyresidfp clocking | 0.4x | 4.1x |
-| SIDId signature scan | 0.3x | 2.9x |
+| detection with init emulation, 20 per task | 0.3x | 5.1x |
+| cadence, 20 per task | 0.2x | 2.7x |
+| oracle play, 20 per task | 0.2x | 2.2x |
+| `InterruptHost`, 30 emulated seconds, no SID reads | 4.8x | 5.6x |
+| `InterruptHost`, 3 emulated seconds, rows collected | 0.7x | 2.4x |
+| `InterruptHost`, 3 emulated seconds, OSC3 reads | 0.6x | 5.8x |
+| native core, no callbacks | 5.2x | 4.3x |
+| pyresidfp clocking | 0.5x | 1.1x |
+| SIDId signature scan | 0.3x | 0.5x |
 
-The native core and the native `Machine` release the GIL while they run, and scale. pyresidfp
-does not release it, and every callback into Python (`_Sid.write`, subscriptions) takes it
-back, so a SID-heavy run on threads is slower than serial. Process pools stay the default;
-`--threads` (`sidid`, `survey find`, `survey triage`) runs the same work on a thread pool, with
-worker state initialised once and read-only. Jobs under a `deadline` are killed from outside
-and need processes.
+The native core and the native `Machine` release the GIL while they run, and scale when nothing
+calls back into Python. Event callbacks, the Python glue around detection, cadence and the oracle,
+building the row tuples of `InterruptHost.raw`, pyresidfp and the `$19-$1C` read callbacks hold the
+GIL, so the stages the tools run (detection, cadence, oracle, rows) are slower on threads than serial.
+Process pools therefore stay the default everywhere; `--threads` (`sidid`, `survey find`,
+`survey triage`) runs the same work on a thread pool, with worker state initialised once and
+read-only. Jobs under a `deadline` are killed from outside and need processes.
 
 Module state, for a thread pool: the `lru_cache` memos are thread-safe and idempotent, the
 assembler builds its MPU per call, and each task builds its own MPU or `Machine`.

@@ -593,3 +593,32 @@ def test_tune_player_without_an_entered_interrupt_is_unplayable(src):
 def test_tune_player_rejects_a_bare_prg():
     with pytest.raises(_TuneError, match="bare .prg"):
         _Tune(b"\x00\x10\x60")
+
+
+def test_chips_written_in_one_interrupt_are_logged_in_execution_order():
+    src = QUIET + """
+  LDA #<irq
+  STA $0314
+  LDA #>irq
+  STA $0315
+  LDA #$01
+  STA $D01A
+  CLI
+loop: JMP loop
+irq: INC $D019
+  INC count
+  LDA count
+  STA $D420
+  STA $D400
+  JMP $EA81
+count: .byte 0
+"""
+    host, rows = _run(src, version=3, second_sid=0x42)
+    seq = [(r.chip, r.value) for r in rows if r.chip is not None and r.reg == 0]
+    assert len(seq) >= 8
+    assert [chip for chip, _ in seq] == [1, 0] * (len(seq) // 2)
+    entries = _events(rows, "video_irq_entry")
+    first = [r.cycle for r in rows if r.chip is not None and r.reg == 0][:2]
+    assert entries[0] < first[0] < first[1]
+    assert [r.cycle for r in rows] == sorted(r.cycle for r in rows)
+    assert host.raw is host.raw

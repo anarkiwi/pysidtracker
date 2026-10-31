@@ -8,12 +8,14 @@ logs it; see ``docs/irqhost.md`` for what is modelled and how it is validated.
 
 from __future__ import annotations
 
+import operator
 from collections import Counter
+from itertools import chain
 from typing import Callable, Dict, Iterator, List, Optional, Tuple, Type, Union
 
 from vagrant_moses import memmap as mm
 from vagrant_moses import machine as vagrant_machine
-from vagrant_moses.machine import SOURCES, Machine, boot_cycle
+from vagrant_moses.machine import SOURCES, Machine, NativeSid, boot_cycle
 from vagrant_moses.roms import KERNAL_VECTORS
 
 from . import registers as reg
@@ -133,34 +135,20 @@ exception: .byte $02
 """
 
 
-class _Sid:
-    """A SID device on the machine's I/O page: a reSIDfp chip answering reads.
+_CYCLE = operator.itemgetter(0)
 
-    Each write that changes a register's value is logged to ``rows`` as sidtrace
-    logs it; the chip's queue is flushed once it holds ``0xFFFF`` writes.
-    """
 
-    __slots__ = ("rows", "chip", "reads", "last", "queue", "push")
+def _chip(model: str) -> NativeSid:
+    """A SID whose ``$19-$1C`` reads are answered by a reSIDfp chip fed its logged writes."""
+    reads = SidReads(model)
 
-    def __init__(self, rows: List[tuple], chip: int, model: str):
-        self.rows, self.chip = rows, chip
-        self.reads, self.last = SidReads(model), bytearray(0x20)
-        self.queue = self.reads.queue
-        self.push = self.queue.append
+    def on_read(cycle: int, register: int) -> int:
+        for at, offset, value in dev.drain_writes():
+            reads.write(at, offset, value)
+        return reads.read(cycle, register)
 
-    def read(self, cycle: int, register: int) -> int:
-        """The chip's ``register`` at ``cycle``."""
-        return self.reads.read(cycle, register)
-
-    def write(self, cycle: int, register: int, value: int) -> None:
-        """Log a changed value and queue the write to the chip."""
-        last = self.last
-        if value != last[register]:
-            self.rows.append((cycle, self.chip, register, value))
-            last[register] = value
-        self.push(cycle << 16 | register << 8 | value)
-        if len(self.queue) > 0xFFFF:
-            self.reads.flush(cycle)
+    dev = NativeSid(model, on_read)
+    return dev
 
 
 class _Anywhere:
@@ -310,11 +298,11 @@ class InterruptHost:
             {1: "6581", 2: "8580"}.get(header.flags >> shift & 3, model)
             for shift in (6, 8)[: len(extra)]
         ]
-        self.raw: List[tuple] = []
-        sids = {mm.SID_BASE: _Sid(self.raw, 0, models[0])}
-        sids.update(
-            {a & 0xFFE0: _Sid(self.raw, i, models[i]) for i, a in enumerate(extra, 1)}
-        )
+        self._raw: List[tuple] = []
+        self._events: List[Tuple[int, None, None, str]] = []
+        self._chips = [_chip(m) for m in models]
+        sids = {mm.SID_BASE: self._chips[0]}
+        sids.update({a & 0xFFE0: self._chips[i] for i, a in enumerate(extra, 1)})
         native = backend != "python" and vagrant_machine.NATIVE
         if trap is None or native:
             self.machine = Machine(ntsc, sids, cia_new, self._event, backend=backend)
@@ -334,7 +322,33 @@ class InterruptHost:
         self.framed: Optional[Tuple[str, int]] = None
 
     def _event(self, cycle: int, name: str) -> None:
-        self.raw.append((cycle, None, None, name))
+        self._events.append((cycle, None, None, name))
+
+    def _sync(self) -> None:
+        """Append what the chips and the event sink logged since the last sync to ``_raw``.
+
+        Each stream is in order and the streams are concatenated chips first, so the
+        stable sort by cycle breaks ties the way execution did: a raise at the cycle of a
+        write follows it, the write being the last cycle of its instruction.
+        """
+        new = []
+        for chip, dev in enumerate(self._chips):
+            new.append([(c, chip, r, v) for c, r, v in dev.drain_rows()])
+        new = [stream for stream in new + [self._events] if stream]
+        if len(new) > 1:
+            new = [sorted(chain.from_iterable(new), key=_CYCLE)]
+        if new:
+            self._raw.extend(new[0])
+        self._events = []
+
+    @property
+    def raw(self) -> List[tuple]:
+        """Every ``(cycle, chip, reg, value)`` logged so far, in execution order.
+
+        Events are ``(cycle, None, None, name)``.
+        """
+        self._sync()
+        return self._raw
 
     @property
     def cycle(self) -> int:
@@ -413,11 +427,12 @@ class InterruptHost:
         return self._frames(chip, source, cycles_per_frame)
 
     def _frames(self, chip: int, source: str, cpf: int) -> Iterator[List[int]]:
-        raw, state = self.raw, [0] * reg.SID_REG_COUNT
+        raw, state = self._raw, [0] * reg.SID_REG_COUNT
         pos, prev = 0, None
 
         def apply(until: int) -> None:
             nonlocal pos
+            self._sync()
             while pos < len(raw) and raw[pos][0] < until:
                 _, ch, register, value = raw[pos]
                 if ch == chip and register < reg.SID_REG_COUNT:
@@ -431,6 +446,7 @@ class InterruptHost:
             raise_at = None
             waited = 0
             while raise_at is None:
+                self._sync()
                 while scan < len(raw) and raise_at is None:
                     if raw[scan][1] is None and raw[scan][3] == source:
                         raise_at = raw[scan][0]
