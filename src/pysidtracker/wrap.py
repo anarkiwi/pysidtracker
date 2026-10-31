@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, List, Mapping, Optional, Sequence
 
-from .emu import PLAY_CYCLES, SidWriteLog, call_play
+import numpy as np
+
+from .emu import PLAY_CYCLES, SidWriteLog, call_play, run_until
 from .image import SidImage
 from .mos6502 import OP_JMP, OP_JSR
 from .oracle import boot_flat
@@ -96,17 +98,31 @@ def measure_wrap(
     entries = frozenset(entries)
     _, mpu, mem, _ = boot(image, song)
     log = SidWriteLog(mpu, mirrors=False)
+    flags: List[bool] = []
+    state = {"entered": None}
+    mem.subscribe_to_write(
+        list(log.registers), lambda *_: flags.append(state["entered"] is not None)
+    )
     for _ in range(2):
-        writes, inner = log.start(), []
-        depth, start, entered = enter(mpu, mem, play), mpu.processorCycles, None
+        writes, flags[:] = log.start(), []
+        depth, start = enter(mpu, mem, play), mpu.processorCycles
+        state["entered"] = None
         while _running(mpu, depth, start, max_cycles):
+            entered = state["entered"]
             if entered is None and mpu.pc in entries:
-                entered = mpu.sp
+                state["entered"] = mpu.sp
             elif entered is not None and mpu.sp > entered:
-                entered = None
-            count = len(writes)
+                state["entered"] = None
+            else:
+                left = max_cycles - (mpu.processorCycles - start)
+                stops, above = (
+                    (entries, depth - 1) if entered is None else ((), entered)
+                )
+                if run_until(mpu, stops, above, left) == "jam":
+                    break
+                continue
             mpu.step()
-            inner += [entered is not None] * (len(writes) - count)
+    inner = flags
     if any(inner):
         return Wrap(play, entries, song)
     bases = Counter(read - reg for reg, read, _, _ in writes if read is not None)
@@ -123,16 +139,31 @@ def count_entries(
 ) -> int:
     """How many times the play call after the first enters the target of its
     first ``jsr``/``jmp``, where that target is one of ``entries`` (else 1)."""
-    _, mpu, mem, _ = boot(image, song)
+    ram, mpu, mem, _ = boot(image, song)
     call_play(mpu, mem, play, max_cycles)
     depth, start = enter(mpu, mem, play, mpu.a), mpu.processorCycles
-    target, count = None, 0
+    jumps = frozenset(
+        np.flatnonzero(np.isin(np.frombuffer(ram, np.uint8), (OP_JSR, OP_JMP))).tolist()
+    )
     while _running(mpu, depth, start, max_cycles):
         pc = mpu.pc
-        count += pc == target
-        if target is None and mem[pc] in (OP_JSR, OP_JMP):
-            target = mem[pc + 1] | mem[pc + 2] << 8
-        mpu.step()
+        if pc in jumps:
+            break
+        left = max_cycles - (mpu.processorCycles - start)
+        if run_until(mpu, jumps, depth - 1, left) == "jam":
+            return 1
+    else:
+        return 1
+    target = ram[pc + 1] | ram[pc + 2] << 8
+    count = 0
+    mpu.step()
+    while _running(mpu, depth, start, max_cycles):
+        left = max_cycles - (mpu.processorCycles - start)
+        if run_until(mpu, (target,), depth - 1, left) == "pc":
+            count += 1
+            mpu.step()
+        elif mpu.pc != target:
+            break
     return max(count, 1) if target in entries else 1
 
 
@@ -158,7 +189,8 @@ class Wrapped(MemPlayer):
         depth, start = enter(mpu, bus, wrap.play), mpu.processorCycles
         while _running(mpu, depth, start, self.max_cycles):
             if mpu.pc not in wrap.entries:
-                mpu.step()
+                left = self.max_cycles - (mpu.processorCycles - start)
+                run_until(mpu, wrap.entries, depth - 1, left)
                 continue
             for addr, values in self._tick().items():
                 for offset, value in enumerate(values):
