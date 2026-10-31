@@ -19,8 +19,11 @@ from .errors import EmulatorUnavailable, SidError
 from .registers import SID_REG_COUNT, is_sid_reg
 
 # osc3/env3 depend only on voice 3 and its sync/ring source, voice 2.
-_CHIP_INPUTS = range(mm.SID_BASE + 0x07, mm.SID_BASE + 0x15)
-_CHIP_OUTPUTS = (mm.SID_BASE + 0x1B, mm.SID_BASE + 0x1C)
+_CHIP_INPUTS = range(0x07, 0x15)
+_CHIP_OUTPUTS = (0x1B, 0x1C)
+# The SID decodes only A0-A4, so its registers repeat every $20 through $D7FF.
+_SID_MIRRORS = range(mm.SID_BASE, mm.SID_BASE + 0x400)
+_SID_MASK = 0x1F
 
 
 class SidReads:
@@ -249,7 +252,8 @@ def wire_mpu(
 
     The machine is :func:`vagrant_moses.cpu.flat_mpu`: ``$00``/``$01``-banked
     sidplayfp ROM-less ROMs and VIC raster reads from the cycle counter. The CPU
-    port DDR is seeded to its reset value so ``$01`` banks. SID osc3/env3
+    port DDR is seeded to its reset value so ``$01`` banks, and an unset ``$01`` to
+    its reset banking (``$37``). SID osc3/env3
     (``$D41B``/``$D41C``) reads come from a ``sid_model`` reSIDfp chip fed the CPU's
     own SID writes (:class:`SidReads`). ``illegal_opcodes`` is kept for API
     compatibility; jennings decodes the NMOS illegals natively regardless.
@@ -261,6 +265,8 @@ def wire_mpu(
       EmulatorUnavailable: jennings (a core dependency) is not installed.
     """
     subject[mm.CPU_DDR] = mm.DDR_DEFAULT
+    if not subject[mm.CPU_PORT]:  # a bare buffer: the C64's reset banking
+        subject[mm.CPU_PORT] = mm.BANK_DEFAULT
     try:
         mpu, mem = flat_mpu(subject, ntsc=ntsc, native=native)
     except ImportError as exc:  # pragma: no cover - jennings is a core dependency
@@ -271,14 +277,21 @@ def wire_mpu(
         _SUBJECTS[mpu] = subject
     chip = SidReads(sid_model)
 
+    # The chip answers only while the CPU port maps I/O at $D000-$DFFF; otherwise
+    # the access is RAM (or char ROM), exactly as flat_mpu banks it.
     def _on_sidwrite(addr, value):
-        chip.write(access_cycle(mpu), addr - mm.SID_BASE, value)
+        reg = addr & _SID_MASK
+        if mem.io and reg in _CHIP_INPUTS:
+            chip.write(access_cycle(mpu), reg, value)
 
     def _on_sidread(addr):
-        return chip.read(access_cycle(mpu), addr - mm.SID_BASE)
+        reg = addr & _SID_MASK
+        if mem.io and reg in _CHIP_OUTPUTS:
+            return chip.read(access_cycle(mpu), reg)
+        return None
 
-    mem.subscribe_to_write(_CHIP_INPUTS, _on_sidwrite)
-    mem.subscribe_to_read(_CHIP_OUTPUTS, _on_sidread)
+    mem.subscribe_to_write(_SID_MIRRORS, _on_sidwrite)
+    mem.subscribe_to_read(_SID_MIRRORS, _on_sidread)
     return mpu, mem
 
 

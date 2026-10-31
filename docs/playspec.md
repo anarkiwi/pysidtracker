@@ -63,6 +63,7 @@ schedule {
       `$D41B`/`$D41C`, a raster poll). Each read is a separate read of memory that is
       never folded, shared or reordered; a store to it is an error. The spec says
       nothing about *when* in the call the read happens (see "Volatile inputs").
+    - `per_proc`: for a partly relocated player whose routines address the cell at different places. A proc `P` accesses the cell at its place with `L.<cell>` read as the binding's `<cell>@P` when that field exists (the rest of the place expression is unchanged), else at the cell's own place. Without such fields the program is unchanged.
     - `notes(lo|hi|word, K)`: the `ro` table holds the native note table; index `i` means standard note `i + K` (`K` a static, possibly negative). `lo`/`hi` mark a `u8[n]` as the low/high byte of the note word, `word` a `u16[n]`/`ptr[n]` as the whole word. Cells aliasing one table may declare different `K`.
 - `machine m [x in a..b] { cell/signal/control/proc/step }` declares a machine
   and its instances; `x` is the static instance index.

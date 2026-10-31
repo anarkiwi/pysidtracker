@@ -55,12 +55,18 @@ probe, so `pysidtracker snapshot` records it for every tune.
 ## `spec`
 
 `spec(model)` returns a `SpecBinding(spec, bind, image, entries=None, subtune=0,
-psid=True)`: the format's [playspec](playspec.md), its `bind(view, entry)` binder
+psid=True, sid=None)`: the format's [playspec](playspec.md), its `bind(view, entry)` binder
 (a binding dict, or `(variant, binding)`), the model's own tune `image` and
 optionally `entries(view)`, the modelled entries.
 
 `SidFormat.spec_player(model, *, notes=None, **kwargs)` builds the `SpecPlayer` of
-the model from it (load, init and play addresses from `model_metadata`; `kwargs` go to
-`SpecPlayer`) and raises `SidFormatError` without the hook. `notes` is a clock in Hz:
-the player then answers every read of a table the spec declares with `notes(...)`
-by the standard equal-tempered word ([Standard notes](playspec.md#standard-notes)).
+the model from it (load, init and play addresses from `model_metadata`) and raises
+`SidFormatError` without the hook. `sid` is the tune's container, the original `.sid`
+(`bytes` or `SidImage`): the player is built with `sid=` (a play-address-0 tune runs
+its real header on `InterruptPlayer`), `clock="PAL"`/`"NTSC"`, `ntsc=` and
+`sid_model=` from the header flags, as the format's own player does; without it
+nothing is derived. `kwargs` go to `SpecPlayer` and override the derived values.
+`notes` is a clock in Hz: the player then answers every read of a table the spec
+declares with `notes(...)` by the standard equal-tempered word
+([Standard notes](playspec.md#standard-notes)); `notes=True` is the tune's clock
+(`PAL_CLOCK_HZ` or `NTSC_CLOCK_HZ` by the header flags; PAL without a `sid`).

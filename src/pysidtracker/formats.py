@@ -25,6 +25,7 @@ from typing import (
     Sequence,
     Tuple,
     TYPE_CHECKING,
+    Union,
 )
 
 import numpy as np
@@ -34,7 +35,9 @@ from .bytegrammar import ByteGrammar, Stream
 from .cadence import cadence_info
 from .errors import SidFormatError, SidParseError
 from .image import SidImage
+from .header import parse_sid_header
 from .player import MemPlayer
+from .registers import NTSC_CLOCK_HZ, PAL_CLOCK_HZ, sid_model_for_flags
 
 if TYPE_CHECKING:  # playspec imports this module through testing
     from .playspec.player import Binder, SpecPlayer
@@ -70,7 +73,9 @@ class SpecBinding:
     optionally ``entries(view)``, the modelled entries (default: the play address).
 
     ``image`` is the model's own tune image, loaded at its ``load_addr`` and played
-    from subtune ``subtune``; ``psid`` is False for an RSID.
+    from subtune ``subtune``; ``psid`` is False for an RSID. ``sid`` is the tune's
+    container, the original ``.sid`` (bytes or :class:`~pysidtracker.image.SidImage`):
+    :meth:`SidFormat.spec_player` takes the tune's header, clock and SID model from it.
     """
 
     spec: Spec
@@ -79,6 +84,7 @@ class SpecBinding:
     entries: Optional[Callable[[bytes], Collection[int]]] = None
     subtune: int = 0
     psid: bool = True
+    sid: Union[bytes, SidImage, None] = None
 
 
 @dataclass(frozen=True)
@@ -140,12 +146,16 @@ class SidFormat:
         return self.grammar.listing(self.streams(model))
 
     def spec_player(
-        self, model: Any, *, notes: Optional[int] = None, **kwargs
+        self, model: Any, *, notes: Union[int, bool, None] = None, **kwargs
     ) -> SpecPlayer:
         """A :class:`~pysidtracker.playspec.SpecPlayer` of ``model`` from its ``spec``.
 
-        ``notes`` is a clock in Hz: the player then reads the standard note words
-        wherever the spec declares a note table. ``kwargs`` go to the player.
+        With the binding's ``sid`` the player gets that container (a play-address-0
+        tune runs its real header), its ``clock`` (``"PAL"`` / ``"NTSC"``), ``ntsc``
+        and ``sid_model`` from the header flags. ``notes`` is a clock in Hz: the
+        player then reads the standard note words wherever the spec declares a note
+        table; ``True`` is the tune's clock (PAL without a ``sid``). ``kwargs`` go to
+        the player and override the derived ones.
 
         Raises:
           SidFormatError: the format has no ``spec`` hook.
@@ -158,6 +168,26 @@ class SidFormat:
             raise SidFormatError(f"format {self.name!r} has no playspec")
         binding = self.spec(model)
         _name, _author, _released, load, init, play = self.model_metadata(model)
+        derived: Dict[str, Any] = {}
+        ntsc = False
+        if binding.sid is not None:
+            sid = binding.sid
+            header = (
+                sid.header
+                if isinstance(sid, SidImage)
+                else parse_sid_header(bytes(sid))
+            )
+            derived["sid"] = sid
+            if header is not None:
+                ntsc = header.is_ntsc
+                derived.update(
+                    clock="NTSC" if ntsc else "PAL",
+                    ntsc=ntsc,
+                    sid_model=sid_model_for_flags(header.flags),
+                )
+        kwargs = {**derived, **kwargs}
+        if notes is True:
+            notes = NTSC_CLOCK_HZ if kwargs.get("ntsc", ntsc) else PAL_CLOCK_HZ
         return SpecPlayer(
             binding.spec,
             binding.image,

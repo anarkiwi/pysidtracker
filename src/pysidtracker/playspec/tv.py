@@ -369,6 +369,16 @@ def validate(
     volatile = {a for c in program.cells if "volatile" in c.attrs for a in c.extent()}
     cpu = Machine6502(bytes(image), operands, solver, mem0, volatile)
     regs = entry_registers(dict(registers or {}))
+    env = {}
+    for name, w in program.inputs.items():
+        key = name[4:].upper()
+        reg = regs[REGS[key]] if key in REGS else regs[FLAGS[key]]
+        env[name] = reg != 0 if w == 1 else reg
+    # added before the run so that control() prunes paths contradicting them
+    solver.add(*[_truth(check_property(a, mem0, env=env)) for a in program.assumes])
+    solver.add(
+        *[_truth(f(mem0, {r: regs[i] for r, i in REGS.items()})) for f in assume]
+    )
     reads, read_log = volatile_log() if volatile else (None, None)
     start = Path(z3.BoolVal(True), dict(regs), mem0, pc, reads=reads, read_log=read_log)
     end = cpu.run(start, budget, stop)
@@ -376,15 +386,6 @@ def validate(
         if end is not None:
             raise TVError(f"a path returns without reaching ${stop:04x}")
         end = cpu.resumed
-    env = {}
-    for name, w in program.inputs.items():
-        key = name[4:].upper()
-        reg = regs[REGS[key]] if key in REGS else regs[FLAGS[key]]
-        env[name] = reg != 0 if w == 1 else reg
-    solver.add(*[_truth(check_property(a, mem0, env=env)) for a in program.assumes])
-    solver.add(
-        *[_truth(f(mem0, {r: regs[i] for r, i in REGS.items()})) for f in assume]
-    )
     spec_state: State = step(program, mem0, env)
     for load in cpu.loads:
         # a constant address (a PLA/PLP/RTS pull) reads its slot on purpose
@@ -461,7 +462,7 @@ def _truth(term):
 
 
 def _memory(model, mem0) -> bytes:
-    """The counterexample's initial 64 KiB as the model assigns it."""
+    """The counterexample's initial memory as the model assigns it."""
     return bytes(_byte(model, z3.Select(mem0, a)) for a in range(0x10000))
 
 

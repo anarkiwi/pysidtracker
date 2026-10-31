@@ -9,7 +9,8 @@ import z3
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pysidtracker import SidParseError, irqhost
+from pysidtracker import NTSC_CLOCK_HZ, PAL_CLOCK_HZ, SidFormat, SidParseError, irqhost
+from pysidtracker.formats import SpecBinding
 from pysidtracker.asm6502 import assemble
 from pysidtracker.irqhost import InterruptPlayer
 from pysidtracker.testing import whole_song
@@ -44,7 +45,7 @@ BIND = {"a": 0x1000, "b": 0x1100, "c": 0x1200, "d": 0x00FB, "f": 1, "n": 3, "l":
 
 
 def mem64(**cells):
-    """A zeroed 64 KiB memory with ``cells`` (``0x1000=...`` style keys ``m1000``)."""
+    """A zeroed memory with ``cells`` (``0x1000=...`` style keys ``m1000``)."""
     mem = bytearray(0x10000)
     for key, value in cells.items():
         addr = int(key[1:], 16)
@@ -1143,3 +1144,125 @@ def test_parser_survives_an_unwritable_table_cache(monkeypatch):
         assert syntax._parser().parse("spec x;") is not None
     finally:
         syntax._parser.cache_clear()
+
+
+def _hosted_format(sid):
+    _, labels, code = _hosted_tune()
+    binding = SpecBinding(
+        parse(PLAY_SPEC),
+        lambda v, e: {"freq": 0x1300, "sid": 0xD400},
+        code,
+        entries=lambda view: {labels["play"]},
+        psid=False,
+        sid=sid,
+    )
+    model = type(
+        "Model",
+        (),
+        dict(
+            name="n",
+            author="a",
+            released="r",
+            load_addr=0x1000,
+            init_addr=labels["init"],
+            play_addr=0,
+        ),
+    )
+    return SidFormat("hosted", None, None, spec=lambda m: binding), model()
+
+
+def test_spec_player_runs_a_play_address_0_tune_on_its_real_header(monkeypatch):
+    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
+    data, labels, code = _hosted_tune()
+    fmt, model = _hosted_format(data)
+    by_hand = SpecPlayer(
+        parse(PLAY_SPEC),
+        code,
+        0x1000,
+        labels["init"],
+        0,
+        bind=lambda v, e: {"freq": 0x1300, "sid": 0xD400},
+        entries=lambda view: {labels["play"]},
+        psid=False,
+        sid=data,
+        clock="PAL",
+    )
+    frames = whole_song(40)
+    got = fmt.spec_player(model).render_grid(frames)
+    assert (
+        got == by_hand.render_grid(frames) == InterruptPlayer(data).render_grid(frames)
+    )
+    assert len({row[0] for row in got}) > 20
+
+
+def test_spec_player_clock_follows_the_tune_header(monkeypatch):
+    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
+    code, labels = assemble(HOSTED, 0x1000)
+    kwargs = dict(init=labels["init"], play=0, magic=b"RSID")
+    pal = build_psid(code, 0x1000, **kwargs)
+    ntsc = build_psid(code, 0x1000, flags=0b1000, **kwargs)
+
+    def hz(data, **overrides):
+        fmt, model = _hosted_format(data)
+        player = fmt.spec_player(model, **overrides)
+        player.render_grid(whole_song(3))
+        return player._hosted.host.clock_hz  # pylint: disable=protected-access
+
+    assert hz(pal) == PAL_CLOCK_HZ and hz(ntsc) == NTSC_CLOCK_HZ
+    assert hz(ntsc, clock="PAL") == PAL_CLOCK_HZ
+
+
+_MEM_LOOP = """
+count: LDX #0
+loop:  LDA $3000,X
+       BEQ done
+       INX
+       BNE loop
+done:  STX $1000
+       RTS
+"""
+_MEM_LOOP_SPEC = """
+spec t;
+layout { out: addr; }
+cell out: u8 @ L.out;
+machine m {
+  proc count() { out := 0; }
+  step { count(); }
+}
+schedule { m; }
+"""
+
+
+def test_translation_validation_assume_bounds_memory_driven_loop():
+    code, _ = assemble(_MEM_LOOP, 0x2000)
+    image = bytearray(0x10000)
+    image[0x2000 : 0x2000 + len(code)] = code
+    args = (parse(_MEM_LOOP_SPEC), {"out": 0x1000}, "m.count", bytes(image), 0x2000)
+    result = validate(
+        *args, budget=20, assume=[lambda mem, regs: z3.Select(mem, 0x3000) == 0]
+    )
+    assert result.proven, result.counterexample
+
+
+_PER_PROC_SPEC = """
+spec pp;
+layout { dpitch: addr; }
+cell dpitch: u8 @ L.dpitch per_proc;
+machine m {
+  proc a() { dpitch := 1; }
+  proc b() { dpitch := 2; }
+  step { a(); b(); }
+}
+schedule { m; }
+"""
+
+
+def test_per_proc_cell_addresses_follow_the_binding():
+    code, _ = assemble("LDA #1\nSTA $1000\nLDA #2\nSTA $1010\nRTS", 0x2000)
+    image = bytearray(0x10000)
+    image[0x2000 : 0x2000 + len(code)] = code
+    spec = parse(_PER_PROC_SPEC)
+    split = {"dpitch": 0x1000, "dpitch@b": 0x1010}
+    assert validate(spec, split, "m.step", bytes(image), 0x2000).proven
+    shared = {"dpitch": 0x1000}
+    assert not validate(spec, shared, "m.step", bytes(image), 0x2000).proven
