@@ -12,6 +12,7 @@ cells, plus its toolchain:
 | SMT transition relation, bounded checking | `smt.transition`, `smt.bmc` | `bmc SPEC --binding JSON --frames N` |
 | Translation validation against 6502 code | `tv.validate`, `tv.replay` | `tv TUNE --binder ... --routine ... --pc ...` |
 | Replace `native` hooks with spec statements | `unnative`, `equivalent` | `unnative SPEC TUNE --binder ... -o OUT` |
+| Reschedule SID writes into a canonical order | `outorder.reorder`, `outorder.check` | `reorder TUNES... [--order ORDER]` |
 
 pysidtracker ships the language and tooling only. Specs of particular players
 belong to their format packages, which bind a spec to a build's layout and run it
@@ -269,6 +270,60 @@ beside `SPEC` so `load` finds the base.
   by a variable, stores into its own code, loops without a bound, or is never reached by
   the schedule. Registers a hook leaves for its caller and stack-page bytes are not
   modelled, as the spec models neither.
+
+## Output order
+
+`outorder.reorder(program, order, memory=...)` rewrites a bound program so each call
+writes only the SID writes an order keeps, in that order, with the values the original
+call would have left. An order lists slots: `name` is a register's last write in the
+call, `name:2` the one before it, `voice(...)` repeats a list per voice and
+`interleave(...)` runs it register by register, e.g. the default
+`fc_lo,fc_hi,res_filt,mode_vol,voice(ad,sr,ctrl:2,ctrl,freq_lo,freq_hi,pw_lo,pw_hi)`.
+`outorder.kept(writes, slots)` projects a call's writes the same way.
+
+The transform:
+1. **Inline** the procs and **nest** each lowered `return` guard into the arm of the
+   branch that does not return.
+2. **Fix** fixed-address reads of `ro` and `operand` bytes that no bounded store reaches
+   to their bytes in the bound `memory` (a relocated operand addressing the SID becomes a
+   constant address).
+3. **Promote** frame-local cells to variables: a constant-address cell no path reads
+   before storing it in the call, outside the SID, volatile cells, `observed` intervals and
+   bounded indexed accesses. Staging buffers written and copied out in the same call (a
+   shadow register block, zero-page temporaries, self-modified operands used as scratch)
+   become variables.
+4. **Instrument** every SID store as an assignment of the register's output variable and
+   written flag (shifting into the `:2` pair first) and every SID read as the output
+   variable where written.
+5. **Place** each slot's flush, `if written: store(register, output)`, at the earliest
+   statement boundary after which no store to its register follows and the slots before
+   it are flushed, inside an arm of a branch where that falls before the arm's end, and
+   before each `finish`. Every path flushes every slot once, in order (`flush_order`).
+6. **Forward** values: constants, copies and single-use expressions propagate to their
+   uses under the conditions known to hold in each arm; at a join, a variable assigned in
+   either arm becomes an `ite` on a snapshot of the condition.
+7. **Eliminate** dead assignments and empty branches.
+
+An output variable left after step 7 is a buffer the order forces: its value depends on
+state the call changes before the slot can be flushed, because a register earlier in the
+order is stored later in the call (`Reordered.staged`). GoatTracker 2's AD and SR are
+the common case: the new note's instrument writes them, a pattern row read later in the
+same call may change the instrument before a hard restart rewrites them, and the AD
+slot must follow that rewrite. `OrderError` refuses what cannot be rescheduled: `native`
+code, a store through an unbounded pointer, and a non-constant SID access.
+
+`SpecPlayer(..., transform=f)` runs `f(program, view)` on each bound program, so a
+format's player plays the reordered spec. `outorder.compare(make, order, frames)` plays
+a tune both ways and compares the register grid and each call's writes against the kept
+writes of the original's; `pysidtracker playspec reorder TUNES...` does it over tunes
+(`.sid` files or a `.csv` with a `path` column) with the installed formats.
+
+`outorder.check(original, result)` proves a result with the solver: from any memory and
+control state, the reordered call writes the original's kept writes in order (both
+logged into variables) and leaves the same memory and controls outside the SID and the
+promoted cells. Its premises: the fixed bytes hold their bound values, and no read
+through an unbounded pointer (a stream over song data) reads a promoted cell or the
+SID; promotion assumes the same of such reads.
 
 ## Proof tooling
 

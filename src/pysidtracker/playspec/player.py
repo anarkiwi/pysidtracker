@@ -76,6 +76,9 @@ class SpecPlayer(EmuPlayer):
     cell takes its value from it instead of the bus, so a run can be fed the values
     the 6502 read in the same call (:attr:`~pysidtracker.oracle.EmuPlayer.reads`).
 
+    ``transform(program, view)`` maps each lowered program before it is compiled, given
+    the memory it is bound in (e.g. :func:`~pysidtracker.playspec.outorder.reorder`).
+
     A spec call advances no cycles, so with ``cycles_per_frame`` scheduling the
     player plays a call the real routine would have overrun and had dropped, and runs
     one call ahead from there.
@@ -98,6 +101,7 @@ class SpecPlayer(EmuPlayer):
         clock: Optional[str] = None,
         notes: Optional[int] = None,
         inputs: Optional[Callable[[int], int]] = None,
+        transform: Optional[Callable[[Program, bytes], Program]] = None,
         **kwargs,
     ):
         # pylint: disable=too-many-arguments
@@ -116,6 +120,7 @@ class SpecPlayer(EmuPlayer):
         self._sid, self._clock, self._raw = sid, clock, bytes(image)
         self._standard = notes
         self._inputs = inputs
+        self._transform = transform
         kwargs.setdefault("max_cycles", MAX_CYCLES)
         super().__init__(image, load, init, play, subtune, **kwargs)
 
@@ -150,6 +155,8 @@ class SpecPlayer(EmuPlayer):
             bound = self._bind(self.view(), entry)
             spec, binding = bound if isinstance(bound, tuple) else (self.spec, bound)
             program = elaborate(spec, binding, standard=self._standard)
+            if self._transform is not None:
+                program = self._transform(program, self.view())
             self._compiled[key] = (program, compile_program(program), controls(program))
         return self._compiled[key]
 
