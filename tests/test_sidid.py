@@ -90,3 +90,15 @@ def test_cli(cfg, tmp_path, capsys):
     assert "1 GoatTracker_V2.x" in out.err
     sidid.main([str(root / "A" / "both.sid"), "-m", "--player", "goat"] + base)
     assert capsys.readouterr().out == f"{root}/A/both.sid\tGoatTracker_V2.x\n"
+
+
+def test_threads_scan_matches_processes(cfg, tmp_path, capsys):
+    root = tmp_path / "hvsc"
+    root.mkdir()
+    (root / "gt.sid").write_bytes(build_psid(GT_CODE, 0x1000))
+    (root / "none.sid").write_bytes(build_psid(b"\x00", 0x1000))
+    out = {}
+    for mode in ([], ["--threads"]):
+        sidid.main([str(root), "--cfg", str(cfg), "--jobs", "2"] + mode)
+        out[bool(mode)] = capsys.readouterr().out
+    assert out[True] == out[False] and "GoatTracker_V2.x" in out[True]

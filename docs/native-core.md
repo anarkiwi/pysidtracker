@@ -43,3 +43,25 @@ reports them. `SidWriteLog` observes SID writes only and reads `mem.last_load`.
 - `tools/diff_backends.py`: every result on both engines; exit status is the number of differences.
 - `tools/bench_detect.py`: detection, cadence and one second of oracle play per tune on both
   engines; `--threads N` runs detection of N tunes in N threads.
+
+## Threads
+
+`tools/bench_threads.py` runs 16 tasks per workload on 8 workers. Speedup over one worker:
+
+| Workload | Threads | Processes |
+|---|---|---|
+| detection with init emulation | 3.7x | 6.0x |
+| `InterruptHost`, 3 emulated seconds | 0.3x | 6.3x |
+| native core, no callbacks | 7.2x | 7.1x |
+| pyresidfp clocking | 0.4x | 4.1x |
+| SIDId signature scan | 0.3x | 2.9x |
+
+The native core and the native `Machine` release the GIL while they run, and scale. pyresidfp
+does not release it, and every callback into Python (`_Sid.write`, subscriptions) takes it
+back, so a SID-heavy run on threads is slower than serial. Process pools stay the default;
+`--threads` (`sidid`, `survey find`, `survey triage`) runs the same work on a thread pool, with
+worker state initialised once and read-only. Jobs under a `deadline` are killed from outside
+and need processes.
+
+Module state, for a thread pool: the `lru_cache` memos are thread-safe and idempotent, the
+assembler builds its MPU per call, and each task builds its own MPU or `Machine`.
