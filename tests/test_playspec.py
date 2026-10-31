@@ -1242,3 +1242,27 @@ def test_translation_validation_assume_bounds_memory_driven_loop():
         *args, budget=20, assume=[lambda mem, regs: z3.Select(mem, 0x3000) == 0]
     )
     assert result.proven, result.counterexample
+
+
+_PER_PROC_SPEC = """
+spec pp;
+layout { dpitch: addr; }
+cell dpitch: u8 @ L.dpitch per_proc;
+machine m {
+  proc a() { dpitch := 1; }
+  proc b() { dpitch := 2; }
+  step { a(); b(); }
+}
+schedule { m; }
+"""
+
+
+def test_per_proc_cell_addresses_follow_the_binding():
+    code, _ = assemble("LDA #1\nSTA $1000\nLDA #2\nSTA $1010\nRTS", 0x2000)
+    image = bytearray(0x10000)
+    image[0x2000 : 0x2000 + len(code)] = code
+    spec = parse(_PER_PROC_SPEC)
+    split = {"dpitch": 0x1000, "dpitch@b": 0x1010}
+    assert validate(spec, split, "m.step", bytes(image), 0x2000).proven
+    shared = {"dpitch": 0x1000}
+    assert not validate(spec, shared, "m.step", bytes(image), 0x2000).proven

@@ -18,7 +18,7 @@ NOTEPART: "lo" | "hi" | "word"
 ctype: TYPE ("[" expr "]")?
 place: expr                    -> at
      | "(" expr "," expr ")"   -> split
-ATTR: "ro" | "out" | "operand" | "scratch" | "latched" | "volatile"
+ATTR: "ro" | "out" | "operand" | "scratch" | "latched" | "volatile" | "per_proc"
 
 machine: "machine" NAME ("[" NAME "in" expr ".." expr "]")? "{" _mitem* "}"
 _mitem: cell | signal | control | proc | step
