@@ -15,7 +15,7 @@ from pysidtracker.errors import AudioUnavailable
 
 
 class _FakeSID:
-    sampling_frequency = 44100
+    sampling_hz = 44100
 
 
 def test_resolve_device_passthrough():
@@ -29,12 +29,12 @@ def test_resolve_device_bad_model():
 
 
 def test_resolve_device_default_unavailable(monkeypatch):
-    """Without a pyresidfp backend, the default device is unavailable.
+    """Without a pylibresidfp backend, the default device is unavailable.
 
-    Simulates the missing extra by hiding ``pyresidfp`` from ``sys.modules``, so
+    Simulates the missing extra by hiding ``pylibresidfp`` from ``sys.modules``, so
     the fallback path is covered whether or not the extra is installed.
     """
-    monkeypatch.setitem(sys.modules, "pyresidfp", None)
+    monkeypatch.setitem(sys.modules, "pylibresidfp", None)
     with pytest.raises(AudioUnavailable):
         resolve_device(None, model="6581")
 

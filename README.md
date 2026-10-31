@@ -128,7 +128,7 @@ API.
   ([docs/native-fixtures.md](docs/native-fixtures.md)).
 - `audio` — `render_player_wav` / `render_player_samples` drive a `MemPlayer`
   (or any `play_frame()` player) straight to WAV through an emulated SID at the
-  render's clock, with optional tqdm progress (pyresidfp, a core dependency); the
+  render's clock, with optional tqdm progress (pylibresidfp, a core dependency); the
   lower-level `render_wav` / `render_samples` take a bare write stream, plus
   `resolve_device` / `seconds_to_frames`.
 - Writers — `SidHeader.to_bytes` / `write_psid` / `SidImage.to_prg` (the inverse
@@ -197,11 +197,11 @@ API.
 ## Install
 
 ```bash
-pip install pysidtracker   # core: jennings (init emulation), numpy, pyresidfp (WAV render), lark
+pip install pysidtracker   # core: jennings (init emulation), numpy, pylibresidfp (WAV render), lark
 ```
 
 All dependencies are core: jennings (detection runs a tune's 6502 init), pydexomizer
-(`native_decrunch` unpacks exomizer-packed images natively), pyresidfp (the
+(`native_decrunch` unpacks exomizer-packed images natively), pylibresidfp (the
 emulated SID the WAV render drives), vagrant-moses (the C64 machine model: memory
 map, banked bus, ROMs, the cycle-exact machine, the KERNAL host and media
 readers), numpy (sample buffers and the image anchor scan), and lark (the

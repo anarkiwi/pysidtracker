@@ -231,15 +231,18 @@ Ships in the wheel (pure stdlib + a lazy pytest import).
   returning parametrized `tune_id` / `tune_path` fixtures (pytest imported
   lazily).
 
-### `audio` — pyresidfp WAV render (`audio` extra)
+### `audio` — pylibresidfp WAV render
 
 `render_samples(frame_iter, *, model, sampling_frequency, cycles_per_frame,
 clock_frequency, write_spacing=16, device=None)` and `render_wav(...)` clock a
-per-frame `(reg, val)` write stream through an emulated SID one write at a time
-(so renders line up with `reglog`). `model` in `("6581", "8580")`. pyresidfp is
-imported lazily; a missing `audio` extra raises `AudioUnavailable`. Any object
-with `write_register` / `clock(timedelta)` / `sampling_frequency` may be passed
-as `device`.
+per-frame `(reg, val)` write stream through an emulated SID, each write at its
+absolute cycle (`frame_start + i * write_spacing`, so renders line up with
+`reglog`), many frames per `run` call. `model` in `("6581", "8580")`.
+pylibresidfp is imported lazily; a missing backend raises `AudioUnavailable`.
+A `device` is a pylibresidfp `SID` or any object with
+`run(writes, until) -> int16 ndarray` (`writes` an `(N, 3)` array of absolute
+`(cycle, reg, value)`) and `sampling_hz`; the earlier `write_register` /
+`clock(timedelta)` protocol is gone.
 
 `render_player_samples(player, *, seconds, ..., progress=False)` and
 `render_player_wav` drive a player's `play_frame()` through the same path; the
@@ -247,8 +250,8 @@ default device is built at the render's `clock_frequency` (an NTSC tune renders
 at the NTSC clock), and `progress` shows a tqdm bar over the frames.
 
 `default_device(model, sampling_frequency=None, clock_frequency=None)` is the
-public accessor dependents use to construct that default pyresidfp device (the
-old private `_default_device` remains as a thin alias for back-compat), and
+public accessor dependents use to construct that default pylibresidfp device
+(48000 Hz resampling at the render's clock), and
 `device_sampling_frequency(device)` reads back a device's output rate.
 
 ## 0.4.0 playroutine cadence and native decrunch

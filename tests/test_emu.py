@@ -188,21 +188,27 @@ def test_osc3_is_the_chip_s_own_sawtooth_at_the_read_cycle(model, osc3):
     assert mpu.a == osc3
 
 
-def test_sid_reads_replay_queued_writes_as_an_eager_chip_would():
-    from pyresidfp._pyresidfp import SID, ChipModel, SamplingMethod
+def test_sid_reads_match_a_manual_pylibresidfp_read():
+    from pylibresidfp import SID
 
     writes = [(10, 0x0F, 0x12), (300, 0x12, 0x11), (900, 0x0E, 0x80)]
     lazy = SidReads()
-    eager = SID(ChipModel.MOS6581, SamplingMethod.DECIMATE, 985248.0, 8000.0)
-    now = 0
     for cycle, register, value in writes:
         lazy.write(cycle, register, value)
-        eager.clock(cycle - now)
-        eager.write(register, value)
-        now = cycle
-    eager.clock(5000 - now)
-    assert lazy.read(5000, 0x1B) == eager.read(0x1B) != 0
-    assert lazy.read(5000, 0x1C) == eager.read(0x1C) != 0
+    eager = SID("6581", 985248.0, 8000.0)
+    want = eager.serve(writes, 5000, 0x1B), eager.serve([], 5000, 0x1C)
+    assert (lazy.read(5000, 0x1B), lazy.read(5000, 0x1C)) == want
+    assert all(want)
+
+
+def test_sid_reads_never_clock_backwards():
+    chip = SidReads()
+    chip.write(100, 0x12, 0x11)
+    chip.flush(500)
+    chip.write(200, 0x0E, 0x80)
+    chip.read(300, 0x1B)
+    assert chip.pending() == 0
+    chip.flush(100)
 
 
 def test_run_to_rts_honours_cycle_cap():

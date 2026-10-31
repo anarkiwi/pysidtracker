@@ -5,7 +5,7 @@
 
 Wall time comes from an unprofiled run. Python time comes from a second, cProfile'd
 run: its total less the time inside the machine's own ``run`` (the native cycle loop),
-so it holds the merge of the logs into ``raw``, the callbacks into Python, pyresidfp and the glue. Native is wall less
+so it holds the merge of the logs into ``raw``, the callbacks into Python, pylibresidfp and the glue. Native is wall less
 Python. SID writes and ``$19-$1C`` reads are counted at the chip; reads of the other
 registers are answered inside the native bus model and are not visible from Python.
 """

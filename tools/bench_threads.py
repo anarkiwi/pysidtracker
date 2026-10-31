@@ -3,7 +3,7 @@
     python tools/bench_threads.py [--workers 8]
 
 Shows which steps release the GIL (the native core, the native Machine) and which hold
-it (pyresidfp, the per-write callbacks, Python glue).
+it (pylibresidfp, the per-write callbacks, Python glue).
 """
 
 import argparse
@@ -80,14 +80,10 @@ def core(_):
 
 
 def chip(_):
-    """pyresidfp clocking one voice."""
-    from pyresidfp._pyresidfp import (  # pylint: disable=import-outside-toplevel
-        SID,
-        ChipModel,
-        SamplingMethod,
-    )
+    """pylibresidfp clocking one voice."""
+    from pylibresidfp import SID  # pylint: disable=import-outside-toplevel
 
-    sid = SID(ChipModel.MOS6581, SamplingMethod.DECIMATE, 985248.0, 8000.0)
+    sid = SID("6581", 985248.0, 8000.0)
     sid.write(0x18, 15)
     sid.write(0x04, 0x41)
     for _ in range(200):
