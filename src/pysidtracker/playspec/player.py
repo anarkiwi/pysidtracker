@@ -16,7 +16,10 @@ import struct
 from collections import Counter
 from typing import Callable, Collection, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 from jennings.devices.mpu6502 import MPU
+from vagrant_moses import memmap as mm
+from vagrant_moses.bus import banking
 
 from ..emu import live_ram, run_to_rts, run_until, set_iomap, wire_mpu
 from ..errors import SidParseError
@@ -24,6 +27,7 @@ from ..image import SidImage
 from ..irqhost import InterruptPlayer
 from ..oracle import ENTRY_SOURCES, PAL_FLAG, EmuPlayer
 from ..poweron import psid_init_bank, psid_play_bank
+from . import native as native_module
 from .ir import Program
 from .lower import elaborate
 from .pyexec import compile_program, controls
@@ -31,6 +35,8 @@ from .syntax import Spec
 from .validate import StreamValidator
 
 MAX_CYCLES = 8_000_000
+BAILS = 8
+BAIL_FRAMES = 20
 MIN_RAISES = 3
 _CPU_FIELDS = ("pc", "sp", "a", "x", "y", "p", "processorCycles")
 _FLAGS = {"c": 0x01, "z": 0x02, "i": 0x04, "d": 0x08, "v": 0x40, "n": 0x80}
@@ -124,6 +130,7 @@ class SpecPlayer(EmuPlayer):
         notes: Optional[int] = None,
         inputs: Optional[Callable[[int], int]] = None,
         transform: Optional[Callable[[Program, bytes], Program]] = None,
+        native: Optional[bool] = None,
         **kwargs,
     ):
         # pylint: disable=too-many-arguments
@@ -145,6 +152,11 @@ class SpecPlayer(EmuPlayer):
         self._standard = notes
         self._inputs = inputs
         self._transform = transform
+        self._fast = native_module.available() if native is None else native
+        self._core = None
+        self._registered: set = set()
+        self._bails = 0
+        self._played = 0
         kwargs.setdefault("max_cycles", MAX_CYCLES)
         super().__init__(image, load, init, play, subtune, **kwargs)
 
@@ -349,13 +361,6 @@ class SpecPlayer(EmuPlayer):
             return super().snapshot()
         return self._hosted.snapshot()
 
-    def render_grid(self, nframes: int) -> List[List[int]]:
-        if self._hosted is None:
-            return super().render_grid(nframes)
-        grid = self._hosted.render_grid(nframes)
-        self._require_entry()
-        return grid
-
     def _require_entry(self) -> None:
         """Raise if the hosted tune's interrupts have never reached a modelled entry."""
         if self.entry is not None:
@@ -371,6 +376,11 @@ class SpecPlayer(EmuPlayer):
             )
 
     def _frame(self) -> None:
+        if self._hosted is None and self._advance(1):
+            return
+        self._frame_python()
+
+    def _frame_python(self) -> None:
         self.writes = []
         if self._hosted is not None:
             self._hosted.play_frame()
@@ -380,6 +390,135 @@ class SpecPlayer(EmuPlayer):
             self._run(self.entry)
         else:
             self._call(self._play_addr)
+
+    def _bank_pages(self, bits: int) -> tuple:
+        """``(io, ROM pages)`` of the memory map under CPU port setting ``bits``."""
+        basic, kernal, chars, io = banking(bits)
+        roms = self._bus.roms
+        window = []
+        if basic:
+            window += [(0xA, mm.BASIC_BASE), (0xB, mm.BASIC_BASE)]
+        if chars and not io:
+            window.append((0xD, mm.CHARGEN_BASE))
+        if kernal:
+            window += [(0xE, mm.KERNAL_BASE), (0xF, mm.KERNAL_BASE)]
+        return io, [
+            (n, bytes(roms[base][n << 12 : (n + 1) << 12])) for n, base in window
+        ]
+
+    def _machine(self):
+        """The native core with every memory map and program built so far, mapped as the bus
+        now is, or None where a program is not one it runs."""
+        bus = self._bus
+        self._entries()
+        if self._core is None:
+            self._core = native_module.Core(
+                self._mem, self._play_addr, self.entry, self._max_cycles
+            )
+            self._registered = set()
+        core = self._core
+        try:
+            for bits, entries in list(self._entry_sets.items()):
+                if bits not in self._registered:
+                    core.add_bank(bits, *self._bank_pages(bits), sorted(entries))
+                    self._registered.add(bits)
+            for key, (program, _frame, state) in list(self._compiled.items()):
+                if key not in self._registered and key[0] in self._registered:
+                    core.add(key[0], key[1], *native_module.encode(program))
+                    if state:
+                        core.set_controls(key[0], key[1], state)
+                    self._registered.add(key)
+        except native_module.Unsupported:
+            self._fast, self._core = False, None
+            return None
+        core.select(bus.bits)
+        return core
+
+    def _remap(self) -> None:
+        """Bring the bus to the CPU port the native core left in RAM."""
+        bus = self._bus
+        bus.port_dir, bus.port_data = self._mem[0], self._mem[1]
+        bus.remap()
+
+    def _native_ok(self) -> bool:
+        """Whether this player's frames may run on the native core."""
+        return (
+            self._fast
+            and self._hosted is None
+            and self.validator is None
+            and self._inputs is None
+            and not self._record
+            and self.entry is not None
+            and getattr(self._mpu, "native", False)
+        )
+
+    def _advance(self, frames: int, out: Optional[bytearray] = None) -> bool:
+        """Play ``frames`` frames on the native core, each frame's 25 registers going to ``out``
+        (a frame Python must play is played by it); False if the core cannot play them.
+        """
+        if not self._native_ok():
+            return False
+        done = 0
+        mpu = self._mpu
+        while done < frames:
+            core = self._machine()
+            if core is None:
+                return self._fallback(frames, done, out)
+            core.set_cpu(
+                (mpu.pc, mpu.sp, mpu.a, mpu.x, mpu.y, mpu.p, mpu.processorCycles)
+            )
+            for (bits, entry), (_p, _f, state) in self._compiled.items():
+                if state:
+                    core.set_controls(bits, entry, state)
+            played, status, _why = core.run(
+                frames - done,
+                out if out is not None else bytearray(25 * (frames - done)),
+                done if out is not None else 0,
+            )
+            mpu.pc, mpu.sp, mpu.a, mpu.x, mpu.y, mpu.p, mpu.processorCycles = core.cpu()
+            for (bits, entry), (_p, _f, state) in self._compiled.items():
+                if state:
+                    state[:] = core.controls(bits, entry)
+            self._remap()
+            done += played
+            self._played += played
+            if status == 0:
+                if played:
+                    self.writes = core.writes()
+                break
+            if status == 2:
+                self._bails += 1
+                self._fast = (
+                    self._bails <= BAILS or self._bails * BAIL_FRAMES < self._played
+                )
+            self._frame_python()
+            if out is not None:
+                out[done * 25 : (done + 1) * 25] = bytes(self.snapshot())
+            done += 1
+            if not self._fast:
+                return self._fallback(frames, done, out)
+        return True
+
+    def _fallback(self, frames: int, done: int, out: Optional[bytearray]) -> bool:
+        """Play the frames from ``done`` on in Python."""
+        for index in range(done, frames):
+            self._frame_python()
+            if out is not None:
+                out[index * 25 : (index + 1) * 25] = bytes(self.snapshot())
+        return True
+
+    def render_grid(self, nframes: int) -> List[List[int]]:
+        if self._hosted is not None:
+            grid = self._hosted.render_grid(nframes)
+            self._require_entry()
+            return grid
+        if not nframes or not self._native_ok():
+            return super().render_grid(nframes)
+        out = bytearray(25 * nframes)
+        self._advance(nframes, out)
+        rows = np.frombuffer(out, dtype=np.uint8).reshape(nframes, 25).tolist()
+        self.regs, self._last_regs = list(rows[-1]), list(rows[-1])
+        return rows
 
     def _call(self, play: int, probe: bool = False) -> Optional[int]:
         """Run the play routine on the CPU, running the spec for each modelled call."""

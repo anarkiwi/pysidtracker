@@ -103,6 +103,16 @@ pysidtracker = ["data/*", "grammars/*.lark", "playspec/*.lark"]
 # The pytest plugin is a standalone top-level module (see [pytest11] above).
 py-modules = ["pysidtracker_pytest"]
 
+# Wheels carry the native call machine: `maturin build --release` (CI) or `maturin develop`.
+# The sdist builds with setuptools above and installs the pure-Python executor only.
+[tool.maturin]
+manifest-path = "crates/specvm-py/Cargo.toml"
+module-name = "pysidtracker._specvm"
+python-source = "src"
+python-packages = ["pysidtracker"]
+include = [{ path = "src/pysidtracker_pytest.py", format = "wheel" }]
+features = ["pyo3/extension-module"]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]

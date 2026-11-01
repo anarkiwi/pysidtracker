@@ -1,0 +1,11 @@
+.git
+.venv
+target
+**/__pycache__
+.tunecache
+.hypothesis
+.pytest_cache
+.tmp
+build
+dist
+*.egg-info

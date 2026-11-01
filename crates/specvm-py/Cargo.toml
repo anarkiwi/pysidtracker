@@ -1,0 +1,15 @@
+[package]
+name = "specvm-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "_specvm"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+specvm-core = { path = "../specvm-core" }
+pyo3 = { version = "0.30", features = ["abi3-py311"] }

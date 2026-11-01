@@ -76,7 +76,8 @@ API.
 - `playspec` — a DSL stating a playroutine losslessly as synchronous state machines
   over memory-mapped cells: Lark parser, static checks, `SpecPlayer` (runs a spec on
   the tune's post-init memory), z3 bounded checking and translation validation
-  against the 6502 code ([docs/playspec.md](docs/playspec.md)).
+  against the 6502 code ([docs/playspec.md](docs/playspec.md)); `SpecPlayer` runs natively
+  in Linux wheels ([docs/native-spec.md](docs/native-spec.md)).
 - `paths` / `faultloc` / `pathdiff` — per-frame code paths of two players (6502,
   a format's player or any `PySubject`, e.g. a lift) over a survey corpus, each
   divergence keyed on the branch where the executions first part, the minimum set
