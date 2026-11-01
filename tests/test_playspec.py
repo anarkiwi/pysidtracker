@@ -1324,3 +1324,50 @@ def test_per_proc_cell_addresses_follow_the_binding():
     assert validate(spec, split, "m.step", bytes(image), 0x2000).proven
     shared = {"dpitch": 0x1000}
     assert not validate(spec, shared, "m.step", bytes(image), 0x2000).proven
+
+
+HOSTED_HOOK = HOSTED.replace("  STA $D404\n  RTS\n", "").rstrip() + """
+play: LDA $1300
+  JMP hook
+tail: CLC
+  ADC #$03
+  STA $1300
+  STA $D400
+  LDA #$41
+  STA $D404
+  RTS
+hook: CMP #$40
+  BEQ away
+  JMP tail
+away: LDA #$00
+  STA $1300
+  STA $D400
+  RTS
+"""
+
+
+def test_hosted_native_hook_runs_the_tune_code(monkeypatch):
+    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
+    code, labels = assemble(HOSTED_HOOK, 0x1000)
+    data = build_psid(code, 0x1000, init=labels["init"], play=0, magic=b"RSID")
+    binding = {
+        "freq": 0x1300,
+        "sid": 0xD400,
+        "hook": labels["hook"],
+        "tail": labels["tail"],
+    }
+    player = SpecPlayer(
+        parse(NATIVE_SPEC),
+        code,
+        0x1000,
+        labels["init"],
+        0,
+        bind=lambda v, e: binding,
+        entries=lambda view: {labels["play"]},
+        psid=False,
+        sid=data,
+    )
+    frames = whole_song(60)
+    grid = player.render_grid(frames)
+    assert grid == InterruptPlayer(data).render_grid(frames)
+    assert 0 in {row[0] for row in grid[1:]} and len({row[0] for row in grid}) > 10
