@@ -134,7 +134,15 @@ def _tunes(paths) -> list:
 def _reorder(args) -> None:
     tunes = _tunes(args.tunes)
     tasks = [
-        (t, args.order, args.frames, args.subtune, args.prove, args.budget)
+        (
+            t,
+            args.order,
+            args.frames,
+            args.subtune,
+            args.prove,
+            args.budget,
+            args.proof_jobs,
+        )
         for t in tunes
     ]
     report, failed = {}, 0
@@ -199,6 +207,9 @@ def add_playspec_commands(parser) -> None:
     )
     cmd.add_argument(
         "--budget", type=float, default=300.0, help="seconds per call's proof"
+    )
+    cmd.add_argument(
+        "--proof-jobs", type=int, default=1, help="processes per call's proof"
     )
     cmd.set_defaults(func=_reorder)
 

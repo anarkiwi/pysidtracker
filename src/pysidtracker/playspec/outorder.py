@@ -1303,6 +1303,7 @@ def survey(
     subtune: Optional[int] = None,
     prove_ms: int = 0,
     budget_s: Optional[float] = None,
+    jobs: int = 1,
 ) -> dict:
     """:func:`compare` on a tune an installed format plays with a spec: the format, the
     verdict, and per program its staged variables, counts inlined and after, emitted
@@ -1330,7 +1331,13 @@ def survey(
         if prove_ms:
             program, memory, observed = r.source
             proof = prove(
-                program, order, memory=memory, observed=observed, timeout_ms=prove_ms
+                program,
+                order,
+                memory=memory,
+                observed=observed,
+                timeout_ms=prove_ms,
+                budget_s=budget_s,
+                jobs=jobs,
             )
             entry["proof"] = {
                 "holds": proof.holds,

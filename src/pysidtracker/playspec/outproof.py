@@ -7,6 +7,7 @@ program point; docs/playspec.md, "Proving a reordered call", states why they com
 
 from __future__ import annotations
 
+import os
 import resource
 import time
 from dataclasses import dataclass, field
@@ -17,20 +18,24 @@ from tqdm import tqdm
 
 from . import outorder as O
 from . import smt
+from ..jobs import imap
 from .emit import declared
-from .ir import Program, V, width
+from .ir import Op, Program, Rd, V, width
 
 
 class _Env(dict):
     """Variables of a fresh state: a free symbol for each name on first use."""
 
-    def __init__(self, widths: Dict[str, int]):
+    def __init__(self, widths: Dict[str, int], symbols: dict):
         super().__init__()
-        self.widths = widths
+        self.widths, self.symbols = widths, symbols
 
     def __missing__(self, name):
-        w = self.widths.get(name, 8)
-        value = z3.Bool(f"v_{name}") if w == 1 else z3.BitVec(f"v_{name}", w)
+        value = self.symbols.get(name)
+        if value is None:
+            w = self.widths.get(name, 8)
+            value = z3.Bool(f"v_{name}") if w == 1 else z3.BitVec(f"v_{name}", w)
+            self.symbols[name] = value
         self[name] = value
         return value
 
@@ -58,22 +63,80 @@ class Discharged:
     unchecked: int = 0
 
 
+THREAD_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+
+
+class _Evaluator(smt.Executor):
+    """An executor that builds the term of a pure expression once per values of the
+    memory and variables it reads, however many states and obligations ask."""
+
+    def __init__(self):
+        super().__init__()
+        self.memo: dict = {}
+        self.reads: dict = {}
+
+    def info(self, e):
+        """``(e, variable names, reads memory, pure)``: pure if no volatile read or
+        ``old``, so its term needs no path condition."""
+        found = self.reads.get(id(e))
+        if found is None:
+            nodes = list(O.walk(e))
+            found = self.reads[id(e)] = (
+                e,
+                tuple(sorted({n.n for n in nodes if isinstance(n, V)})),
+                any(isinstance(n, Rd) for n in nodes),
+                not any(isinstance(n, Op) and n.op in ("vol", "old") for n in nodes),
+            )
+        return found
+
+    def lazy(self, op, args, st):
+        if not all(self.info(a)[3] for a in args):
+            return super().lazy(op, args, st)
+        first = self.expr(args[0], st)
+        first = first if z3.is_bool(first) else first != 0
+        rest = [self.expr(a, st) for a in args[1:]]
+        if op == "ite":
+            return z3.If(first, *rest)
+        return (z3.And if op == "land" else z3.Or)(first, *rest)
+
+    def expr(self, e, st):
+        _e, names, memory, pure = self.info(e)
+        if not pure:
+            return super().expr(e, st)
+        env = st.env
+        key = (
+            id(e),
+            st.mem.get_id() if memory else 0,
+            *(env[n].get_id() for n in names),
+        )
+        term = self.memo.get(key)
+        if term is None:
+            term = self.memo[key] = super().expr(e, st)
+        return term
+
+
 class _Checker:
-    """One solver over fresh states, with the premises every point shares."""
+    """Fresh states, and a fresh solver for each query: a solver reused across queries
+    slows with every one it answers."""
+
+    TACTIC = z3.Then("simplify", "propagate-values", "solve-eqs", "simplify", "smt")
 
     def __init__(self, widths, ranges, fixed, timeout_ms: int):
         self.widths, self.ranges, self.fixed = widths, ranges, fixed
-        self.solver = z3.Solver()
-        self.solver.set("timeout", timeout_ms)
-        self.executor = smt.Executor()
+        self.timeout_ms = timeout_ms
+        self.executor = _Evaluator()
+        self.symbols: dict = {}
+        self.bounds: dict = {}
+        self.memory = z3.Array("M", smt.BV16, smt.BV8)
+        self.pinned = [z3.Select(self.memory, a) == v for a, v in fixed.items()]
 
     def state(self) -> smt.State:
         """A fresh state: free memory and variables."""
-        return smt.State(z3.Array("M", smt.BV16, smt.BV8), _Env(self.widths))
+        return smt.State(self.memory, _Env(self.widths, self.symbols))
 
     def copy(self, st: smt.State) -> smt.State:
         """``st`` with its own variable map."""
-        env = _Env(self.widths)
+        env = _Env(self.widths, self.symbols)
         env.update(st.env)
         return smt.State(st.mem, env)
 
@@ -87,18 +150,24 @@ class _Checker:
 
     def premises(self, st: smt.State) -> list:
         """The fixed bytes, and the value ranges of the variables ``st`` has used."""
-        out = [z3.Select(st.mem, a) == v for a, v in self.fixed.items()]
-        for name, value in list(st.env.items()):
+        out = list(self.pinned)
+        for name, value in st.env.items():
             if name in self.ranges and not z3.is_bool(value):
-                lo, hi = self.ranges[name]
-                out += [z3.UGE(value, lo), z3.ULE(value, hi)]
+                bound = self.bounds.get(name)
+                if bound is None:
+                    lo, hi = self.ranges[name]
+                    bound = self.bounds[name] = [z3.UGE(value, lo), z3.ULE(value, hi)]
+                out += bound
         return out
 
     def valid(self, premises: list, claims: list) -> Optional[bool]:
         """Whether ``premises`` imply ``claims`` (None: the solver gave up)."""
         if not claims:
             return True
-        answer = self.solver.check(*premises, z3.Not(z3.And(*claims)))
+        solver = self.TACTIC.solver()
+        solver.set("timeout", self.timeout_ms)
+        solver.add(*premises, z3.Not(z3.And(*claims)))
+        answer = solver.check()
         return None if answer == z3.unknown else answer == z3.unsat
 
     def obligation(self, item) -> Optional[bool]:
@@ -183,6 +252,27 @@ def _relevant(facts: dict, used: set, keys) -> dict:
     return out
 
 
+def _chunk(items, base, widths, ranges, fixed, timeout_ms, until):
+    """``(index, answer)`` of each obligation of ``items`` (numbered from ``base``) not
+    proved, then how many ``until`` left unchecked."""
+    checker = _Checker(widths, ranges, fixed, timeout_ms)
+    out = []
+    for at, item in enumerate(items):
+        if until is not None and time.monotonic() > until:
+            return out, len(items) - at
+        answer = checker.obligation(item)
+        if answer is not True:
+            out.append((base + at, answer))
+    return out, 0
+
+
+def _blocks(count: int, jobs: int):
+    """``[lo, hi)`` blocks of ``count`` obligations: one if ``jobs`` is 1, else several
+    per job so workers that finish early take another."""
+    size = count if jobs == 1 else max(1, -(-count // (jobs * 4)))
+    return [(lo, min(lo + size, count)) for lo in range(0, count, size)]
+
+
 def discharge(
     proof: list,
     widths: Dict[str, int],
@@ -193,24 +283,45 @@ def discharge(
     what: str = "obligations",
     progress: bool = False,
     until: Optional[float] = None,
+    jobs: int = 1,
 ) -> Discharged:
-    """Check every obligation in ``proof`` under the shared premises, those left when
-    the monotonic clock passes ``until`` counted unchecked."""
-    checker = _Checker(widths, ranges, fixed, timeout_ms)
-    out = Discharged(len(proof))
-    for index, item in enumerate(
-        tqdm(proof, desc=what, unit="ob", disable=not progress)
-    ):
-        if until is not None and time.monotonic() > until:
-            out.unchecked = len(proof) - index
-            return out
-        answer = checker.obligation(item)
+    """Check every obligation in ``proof`` under the shared premises over ``jobs``
+    processes, those left when the monotonic clock passes ``until`` counted unchecked.
+    """
+    out, found = Discharged(len(proof)), []
+    blocks = _blocks(len(proof), jobs)
+    tasks = [
+        (proof[lo:hi], lo, widths, ranges, fixed, timeout_ms, until)
+        for lo, hi in blocks
+    ]
+    if jobs > 1:
+        for var in THREAD_VARS:
+            os.environ.setdefault(var, "2")
+    with tqdm(total=len(proof), desc=what, unit="ob", disable=not progress) as bar:
+        results = (
+            ((i, *_chunk(*t)) for i, t in enumerate(tasks))
+            if jobs == 1
+            else (
+                (i, *value) if error is None else _raise(error)
+                for i, value, error in imap(_chunk, tasks, jobs)
+            )
+        )
+        for index, answers, unchecked in results:
+            bar.update(blocks[index][1] - blocks[index][0])
+            out.unchecked += unchecked
+            found += answers
+            if any(answer is False for _i, answer in answers):
+                break
+    for at, answer in sorted(found):
         if answer is None:
-            out.unknown.append(f"{what} {index}: {item[0]}")
-        elif not answer:
-            out.failed = f"{what} {index}: {item[0]} {item[2:4]}"
-            return out
+            out.unknown.append(f"{what} {at}: {proof[at][0]}")
+        elif out.failed is None:
+            out.failed = f"{what} {at}: {proof[at][0]} {proof[at][2:4]}"
     return out
+
+
+def _raise(error):
+    raise error
 
 
 def flushed_last(placed: list, slots) -> Optional[str]:
@@ -273,10 +384,12 @@ def prove(
     timeout_ms: int = 10_000,
     budget_s: Optional[float] = None,
     progress: bool = False,
+    jobs: int = 1,
 ) -> Proof:
     """Reorder ``program`` and prove the whole call of the result equal to the original
     on the kept writes, memory outside the SID and promoted cells, and controls, within
-    ``budget_s`` seconds if set (obligations left then stay open)."""
+    ``budget_s`` seconds if set (obligations left then stay open), over ``jobs``
+    processes."""
     start = time.monotonic()
     until = None if budget_s is None else start + budget_s
     stages: dict = {}
@@ -306,6 +419,7 @@ def prove(
             what=name,
             progress=progress,
             until=until,
+            jobs=jobs,
         )
         for name, ranges, fixed in (
             ("fix", {}, result.fixed),
@@ -315,7 +429,10 @@ def prove(
     holds = all(v is None for v in checks.values()) and not any(
         d.failed or d.unknown or d.unchecked for d in passes.values()
     )
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+    peak = max(
+        resource.getrusage(who).ru_maxrss // 1024
+        for who in (resource.RUSAGE_SELF, resource.RUSAGE_CHILDREN)
+    )
     return Proof(holds, checks, passes, time.monotonic() - start, peak)
 
 
