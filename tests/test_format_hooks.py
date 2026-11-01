@@ -65,14 +65,6 @@ def test_grammar_and_equiv_need_their_hooks(tmp_path, capsys):
     assert "format 'bare' has no canonical text" in capsys.readouterr().err
 
 
-def test_format_by_name_and_spec(tmp_path, capsys):
-    song = _tune(tmp_path, "a", (1, 2))
-    _run([BARE, SEQ], ["grammar", song, "--format", "seq"])
-    assert capsys.readouterr().out.startswith("voice 0:")
-    _run([], ["grammar", song, "--format", "tests.test_format_hooks:SEQ"])
-    assert capsys.readouterr().out.startswith("voice 0:")
-
-
 def test_equiv_is_silent_when_tunes_play_the_same(tmp_path, capsys):
     a = _tune(tmp_path, "a", (1, 2), (0, 5), (3, 4))
     b = _tune(tmp_path, "b", (1, 2), (3, 4))

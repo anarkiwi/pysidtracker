@@ -58,6 +58,8 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4",
     "pytest-xdist>=3",
+    # Fails the strain CI job when a test adds no coverage (pytest --strain).
+    "pyteastrainer>=0.2.1",
     # Property tests of the program-table automata.
     "hypothesis>=6",
     # Decompress the sidtrace oracle's zstd CSV traces (oracle comparison tests).
@@ -107,6 +109,9 @@ testpaths = ["tests"]
 # Oracle comparison tests need Docker + network; run them in a dedicated CI job
 # via ``-m oracle`` (they are excluded from the default coverage matrix run).
 addopts = "-ra -n auto -m 'not oracle and not exomizer and not roms'"
+# pyteastrainer: findings accepted today (native/python backend twins and
+# near-duplicate parametrize cases); only new redundancy fails ``--strain``.
+strain_baseline = "strain-baseline.json"
 markers = [
     "oracle: byte-exact comparison against the sidtrace Docker oracle",
     "exomizer: real exomizer round-trip (needs the exomizer cruncher; own CI job)",

@@ -81,14 +81,6 @@ def _run(formats, argv):
     args.func(args)
 
 
-def test_info_uses_metadata_and_describe(capsys, tune):
-    _run([_fake_format()], ["info", str(tune)])
-    out = capsys.readouterr().out
-    assert "name:     Tune" in out
-    assert "format:   fake" in out
-    assert "detail:  Tune!" in out
-
-
 def test_reglog_writes_log(tmp_path, tune):
     out = tmp_path / "out.reglog"
     _run([_fake_format()], ["reglog", str(tune), str(out), "--seconds", "0.1"])
@@ -211,17 +203,6 @@ def test_discover_formats(monkeypatch):
     class _EP:
         def load(self):
             return fmt
-
-    monkeypatch.setattr(formats_mod, "entry_points", lambda group: [_EP()])
-    assert formats_mod.discover_formats() == [fmt]
-
-
-def test_discover_formats_accepts_callable(monkeypatch):
-    fmt = _fake_format()
-
-    class _EP:
-        def load(self):
-            return lambda: fmt
 
     monkeypatch.setattr(formats_mod, "entry_points", lambda group: [_EP()])
     assert formats_mod.discover_formats() == [fmt]

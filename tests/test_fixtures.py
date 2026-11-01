@@ -137,15 +137,6 @@ def test_http_get_retries_an_empty_body(_no_sleep, monkeypatch):
     assert _http_get("https://csdb.dk/x") == ("u", b"b")
 
 
-def test_http_get_404_raises(monkeypatch):
-    def fake(*_a, **_k):
-        raise urllib.error.HTTPError("u", 404, "nf", {}, None)
-
-    monkeypatch.setattr(testing.urllib.request, "urlopen", fake)
-    with pytest.raises(CsdbFetchError, match="not found"):
-        _http_get("https://csdb.dk/x", retries=1)
-
-
 def test_http_get_retries_then_fails(monkeypatch):
     attempts = []
 

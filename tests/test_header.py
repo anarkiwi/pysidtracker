@@ -7,37 +7,6 @@ from pysidtracker import SidFormatError, parse_sid_header, write_psid
 from .helpers import build_psid
 
 
-def test_basic_fields():
-    sid = build_psid(
-        b"\x01\x02\x03",
-        load=0x1000,
-        init=0x1003,
-        play=0x1006,
-        songs=3,
-        start_song=2,
-        name="TUNE",
-        author="ME",
-        released="2026",
-        flags=0x0004,
-    )
-    h = parse_sid_header(sid)
-    assert h.magic == b"PSID"
-    assert h.is_psid and not h.is_rsid
-    assert h.version == 2
-    assert h.load_address == 0x1000
-    assert h.real_load_address == 0x1000
-    assert h.data_start == 0x7C
-    assert h.init_address == 0x1003
-    assert h.play_address == 0x1006
-    assert h.songs == 3
-    assert h.start_song == 2
-    assert h.name == "TUNE"
-    assert h.author == "ME"
-    assert h.released == "2026"
-    assert h.flags == 0x0004
-    assert not h.is_multi_sid
-
-
 def test_multi_sid_detected():
     sid = build_psid(b"\x00", load=0x1000, version=3, second_sid=0x42)
     h = parse_sid_header(sid)

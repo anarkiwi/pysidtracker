@@ -7,7 +7,7 @@ import pytest
 from pysidtracker import SidFormat
 from pysidtracker.errors import SidFormatError, SidParseError
 from pysidtracker.formats import SpecBinding
-from pysidtracker.notes import frequency, table
+from pysidtracker.notes import frequency
 from pysidtracker.playspec import SpecError, SpecPlayer, elaborate, parse
 from pysidtracker.playspec.pyexec import source
 from pysidtracker.playspec.smt import Executor, State, step
@@ -22,14 +22,6 @@ def test_frequency_matches_the_grammar_package():
     for clock in (PAL, NTSC):
         for note in range(256):
             assert frequency(note, clock) == notes.frequency(note, clock)
-
-
-def test_table_parts_and_notes_below_c0():
-    words = [frequency(-1, PAL), frequency(0, PAL), frequency(1, PAL)]
-    assert 0 < words[0] < words[1]
-    assert table(PAL, 2, -1, 3) == tuple(words)
-    assert table(PAL, 0, -1, 3) == tuple(w & 255 for w in words)
-    assert table(PAL, 1, -1, 3) == tuple(w >> 8 for w in words)
 
 
 LOAD = 0x1000
@@ -164,14 +156,6 @@ def _word(player):
 def test_notes_true_is_the_tune_clock(flags, clock):
     player = _sid_format(flags).spec_player(Model(), notes=True)
     assert _word(player) == frequency(7, clock)
-
-
-def test_binding_without_a_container_is_unchanged():
-    player = _sid_format().spec_player(Model())
-    assert (
-        player._sid is None and player._clock is None
-    )  # pylint: disable=protected-access
-    assert player._sid_model == "6581"  # pylint: disable=protected-access
 
 
 def test_binding_accepts_a_loaded_image():

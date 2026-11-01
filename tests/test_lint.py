@@ -71,6 +71,8 @@ _PUBLIC = [
     "SID_FILTER_LO",
     "SID_FILTER_HI",
     "SID_RES_FILT",
+    # Exercised only inside pytester sources (tests/test_testing_fixtures.py).
+    "make_tune_fixtures",
 ]
 
 

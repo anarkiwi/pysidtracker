@@ -28,6 +28,23 @@ jobs:
       - name: pytest + coverage (> 85%)
         run: pytest --cov=pysidtracker --cov-report=term-missing --cov-fail-under=85
 
+  strain:
+    # pyteastrainer: fail when a new test adds no coverage over the rest of the
+    # suite. Per-test branch coverage needs pytest-cov contexts; one Python is enough.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: pytest --strain (no new redundant tests)
+        run: pytest --cov=pysidtracker --cov=pysidtracker_pytest --cov-branch --cov-context=test --cov-fail-under=0 --strain
+
   oracle:
     # Byte-exact comparison of the jennings render against the sidtrace sidplayfp
     # oracle over real HVSC tunes. Never skipped: a failed HVSC download or

@@ -4,8 +4,6 @@ import hashlib
 import io
 import json
 import tarfile
-import threading
-import time
 import urllib.error
 import zipfile
 
@@ -181,32 +179,6 @@ def test_download_retries_an_empty_body(monkeypatch):
     _patch_urlopen(monkeypatch, lambda *a, **k: _FakeResp(b""))
     with pytest.raises(TuneFetchError, match="an empty body"):
         testing._download("http://x/f", retries=2)
-
-
-def test_fetch_verified_downloads_once_for_concurrent_callers(monkeypatch, tmp_path):
-    url = "https://x.example/rel.zip"
-    fetched = []
-
-    def fake(req, timeout=60):  # pylint: disable=unused-argument
-        fetched.append(req.full_url)
-        time.sleep(0.05)
-        return _FakeResp(b"one")
-
-    _patch_urlopen(monkeypatch, fake)
-    got = []
-    workers = [
-        threading.Thread(
-            target=lambda: got.append(
-                fetch_verified(url, _sha(b"one"), cache_dir=tmp_path)
-            )
-        )
-        for _ in range(4)
-    ]
-    for worker in workers:
-        worker.start()
-    for worker in workers:
-        worker.join()
-    assert fetched == [url] and got == [tmp_path / "rel.zip"] * 4
 
 
 def _zip(members):

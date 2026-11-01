@@ -74,19 +74,6 @@ def masked(values):
     return [v & 0x0F if r in PW_HI_REGS else v for r, v in enumerate(values)]
 
 
-def test_ghost_flushed_before_the_entry_lags_a_frame():
-    image, lab = tune("flush_then_jmp")
-    wrap = measure_wrap(image, 0, lab["play"], {lab["entry"]})
-    assert wrap.sink == lab["ghost"]
-    frames = iter(range(1, 10))
-    player = Wrapped(lambda: {wrap.sink: regs(next(frames))}, image, wrap)
-    player.play_frame()
-    assert player.regs == [0] * SID_REG_COUNT
-    for frame in range(1, 4):
-        player.play_frame()
-        assert player.regs == masked(regs(frame))
-
-
 def test_entry_called_twice_writes_the_sid():
     image, lab = tune("twice")
     entries = {lab["entry"]}

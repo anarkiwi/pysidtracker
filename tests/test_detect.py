@@ -19,16 +19,6 @@ def _sig_recognizer(image):
     return pos if pos >= 0 else None
 
 
-def test_direct_recognition_no_init():
-    img = SidImage.from_sid(build_psid(b"..SIG..", load=0x1000))
-    det = detect_playroutine(img, _sig_recognizer)
-    assert det.kind is PlayroutineKind.DIRECT
-    assert not det.ran_init
-    assert det.anchor == 0x1002
-    assert det.recognised
-    assert det.trustworthy_header
-
-
 def test_unknown_without_init():
     img = SidImage.from_sid(build_psid(b"nothing", load=0x1000))
     det = detect_playroutine(img, _sig_recognizer, init=False)

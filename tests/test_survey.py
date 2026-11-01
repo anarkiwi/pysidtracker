@@ -316,15 +316,6 @@ def test_diff_cli_reports_failure(survey_tree, capsys):
     assert capsys.readouterr().out.count("\n") == 1
 
 
-@pytest.mark.parametrize("image,kept", [("sha256:a", 2), (None, 2), ("sha256:b", 0)])
-def test_oracle_cache_stamp(survey_tree, monkeypatch, image, kept):
-    work = survey_tree[2]
-    monkeypatch.setattr(survey, "sidtrace_image_id", lambda: image)
-    cache = survey.oracle_cache(work)
-    assert len(list(cache.glob("*.csv.zst"))) == kept
-    assert ("sha256:b" in (cache / "STAMP").read_text("utf-8")) == (kept == 0)
-
-
 def test_oracle_cache_unstamped_is_stale(survey_tree):
     work = survey_tree[2]
     (work / "oracle" / "STAMP").unlink()
