@@ -628,7 +628,7 @@ def test_the_play_address_may_change_between_frames():
 
 
 def test_the_entries_of_the_last_frames_calls_are_recorded():
-    image, labels = tune("wrapped")
+    labels = tune("wrapped")[1]
     python, fast = player("wrapped", False), player("wrapped", True)
     fast.render_grid(whole_song(5))
     python.render_grid(whole_song(5))
