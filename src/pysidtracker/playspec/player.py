@@ -37,6 +37,18 @@ from .validate import StreamValidator
 MAX_CYCLES = 8_000_000
 BAILS = 8
 BAIL_FRAMES = 20
+HOOKS = (
+    "_run",
+    "_store",
+    "_frame_of",
+    "_native",
+    "_call",
+    "_instance",
+    "_entries",
+    "_frame",
+    "_frame_python",
+    "snapshot",
+)
 MIN_RAISES = 3
 _CPU_FIELDS = ("pc", "sp", "a", "x", "y", "p", "processorCycles")
 _FLAGS = {"c": 0x01, "z": 0x02, "i": 0x04, "d": 0x08, "v": 0x40, "n": 0x80}
@@ -154,6 +166,7 @@ class SpecPlayer(EmuPlayer):
         self._transform = transform
         self._fast = native_module.available() if native is None else native
         self._core = None
+        self._core_at = None
         self._registered: set = set()
         self._bails = 0
         self._played = 0
@@ -411,7 +424,10 @@ class SpecPlayer(EmuPlayer):
         now is, or None where a program is not one it runs."""
         bus = self._bus
         self._entries()
+        if self._core_at != (self._play_addr, self.entry):
+            self._core = None
         if self._core is None:
+            self._core_at = self._play_addr, self.entry
             self._core = native_module.Core(
                 self._mem, self._play_addr, self.entry, self._max_cycles
             )
@@ -440,6 +456,14 @@ class SpecPlayer(EmuPlayer):
         bus.port_dir, bus.port_data = self._mem[0], self._mem[1]
         bus.remap()
 
+    def _unhooked(self) -> bool:
+        """Whether no subclass or instance replaces a method the native core stands in for."""
+        cls = type(self)
+        return all(
+            getattr(cls, name) is getattr(SpecPlayer, name) and name not in vars(self)
+            for name in HOOKS
+        )
+
     def _native_ok(self) -> bool:
         """Whether this player's frames may run on the native core."""
         return (
@@ -450,6 +474,7 @@ class SpecPlayer(EmuPlayer):
             and not self._record
             and self.entry is not None
             and getattr(self._mpu, "native", False)
+            and self._unhooked()
         )
 
     def _advance(self, frames: int, out: Optional[bytearray] = None) -> bool:

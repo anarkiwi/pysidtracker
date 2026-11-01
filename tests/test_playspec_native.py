@@ -572,3 +572,56 @@ spin:
         )
         with pytest.raises(SidParseError, match="never reaches"):
             fast.render_grid(whole_song(2))
+
+
+class Doubling(SpecPlayer):
+    """A player whose stores to the first SID register are doubled."""
+
+    def _store(self, addr, value):
+        super()._store(addr, value * 2 & 0xFF if addr == SID else value)
+
+
+def doubling(use_native):
+    """A :class:`Doubling` player of the wrapped tune."""
+    image, labels = tune("wrapped")
+    return Doubling(
+        parse(PLAY),
+        image,
+        0x1000,
+        labels["init"],
+        labels["wrap"],
+        bind=lambda view, entry: {"freq": 0x1300, "sid": 0xD400, "rom": 0xA000},
+        entries=lambda view: {labels["play"]},
+        native=use_native,
+    )
+
+
+def test_a_subclass_replacing_a_hook_is_played_in_python():
+    python, fast = doubling(False), doubling(True)
+    assert fast.render_grid(whole_song(30)) == python.render_grid(whole_song(30))
+    assert fast._played == 0  # pylint: disable=protected-access
+
+
+def test_an_instance_replacing_a_hook_sees_every_call():
+    fast = player("wrapped", True)
+    entered = []
+    run = fast._run  # pylint: disable=protected-access
+
+    def trace(entry):
+        entered.append(entry)
+        return run(entry)
+
+    fast._run = trace  # pylint: disable=protected-access
+    fast.render_grid(whole_song(12))
+    assert len(entered) == 12 and fast._played == 0  # pylint: disable=protected-access
+
+
+def test_the_play_address_may_change_between_frames():
+    python, fast = player("wrapped", False), player("wrapped", True)
+    rows = []
+    for each in (python, fast):
+        grid = each.render_grid(whole_song(10))
+        each._play_addr = tune("wrapped")[1]["play"]  # pylint: disable=protected-access
+        rows.append(grid + each.render_grid(whole_song(10)))
+    assert rows[0] == rows[1]
+    assert cpu_state(fast) == cpu_state(python)
