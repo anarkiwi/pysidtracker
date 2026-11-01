@@ -10,7 +10,7 @@ use std::cell::Cell;
 use jennings_core::{run_until, Access, AddrSet, Bus, Cpu, FlatBus, FlatMemory, Hooks, Until};
 
 use crate::vm::{
-    chip_input, chip_output, port_read, Bail, Env, Flow, Native, Vm, REGISTERS, SID_BASE,
+    chip_input, chip_output, port_read, Bail, Env, Flow, Native, Routes, Vm, REGISTERS, SID_BASE,
 };
 
 pub const SID_REG_COUNT: usize = 25;
@@ -239,6 +239,9 @@ pub struct Machine {
     log: Vec<(u16, u8)>,
     pub sid: Vec<(u8, u8)>,
     saved: Vec<i64>,
+    routes: Routes,
+    /// The modelled entries the last frame's calls entered, in order.
+    pub entered: Vec<u16>,
 }
 
 impl Machine {
@@ -266,6 +269,8 @@ impl Machine {
             log: Vec::new(),
             sid: Vec::new(),
             saved: Vec::new(),
+            routes: Routes::default(),
+            entered: Vec::new(),
         }
     }
 
@@ -298,6 +303,11 @@ impl Machine {
             slot,
         });
         Ok(())
+    }
+
+    /// Sets where the stores of a build land: `(from, to, mask, forced bits)` and the SID copy.
+    pub fn set_routes(&mut self, ghost: Option<u16>, routes: &[(u16, Option<u16>, u8, u8)]) {
+        self.routes = Routes::new(ghost, routes);
     }
 
     /// Whether the memory map of port setting `bits` has been added.
@@ -376,6 +386,7 @@ impl Machine {
     fn frame(&mut self) -> Result<(), Bail> {
         self.log.clear();
         self.sid.clear();
+        self.entered.clear();
         let cpu = self.cpu.clone();
         let bits = self.bits;
         self.saved.clear();
@@ -413,6 +424,14 @@ impl Machine {
             return Err(Bail::Need(entry));
         }
         let (io, overlay, bits) = (bank.io, bank.overlay, self.bits);
+        self.entered.push(entry);
+        if let Some(ghost) = self.routes.ghost {
+            for i in 0..SID_REG_COUNT as u16 {
+                let to = SID_BASE as u16 + i;
+                self.log.push((to, self.mem.ram(to)));
+                self.mem.set_ram(to, self.mem.ram(ghost.wrapping_add(i)));
+            }
+        }
         let cpu = &self.cpu;
         let regs: [i64; REGISTERS] = [
             cpu.a as i64,
@@ -434,6 +453,7 @@ impl Machine {
             saved: None,
         };
         let mut env = Env {
+            routes: &self.routes,
             mem: &self.mem,
             io,
             overlay,
