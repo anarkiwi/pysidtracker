@@ -1499,8 +1499,8 @@ def compare(make, order, frames: int, base: int = SID, **options) -> Tuple:
 
 def census(result: Reordered) -> dict:
     """What a reordered program still uses: statement and expression forms, tables,
-    persistent and promoted cells, staging holds, SID registers per voice, loops and
-    self-counting cells."""
+    persistent and promoted cells, staging holds, SID registers per voice, loops,
+    self-counting cells and the object reactions by kind."""
     body, every = result.program.body, list(statements(result.program.body))
     ops = {
         n.op for s in every for e in stmt_exprs(s) for n in walk(e) if isinstance(n, Op)
@@ -1539,6 +1539,14 @@ def census(result: Reordered) -> dict:
         "song_registers": [r for r in sid if r >= 21],
         "loops": [s[3] for s in every if s[0] == "loop"],
         "counters": len(counters),
+        "objects": {
+            k: sum(
+                result.program.objects[s[1]].kind == k for s in every if s[0] == "obj"
+            )
+            for k in sorted(
+                {result.program.objects[s[1]].kind for s in every if s[0] == "obj"}
+            )
+        },
         "finish": any(s[0] == "finish" for s in every),
     }
 

@@ -711,3 +711,10 @@ def test_a_cursors_stream_is_validated_against_its_grammar_each_time_it_reads():
     validator = StreamValidator()
     call(mem.__getitem__, mem.__setitem__, [], validator.hook(prog, mem.__getitem__))
     assert list(validator.failures()) == [("tests.test_bytegrammar:TOY:seq", 0x2000)]
+
+
+def test_the_census_counts_the_object_reactions_a_reordered_program_keeps():
+    result = O.reorder(elaborate(parse(FULL), BINDING), O.ORDER)
+    census = O.census(result)
+    assert census["objects"] == {"counter": 1, "cursor": 1, "owner": 1, "walker": 2}
+    assert census["statements"]["obj"] == 5

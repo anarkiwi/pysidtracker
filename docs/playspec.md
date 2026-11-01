@@ -552,7 +552,7 @@ the register grid and each call's writes against the kept writes of the original
 `pysidtracker playspec reorder TUNES... [--prove MS] [--emit OUT]` does it over tunes
 (`.sid` files or a `.csv` with a `path` column) with the installed formats, proves each
 call (`--prove`, a per-query timeout) and writes the emitted specs.
-`outorder.census(result)` lists what a reordered program still uses.
+`outorder.census(result)` lists what a reordered program still uses, the [object reactions](#events-and-objects) by kind among it.
 
 `outorder.check(original, result)` states the claim as one solver query: from any
 memory and control state, the reordered call writes the original's kept writes in order
