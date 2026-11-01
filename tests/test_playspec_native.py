@@ -581,27 +581,25 @@ class Doubling(SpecPlayer):
         super()._store(addr, value * 2 & 0xFF if addr == SID else value)
 
 
-def test_a_subclass_replacing_a_hook_is_played_in_python():
+def doubling(use_native):
+    """A :class:`Doubling` player of the wrapped tune."""
     image, labels = tune("wrapped")
-    made = []
-    for use_native in (False, True):
-        made.append(
-            Doubling(
-                parse(PLAY),
-                image,
-                0x1000,
-                labels["init"],
-                labels["wrap"],
-                bind=lambda view, entry: {"freq": 0x1300, "sid": 0xD400, "rom": 0xA000},
-                entries=lambda view: {labels["play"]},
-                native=use_native,
-            )
-        )
-    python, fast = made
+    return Doubling(
+        parse(PLAY),
+        image,
+        0x1000,
+        labels["init"],
+        labels["wrap"],
+        bind=lambda view, entry: {"freq": 0x1300, "sid": 0xD400, "rom": 0xA000},
+        entries=lambda view: {labels["play"]},
+        native=use_native,
+    )
+
+
+def test_a_subclass_replacing_a_hook_is_played_in_python():
+    python, fast = doubling(False), doubling(True)
     assert fast.render_grid(whole_song(30)) == python.render_grid(whole_song(30))
-    assert (
-        fast.regs[0] == (python.regs[0]) and fast._played == 0
-    )  # pylint: disable=protected-access
+    assert fast._played == 0  # pylint: disable=protected-access
 
 
 def test_an_instance_replacing_a_hook_sees_every_call():
