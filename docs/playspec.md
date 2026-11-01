@@ -12,6 +12,7 @@ cells, plus its toolchain:
 | SMT transition relation, bounded checking | `smt.transition`, `smt.bmc` | `bmc SPEC --binding JSON --frames N` |
 | Translation validation against 6502 code | `tv.validate`, `tv.replay` | `tv TUNE --binder ... --routine ... --pc ...` |
 | Replace `native` hooks with spec statements | `unnative`, `equivalent` | `unnative SPEC TUNE --binder ... -o OUT` |
+| Reschedule SID writes into a canonical order, emit and prove | `outorder.reorder`, `emit.emit`, `outproof.prove` | `reorder TUNES... [--order ORDER] [--prove MS] [--emit OUT]` |
 
 pysidtracker ships the language and tooling only. Specs of particular players
 belong to their format packages, which bind a spec to a build's layout and run it
@@ -269,6 +270,150 @@ beside `SPEC` so `load` finds the base.
   by a variable, stores into its own code, loops without a bound, or is never reached by
   the schedule. Registers a hook leaves for its caller and stack-page bytes are not
   modelled, as the spec models neither.
+
+## Output order
+
+`outorder.reorder(program, order, memory=...)` rewrites a bound program so each call
+writes only the SID writes an order keeps, in that order, with the values the original
+call would have left. An order lists slots: `name` is a register's last write in the
+call, `name:2` the one before it, `voice(...)` repeats a list per voice and
+`interleave(...)` runs it register by register, e.g. the default
+`fc_lo,fc_hi,res_filt,mode_vol,voice(ad,sr,ctrl:2,ctrl,freq_lo,freq_hi,pw_lo,pw_hi)`.
+`outorder.kept(writes, slots)` projects a call's writes the same way.
+
+The transform:
+1. **Inline** the procs and **nest** each lowered `return` guard into the arm of the
+   branch that does not return.
+2. **Fix and unroll**: forward values (step 7) with each fixed-address read of a declared
+   byte replaced by its byte in the bound `memory`, and each loop whose condition is then
+   known unrolled, until no bounded store of the result reaches a byte so replaced (a
+   relocated operand addressing the SID, a channel list walked from a table, become
+   constants). A non-`ro` byte in an `observed` interval is never fixed.
+3. **Promote** frame-local cells to variables: a constant-address cell no path reads
+   before storing it in the call, outside the SID, volatile cells, `observed` intervals and
+   bounded indexed accesses. Staging buffers written and copied out in the same call (a
+   shadow register block, zero-page temporaries, self-modified operands used as scratch)
+   become variables.
+4. **Split** each bounded non-constant SID access (a voice offset held in a variable) into
+   one constant-address access per register it may reach, and the access as before
+   where it may reach none.
+5. **Instrument** every SID store as an assignment of the register's output variable and
+   written flag (shifting into the `:2` pair first) and every SID read as the output
+   variable where written.
+6. **Place** each slot's flush, `if written: store(register, output)`, at the earliest
+   statement boundary after which no store to its register follows and the slots before
+   it are flushed, inside an arm of a branch where that falls before the arm's end, and
+   before each `finish`. Every path flushes every slot once, in order (`flush_order`).
+7. **Forward** values: constants, copies and single-use expressions propagate to their
+   uses under the conditions known to hold in each arm; at a join, a variable assigned in
+   either arm becomes an `ite` on a snapshot of the condition.
+8. **Eliminate** dead assignments and empty branches, and **declare**: each variable is
+   zero-initialised at the head of its innermost enclosing block outside any loop body
+   unless its first statement there assigns it.
+
+An output variable left after step 8 is a buffer the order forces: its value depends on
+state the call changes before the slot can be flushed, because a register earlier in the
+order is stored later in the call, or the register is stored inside a loop the transform
+cannot unroll (`Reordered.staged`). GoatTracker 2's AD and SR are the common case: the
+new note's instrument writes them, a pattern row read later in the same call may change
+the instrument before a hard restart rewrites them, and the AD slot must follow that
+rewrite. `OrderError` refuses what cannot be rescheduled: `native` code and a store
+through an unbounded pointer.
+
+`emit.emit(program)` writes a reordered program as playspec source: one machine whose
+step is the call, the cells it names declared at their bound addresses (owner-qualified
+names, `ro`, `volatile` and `notes(...)` kept), SID stores as `sid[V0_AD]` with a
+`const` per register, and each variable `let`-declared at its first assignment (original
+names without their lowering suffix, `out_<register>`/`wrote_<register>` for an output
+and its flag, `cond` for a condition snapshot). Elaborating the text gives the program
+back up to variable names (`emit.isomorphic`), with the binding or without.
+
+`SpecPlayer(..., transform=f)` runs `f(program, view)` on each bound program, so a
+format's player plays the reordered spec. `outorder.compare(make, order, frames)` plays
+a tune both ways, the reordered side as its emitted spec elaborated again, and compares
+the register grid and each call's writes against the kept writes of the original's;
+`pysidtracker playspec reorder TUNES... [--prove MS] [--emit OUT]` does it over tunes
+(`.sid` files or a `.csv` with a `path` column) with the installed formats, proves each
+call (`--prove`, a per-query timeout) and writes the emitted specs.
+`outorder.census(result)` lists what a reordered program still uses.
+
+`outorder.check(original, result)` states the claim as one solver query: from any
+memory and control state, the reordered call writes the original's kept writes in order
+(both logged into variables) and leaves the same memory and controls outside the SID and
+the promoted cells. It closes for small programs only; `outproof.prove` proves the same
+claim compositionally.
+
+### Proving a reordered call
+
+Write `P0` for the lowered call and `Pk` for the program after step `k`; `R` for `P0`
+instrumented (step 5) with every slot flushed at its end and before each `finish`, which
+defines the kept writes in canonical order. The theorem: from any memory and control
+state satisfying the premises below, `P8` writes exactly `R`'s logged writes in order
+and ends with the same memory outside the SID and the promoted cells, and the same
+controls. Premises: the fixed bytes hold their bound values, and no read through an
+unbounded pointer reads a promoted cell or the SID.
+
+The passes compose by transitivity; each is justified as follows.
+
+- **Inline, nest, split, instrument, declare, hook removal and `mk` normalisation** are
+  equivalences by the IR semantics. Procs share their variables, so a call is its body.
+  `nest` moves `if f {S}` into the arm of a preceding branch after which `f` is unknown,
+  out of the arm that assigns `f` a constant making it false (its last assignment on
+  every path of that arm). `split` replaces a store at `a` by
+  `if a == c1 {store c1} elif ... else {store a}`. Instrumentation assigns each register's
+  last value and flag; `R` writes them, which is the definition of the kept writes.
+  `declare` assigns 0 before every occurrence of the variable, where its value is the
+  call's initial 0.
+- **Promotion** holds by the definite-store analysis `frame_local` computes: every read of
+  a promoted cell follows a store to it on every path, so the variable holds what memory
+  would, and the cell is dead at the call's end, so its final memory is not part of the
+  claim. Bounded indexed accesses that may reach a cell exclude it; the pointer premise
+  covers unbounded reads.
+- **Placement** holds by two structural checks `prove` repeats on `P6`. `flush_order`:
+  every path flushes every slot exactly once, in canonical order (paths through both
+  arms of every branch, a superset of the feasible ones). `flushed_last`: no statement
+  after a slot's flush assigns its output or flag on any path that reaches the end
+  without `finish`. A flush therefore writes the values `R` writes, in `R`'s order, and
+  flushes write only the SID.
+- **Forwarding** (steps 2 and 7) holds by local obligations the pass records, each one
+  solver query over a fresh state (free memory, free variables) at one program point.
+  The pass keeps a set of facts at every point: `v == e` for a forwarded variable, and
+  `c == true/false` for a condition known in an arm. The obligations:
+  - `step`: assuming the facts before a statement, the original statement and its
+    rewritten form leave equal memory and variables, and the facts after it hold.
+  - `cond`: assuming the facts, a branch or loop condition equals its rewritten form, or
+    the constant that drops the branch or unrolls the loop.
+  - `entry`: the facts and the condition's truth imply the arm's first facts.
+  - `join`: an arm's last facts, with the condition snapshot's truth in that arm, imply
+    the facts after the branch. A loop's facts after the loop are its invariant: they
+    hold on entry and after the body.
+
+  By induction over the statements (Hoare-style sequencing, the conditional rule and the
+  invariant rule) the facts hold at every point of every execution from the empty
+  facts at the start, so each rewritten statement computes what the original did. The
+  premises of every query also include the fixed bytes (step 2, which stores never
+  reach, so they hold everywhere) and each variable's value range from `ranges`, which
+  each `step` obligation re-proves for the variable it assigns (with 0, the initial
+  value, in every range).
+- **Elimination** removes an assignment only where its variable is dead (backward
+  liveness, with controls live at the end) and an `if` only where both arms are empty and
+  its condition reads no volatile input; neither changes memory, controls or the writes.
+
+`prove` recomputes the passes, checks that they reproduce the result, runs the
+structural checks and discharges every obligation, reporting what stays open (a refuted
+or unknown obligation, with its kind and program point, or those left when its time
+budget ran out), the time and peak memory. A fact carried unchanged past a statement
+that assigns none of its names and, if it reads memory, stores nothing, needs no query
+(the frame rule); a query's premises are the facts its names reach and the known
+conditions. Each query is small, so a whole call needs no more memory than its program.
+
+Each query runs on a fresh solver through a simplifying tactic: a solver kept across
+queries slows with every query it answers. The z3 term of a pure expression is built
+once per memory and the values of the variables it reads, and the free symbols, ranges
+and fixed bytes once per pass. Obligations are independent, so `--proof-jobs N` (or
+`prove(jobs=N)`) discharges contiguous blocks of them in `N` worker processes, each with
+its own z3 context; `tools/proofprofile.py` splits a proof's time between term
+construction and `check`, and `tools/proofbench.py` times whole tunes.
 
 ## Proof tooling
 

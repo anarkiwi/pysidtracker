@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 
 from tqdm import tqdm
 
 from ..header import parse_sid_header
 from ..image import SidImage
+from ..jobs import imap
 from ..snapshot import load_spec
 from ..source import read_bytes
 from .lower import elaborate
+from .outorder import ORDER, survey
 from .player import SpecPlayer
 from .pyexec import source as python_source
 from .smt import bmc
@@ -115,9 +119,99 @@ def _tv(args) -> None:
         print(json.dumps(result.counterexample, indent=1))
 
 
+def _tunes(paths) -> list:
+    """The tune paths named, a ``.csv`` naming them in its ``path`` column."""
+    out = []
+    for path in paths:
+        if path.endswith(".csv"):
+            with open(path, newline="", encoding="utf-8") as rows:
+                out += [row["path"] for row in csv.DictReader(rows)]
+        else:
+            out.append(path)
+    return out
+
+
+def _reorder(args) -> None:
+    tunes = _tunes(args.tunes)
+    tasks = [
+        (
+            t,
+            args.order,
+            args.frames,
+            args.subtune,
+            args.prove,
+            args.budget,
+            args.proof_jobs,
+        )
+        for t in tunes
+    ]
+    report, failed = {}, 0
+    for index, value, error in tqdm(
+        imap(survey, tasks, args.jobs), total=len(tasks), desc="tunes", unit="tune"
+    ):
+        report[tunes[index]] = value if error is None else {"error": repr(error)}
+        failed += error is not None or value["verdict"] is not None
+    staged = Counter(
+        v for r in report.values() for p in r.get("programs", ()) for v in p["staged"]
+    )
+    print(
+        f"{len(tunes) - failed}/{len(tunes)} tunes the same over {args.frames} frames"
+    )
+    print("staged:", dict(staged.most_common()))
+    proofs = [
+        p["proof"]["holds"]
+        for r in report.values()
+        for p in r.get("programs", ())
+        if "proof" in p
+    ]
+    if proofs:
+        print(f"{sum(proofs)}/{len(proofs)} programs proved")
+    if args.emit:
+        _emit(report, Path(args.emit))
+    if args.out:
+        Path(args.out).write_text(json.dumps(report, indent=1))
+
+
+def _emit(report: dict, out: Path) -> None:
+    """Write each emitted spec: to ``out`` itself for one ``.play``, else under it."""
+    texts = [
+        (Path(tune), r["format"], i, p["text"])
+        for tune, r in report.items()
+        for i, p in enumerate(r.get("programs", ()))
+    ]
+    if out.suffix == ".play" and len(texts) == 1:
+        out.write_text(texts[0][3])
+        return
+    for tune, fmt, index, text in texts:
+        path = out / fmt / f"{tune.stem}{f'_{index}' if index else ''}.play"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+
 def add_playspec_commands(parser) -> None:
-    """Add the ``check``/``python``/``run``/``bmc``/``tv``/``unnative`` subcommands."""
+    """Add the ``check``/``python``/``run``/``bmc``/``tv``/``unnative``/``reorder``
+    subcommands."""
     sub = parser.add_subparsers(dest="playspec_command", required=True)
+    cmd = sub.add_parser(
+        "reorder", help="play tunes with their specs rescheduled to a write order"
+    )
+    cmd.add_argument("tunes", nargs="+", help=".sid files, or .csv with a path column")
+    cmd.add_argument("--order", default=ORDER, help="canonical write order")
+    cmd.add_argument("--frames", type=int, default=1500)
+    cmd.add_argument("--subtune", type=int, default=None)
+    cmd.add_argument("--jobs", type=int, default=None)
+    cmd.add_argument("--out", help="JSON report per tune")
+    cmd.add_argument("--emit", help="a .play file (one program) or a directory of them")
+    cmd.add_argument(
+        "--prove", type=int, default=0, help="prove each call, per-query timeout in ms"
+    )
+    cmd.add_argument(
+        "--budget", type=float, default=300.0, help="seconds per call's proof"
+    )
+    cmd.add_argument(
+        "--proof-jobs", type=int, default=1, help="processes per call's proof"
+    )
+    cmd.set_defaults(func=_reorder)
 
     def spec_cmd(name, func, text, binding=True):
         cmd = sub.add_parser(name, help=text)
