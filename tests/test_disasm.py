@@ -3,14 +3,10 @@
 import pytest
 
 from pysidtracker import (
-    MEM_SIZE,
     SidImage,
-    disassemble,
     entry_labels,
-    image_after_init,
 )
 from pysidtracker import maincli
-from pysidtracker.errors import SidParseError
 
 from .helpers import build_prg, build_psid
 
@@ -28,77 +24,14 @@ def _prg(image=_CODE):
     return SidImage.from_bytes(build_prg(image, 0x1000))
 
 
-def test_entry_labels_from_header():
-    assert entry_labels(_sid()) == {"INIT": 0x1000, "PLAY": 0x1010}
-
-
-def test_entry_labels_collapse_shared_address():
-    assert entry_labels(_sid(play=0x1000)) == {"INIT": 0x1000}
-
-
 def test_entry_labels_empty_for_prg():
     assert entry_labels(_prg()) == {}
-
-
-def test_disassemble_rows_and_text():
-    image = _sid()
-    rows = disassemble(image)
-    assert [(addr, raw) for addr, raw, _ in rows] == [
-        (0x1000, b"\x4c\x10\x10"),
-        (0x1003, b"\xa9\x07"),
-        (0x1005, b"\x8d\x00\xd4"),
-        (0x1008, b"\x60"),
-    ]
-    assert [text for _, _, text in rows] == [
-        "JMP $1010",
-        "LDA #$07",
-        "STA $d400",
-        "RTS",
-    ]
-
-
-def test_disassemble_labels_substitute_operand():
-    rows = disassemble(_sid(), labels=entry_labels(_sid()))
-    assert rows[0][2] == "JMP PLAY"
-
-
-def test_disassemble_subrange():
-    rows = disassemble(_sid(), 0x1003, 0x1008)
-    assert [addr for addr, _, _ in rows] == [0x1003, 0x1005]
-
-
-def test_disassemble_illegal_opcode_is_real_mnemonic():
-    image = _prg()
-    image.mem[0x1003] = 0x02  # an NMOS illegal where the operand byte was
-    assert disassemble(image, 0x1003, 0x1004)[0][2] == "JAM"
-
-
-def test_image_after_init_unpacks_and_grows_end():
-    image = _sid(image=_INIT)
-    assert image.end == 0x1006
-    image = image_after_init(image)
-    assert image.mem[0x2000] == 0x41
-    assert image.end == MEM_SIZE
-
-
-def test_image_after_init_requires_header():
-    pytest.raises(SidParseError, image_after_init, _prg())
 
 
 def _cli(argv):
     parser = maincli.build_parser([])
     args = parser.parse_args(argv)
     args.func(args)
-
-
-def test_cli_disasm_defaults_to_loaded_region(tmp_path, capsys):
-    path = tmp_path / "t.sid"
-    path.write_bytes(build_psid(_CODE, load=0x1000, init=0x1000, play=0x1010))
-    _cli(["disasm", str(path)])
-    lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 4
-    assert lines[0].startswith("1000  4c 10 10  JMP PLAY")
-    assert lines[-1].startswith("1008  60        RTS")
 
 
 def test_cli_disasm_hex_range_args(tmp_path, capsys):

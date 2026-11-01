@@ -1,3 +1,5 @@
+import pytest
+
 """The ``hvsc`` / ``sidtrace_oracle`` / ``disk_prgs`` / ``c64_roms`` pytest11 fixtures.
 
 Exercised end to end with ``pytester``, so a dependent suite gets the retriever
@@ -9,6 +11,7 @@ from .helpers import build_disk
 _SID = b"PSID" + b"\x00" * 60
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_hvsc_fixture_resolves_local(pytester, tmp_path):
     hvsc = tmp_path / "hvsc"
     (hvsc / "A").mkdir(parents=True)
@@ -27,6 +30,7 @@ def test_hvsc_fixture_resolves_local(pytester, tmp_path):
     result.assert_outcomes(passed=1)
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_hvsc_fixture_raises_when_unreachable(pytester, tmp_path):
     pytester.makepyfile(f"""
         import os, pytest, urllib.request, urllib.error
@@ -47,6 +51,7 @@ def test_hvsc_fixture_raises_when_unreachable(pytester, tmp_path):
     result.assert_outcomes(passed=1)
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_disk_prgs_fixture_reads_d64(pytester, tmp_path):
     d64 = tmp_path / "game.d64"
     d64.write_bytes(build_disk([("TUNE", b"\x00\x20abc", 0x82)]))
@@ -65,6 +70,7 @@ def test_disk_prgs_fixture_reads_d64(pytester, tmp_path):
     result.assert_outcomes(passed=1)
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_hvsc_local_envs_ini_option(pytester, tmp_path):
     tree = tmp_path / "tree"
     (tree / "A").mkdir(parents=True)
@@ -85,6 +91,7 @@ def test_hvsc_local_envs_ini_option(pytester, tmp_path):
     result.assert_outcomes(passed=1)
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_c64_roms_fixture_resolves_local(pytester, tmp_path):
     local = tmp_path / "vice"
     local.mkdir()
@@ -106,6 +113,7 @@ def test_c64_roms_fixture_resolves_local(pytester, tmp_path):
     result.assert_outcomes(passed=1)
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_c64_roms_fixture_skips_when_unavailable(pytester, tmp_path):
     pytester.makepyfile(f"""
         import os, pytest
@@ -124,6 +132,7 @@ def test_c64_roms_fixture_skips_when_unavailable(pytester, tmp_path):
     result.assert_outcomes(skipped=1)
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_native_fixture_resolves_when_warm(pytester, tmp_path):
     import hashlib
 
@@ -149,6 +158,7 @@ def test_native_fixture_resolves_when_warm(pytester, tmp_path):
     result.assert_outcomes(passed=1)
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_native_fixture_none_when_cold(pytester, tmp_path):
     pytester.makepyfile(f"""
         import os

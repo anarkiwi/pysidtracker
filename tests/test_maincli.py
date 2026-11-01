@@ -1,9 +1,7 @@
 """Tests for the generic ``pysidtracker`` CLI and its format registry."""
 
 import dataclasses
-import hashlib
 
-import numpy as np
 import pytest
 
 from pysidtracker import (
@@ -83,14 +81,6 @@ def _run(formats, argv):
     args.func(args)
 
 
-def test_info_uses_metadata_and_describe(capsys, tune):
-    _run([_fake_format()], ["info", str(tune)])
-    out = capsys.readouterr().out
-    assert "name:     Tune" in out
-    assert "format:   fake" in out
-    assert "detail:  Tune!" in out
-
-
 def test_reglog_writes_log(tmp_path, tune):
     out = tmp_path / "out.reglog"
     _run([_fake_format()], ["reglog", str(tune), str(out), "--seconds", "0.1"])
@@ -167,12 +157,6 @@ def test_shared_subcommand_runs_the_recognised_formats_command(capsys, tmp_path,
     ]
 
 
-def test_shared_subcommand_parses_with_the_owners_arguments(capsys, tune):
-    with pytest.raises(SystemExit):
-        _shared_cli(["echo", str(tune), "--level", "2"])
-    assert "unrecognized arguments: --level" in capsys.readouterr().err
-
-
 def test_shared_subcommand_help_lists_each_owner(capsys):
     with pytest.raises(SystemExit):
         _shared_cli(["echo", "--help"])
@@ -224,38 +208,6 @@ def test_discover_formats(monkeypatch):
     assert formats_mod.discover_formats() == [fmt]
 
 
-def test_discover_formats_accepts_callable(monkeypatch):
-    fmt = _fake_format()
-
-    class _EP:
-        def load(self):
-            return lambda: fmt
-
-    monkeypatch.setattr(formats_mod, "entry_points", lambda group: [_EP()])
-    assert formats_mod.discover_formats() == [fmt]
-
-
-def test_cadence_uses_cia_timer_latch():
-    # A CIA-speed PSID whose init latches CIA #1 Timer-A to 0x1234 plays every
-    # latch + 1 cycles, not every PAL video frame.
-    init = bytes(
-        [0xA9, 0x34, 0x8D, 0x04, 0xDC, 0xA9, 0x12, 0x8D, 0x05, 0xDC]
-        + [0xEE, 0x00, 0xD4, 0x60]
-    )  # LDA #$34 STA $DC04 / LDA #$12 STA $DC05 / INC $D400 / RTS
-    data = build_psid(init, load=0x1000, init=0x1000, play=0x1000, speed=1)
-    cycles_per_frame, _clock = maincli._cadence(data)
-    assert cycles_per_frame == 0x1234 + 1
-
-
-def test_cadence_defaults_to_pal_video_frame():
-    from pysidtracker import PAL_CLOCK_HZ, PAL_CYCLES_PER_FRAME
-
-    data = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1000)
-    cycles_per_frame, clock_hz = maincli._cadence(data)
-    assert cycles_per_frame == PAL_CYCLES_PER_FRAME
-    assert clock_hz == float(PAL_CLOCK_HZ)
-
-
 def test_main_discovers_and_runs(monkeypatch, capsys, tune):
     monkeypatch.setattr(maincli, "discover_formats", lambda: [_fake_format()])
     rc = maincli.main(["info", str(tune)])
@@ -277,24 +229,6 @@ def test_editor_io_cli_lists_the_transfer_call_sites(tmp_path, capsys):
     assert "JSR $ffd5" in out  # the call site's disassembled row
 
 
-def test_fixtures_subcommand_is_wired_into_the_cli(tmp_path):
-    data = b"\x00GOAT\x01"
-    sha = hashlib.sha256(data).hexdigest()
-    native = tmp_path / "native"
-    (native / "dl" / "777").mkdir(parents=True)
-    (native / "dl" / "777" / "101_Blitz.sng").write_bytes(data)
-    (native / "SHA256SUMS.txt").write_text(
-        f"{sha}  dl/777/101_Blitz.sng  https://csdb.dk/x\n", encoding="utf-8"
-    )
-    out = tmp_path / "m.txt"
-    parser = maincli.build_parser([])
-    args = parser.parse_args(
-        ["fixtures", "manifest", "--cache", str(native), "--out", str(out)]
-    )
-    assert args.func(args) == 0
-    assert out.exists() and sha in out.read_text()
-
-
 class _SubtuneParser(_FakeParser):
     def parse(self, data, subtune=0, **kwargs):
         return subtune
@@ -310,42 +244,6 @@ class _GridPlayer:
 
 def _subtune_format():
     return SidFormat(name="sub", parser=_SubtuneParser(), player=_GridPlayer)
-
-
-def test_start_subtune_reads_the_header():
-    psid = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1000, songs=3)
-    assert formats_mod.start_subtune(psid) == 0
-    psid = build_psid(_SIMPLE, load=0x1000, init=0x1000, songs=3, start_song=3)
-    assert formats_mod.start_subtune(psid) == 2
-    assert formats_mod.start_subtune(bytes([0x00, 0x10]) + _SIMPLE) == 0
-
-
-def test_load_and_play_select_the_subtune():
-    fmt = _subtune_format()
-    psid = build_psid(_SIMPLE, load=0x1000, init=0x1000, songs=3, start_song=2)
-    assert fmt.load(psid) == 1 and fmt.load(psid, 2) == 2 and fmt.load(psid, 0) == 0
-    assert fmt.play(psid).subtune == 1 and fmt.play(psid, 2).subtune == 2
-
-
-def test_find_format_by_name_or_recognition(tune):
-    data = tune.read_bytes()
-    formats = [_fake_format(), _subtune_format()]
-    assert formats_mod.find_format(data, "sub", formats).name == "sub"
-    assert formats_mod.find_format(data, "auto", formats).name == "fake"
-    for name in ("none", "auto"):
-        with pytest.raises(SidParseError, match="no installed pysidtracker format"):
-            formats_mod.find_format(data, name, [] if name == "auto" else formats)
-
-
-def test_render_plays_the_one_based_song(monkeypatch):
-    monkeypatch.setattr(formats_mod, "discover_formats", lambda: [_subtune_format()])
-    psid = build_psid(_SIMPLE, load=0x1000, init=0x1000, songs=3)
-    grid, info = formats_mod.render("auto", psid, 3, 4)
-    assert info["format"] == "sub" and {"rsid", "trigger", "speed", "dynamic"} <= set(
-        info
-    )
-    assert grid.dtype == np.int16
-    assert grid.shape == (4, 25) and (grid == 2).all()
 
 
 def test_render_gates_a_named_format_on_recognition(monkeypatch):

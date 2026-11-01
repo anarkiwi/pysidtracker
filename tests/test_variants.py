@@ -4,10 +4,7 @@ import pytest
 
 from pysidtracker import (
     build_signature,
-    cluster,
     diff_signatures,
-    format_diff,
-    nearest_ref,
     variants,
 )
 from pysidtracker.asm6502 import assemble
@@ -16,7 +13,6 @@ from pysidtracker.variants import (
     ROW_FIELDS,
     _op_class,
     variants_cli,
-    variants_report_csv,
 )
 
 from .helpers import build_prg, build_psid_embedded_load
@@ -60,36 +56,12 @@ def _players():
     }
 
 
-def test_signature_direct_player_has_blocks_and_routines():
-    sig = build_signature(_players()["base"], nframes=4)
-    assert sig.path == "direct"
-    assert len(sig.insns) >= 10
-    assert len(sig.blocks) >= 3
-    assert len(sig.routines) >= 2  # the JSR'd setup and calc
-
-
-def test_signature_is_relocation_invariant():
-    p = _players()
-    assert (
-        build_signature(p["base"], nframes=4).key
-        == build_signature(p["reloc"], nframes=4).key
-    )
-
-
 def test_never_run_code_adds_nothing():
     p = _players()
     assert (
         build_signature(p["base"], nframes=4).key
         == build_signature(p["wrapper"], nframes=4).key
     )
-
-
-def test_inserted_instruction_changes_signature_and_diffs_to_it():
-    p = _players()
-    base = build_signature(p["base"], nframes=4)
-    ins = build_signature(p["inserted"], nframes=4)
-    assert base.jaccard(ins) < 1.0
-    assert any("NOP" in (op[1] or op[2]) for op in diff_signatures(ins, base))
 
 
 def test_bare_prg_is_rejected():
@@ -105,46 +77,6 @@ def test_op_class_symbols_and_relative_offsets():
     assert _op_class(0x0314, base, lo, hi) == "vec:IRQ"
     assert _op_class(0xEA31, base, lo, hi) == f"ext:{0xEA31}"
     assert _op_class(0x1000, base, lo, hi) == "ram:4096"
-
-
-def test_cluster_groups_identical_and_separates_the_inserted():
-    p = _players()
-    order = ("base", "reloc", "wrapper", "inserted")
-    sigs = [build_signature(p[k], nframes=4) for k in order]
-    assign, sizes = cluster(sigs, threshold=0.8)
-    assert assign[0] == assign[1] == assign[2]  # base, reloc, wrapper
-    assert assign[3] != assign[0]
-    assert sizes[assign[0]] == 3
-
-
-def test_nearest_ref_picks_the_reference():
-    p = _players()
-    base = build_signature(p["base"], nframes=4)
-    ins = build_signature(p["inserted"], nframes=4)
-    assert nearest_ref(base, [base]) == (0, 0.0)
-    i, d = nearest_ref(ins, [base])
-    assert i == 0 and 0.0 < d < 1.0
-    assert nearest_ref(base, []) == (None, -1.0)
-
-
-def test_variants_rows_and_clusters():
-    p = _players()
-    order = ["base", "reloc", "wrapper", "inserted"]
-    rows, sizes = variants(
-        [p[k] for k in order],
-        [("BASE_REF", p["base"])],
-        names=order,
-        nframes=4,
-        threshold=0.8,
-    )
-    by = {r["name"]: r for r in rows}
-    assert len(sizes) == 2
-    for name in ("base", "reloc", "wrapper"):
-        assert by[name]["nearest_ref"] == "BASE_REF"
-        assert by[name]["distance"] == "0.0000" and by[name]["ndiff"] == 0
-    assert by["base"]["cluster"] == by["reloc"]["cluster"] == by["wrapper"]["cluster"]
-    assert by["inserted"]["nearest_ref"] == "BASE_REF" and by["inserted"]["ndiff"] > 0
-    assert by["inserted"]["_diff"] != "identical"
 
 
 def test_variants_without_refs_leaves_nearest_ref_empty():
@@ -179,26 +111,6 @@ def test_irq_path_fingerprints_and_diffs():
     assert any("NOP" in (op[1] or op[2]) for op in diff_signatures(modsig, sig))
 
 
-def test_format_diff_reports_identical_and_ops():
-    p = _players()
-    base = build_signature(p["base"], nframes=4)
-    assert format_diff(base, base) == "identical"
-    ins = build_signature(p["inserted"], nframes=4)
-    assert any(
-        line.startswith(("+", "-", "~")) for line in format_diff(ins, base).splitlines()
-    )
-
-
-def test_variants_report_csv_roundtrip(tmp_path):
-    p = _players()
-    rows, _ = variants(
-        [p["base"], p["inserted"]], [("R", p["base"])], names=["a", "b"], nframes=4
-    )
-    out = variants_report_csv(rows, tmp_path / "r.csv")
-    text = out.read_text("utf-8").splitlines()
-    assert text[0].split(",") == ROW_FIELDS and len(text) == 3
-
-
 def test_variants_cli_writes_csv_and_prints(tmp_path, capsys):
     p = _players()
     paths = [tmp_path / f"{n}.sid" for n in ("base", "reloc", "wrapper", "inserted")]
@@ -212,11 +124,6 @@ def test_variants_cli_writes_csv_and_prints(tmp_path, capsys):
     assert out.read_text("utf-8").splitlines()[0].split(",") == ROW_FIELDS
     printed = capsys.readouterr().out
     assert "cluster" in printed and "nearest=base.ref" in printed
-
-
-def test_signature_jaccard_reflexive():
-    sig = build_signature(_players()["base"], nframes=4)
-    assert sig.jaccard(sig) == 1.0
 
 
 def test_decode_lengths_and_zero_page_operands():

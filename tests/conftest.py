@@ -1,6 +1,7 @@
 """Shared test configuration."""
 
 import hashlib
+import os
 
 import pytest
 
@@ -35,7 +36,11 @@ def songlengths(request, tmp_path_factory, monkeypatch):
     return lengths
 
 
-@pytest.fixture(autouse=True, params=["native", "python"])
+# PYSID_BACKENDS=native|python restricts the matrix (used to strain each engine alone).
+BACKENDS = os.environ.get("PYSID_BACKENDS", "native,python").split(",")
+
+
+@pytest.fixture(autouse=True, params=BACKENDS)
 def backend(request, monkeypatch):
     """Run every test on jennings' native core and on its pure-Python engine."""
     memory = pytest.importorskip("jennings.memory")

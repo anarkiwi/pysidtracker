@@ -16,6 +16,8 @@ import struct
 from collections import Counter
 from typing import Callable, Collection, Dict, List, Optional, Tuple, Union
 
+from jennings.devices.mpu6502 import MPU
+
 from ..emu import live_ram, run_to_rts, run_until, set_iomap, wire_mpu
 from ..errors import SidParseError
 from ..image import SidImage
@@ -30,6 +32,7 @@ from .validate import StreamValidator
 
 MAX_CYCLES = 8_000_000
 MIN_RAISES = 3
+_CPU_FIELDS = ("pc", "sp", "a", "x", "y", "p", "processorCycles")
 _FLAGS = {"c": 0x01, "z": 0x02, "i": 0x04, "d": 0x08, "v": 0x40, "n": 0x80}
 Binder = Callable[[bytes, int], Union[dict, Tuple[Spec, dict]]]
 _HEADER = 0x7C
@@ -45,6 +48,19 @@ def _container(image: bytes, load: int, init: int, psid: bool) -> bytes:
 
 class NativeEscape(Exception):
     """A ``native`` block left the spec: the CPU ran the rest of the call."""
+
+
+class _HostMemory:
+    """The machine's reads, with writes going where the spec's stores go."""
+
+    def __init__(self, machine, store: Callable[[int, int], None]):
+        self._machine, self._store = machine, store
+
+    def __getitem__(self, addr: int) -> int:
+        return self._machine[addr]
+
+    def __setitem__(self, addr: int, value: int) -> None:
+        self._store(addr, value)
 
 
 class SpecPlayer(EmuPlayer):
@@ -117,6 +133,7 @@ class SpecPlayer(EmuPlayer):
         self._in_call = False
         self.entry: Optional[int] = None
         self._hosted: Optional[InterruptPlayer] = None
+        self._stepper = None
         self._sid, self._clock, self._raw = sid, clock, bytes(image)
         self._standard = notes
         self._inputs = inputs
@@ -199,6 +216,7 @@ class SpecPlayer(EmuPlayer):
         machine = self._hosted.host.machine
         self._mpu = machine.mpu
         self._obs = self._bus = machine
+        self._stepper = MPU(memory=_HostMemory(machine, self._store))
 
     def _trap(self, machine) -> bool:
         """Run the call at ``pc`` as the spec if it is a modelled entry; True if run."""
@@ -229,7 +247,19 @@ class SpecPlayer(EmuPlayer):
     def _native(self, addr: int, regs: dict, resume: int) -> None:
         """Run the tune's 6502 code from ``addr`` until it reaches ``resume``; if
         the call returns first, the CPU has finished it and the spec is over."""
-        mpu = self._mpu
+        regfile = self._mpu
+        mpu = self._stepper or regfile
+        if mpu is not regfile:
+            for field in _CPU_FIELDS:
+                setattr(mpu, field, getattr(regfile, field))
+        try:
+            self._native_on(mpu, addr, regs, resume)
+        finally:
+            if mpu is not regfile:
+                for field in _CPU_FIELDS:
+                    setattr(regfile, field, getattr(mpu, field))
+
+    def _native_on(self, mpu, addr: int, regs: dict, resume: int) -> None:
         mine = self._native_state
         if mine["saved"] is None:
             mine["saved"] = (mpu.pc, mpu.sp, mpu.a, mpu.x, mpu.y, mpu.p)

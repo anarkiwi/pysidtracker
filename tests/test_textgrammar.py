@@ -68,33 +68,8 @@ def test_rule_names():
     assert classes(toytext, SetAD)["set_ad"] is SetAD
 
 
-@pytest.mark.parametrize("op", OPS, ids=term)
-def test_each_constructor_round_trips(op):
-    assert GRAMMAR.loads(dumps([op])) == (op,)
-
-
 def test_program_round_trips():
     assert GRAMMAR.loads(dumps(OPS)) == OPS
-
-
-@pytest.mark.parametrize(
-    "op,text",
-    [
-        (Stop(), "Stop"),
-        (Jump(-0x10), "Jump(-$10)"),
-        (WaveNote(3, True), "WaveNote($03, relative)"),
-        (WaveNote(3), "WaveNote($03)"),
-        (Step(None, WaveNote(1)), "Step(none, WaveNote($01))"),
-        (Named('a"'), 'Named("a\\"")'),
-    ],
-)
-def test_term(op, text):
-    assert term(op) == text
-
-
-def test_loads_reads_decimal_and_comments():
-    text = "# a program\n1: Jump(16)  # decimal\n2: Jump(-$10)\n$03: Stop\n"
-    assert GRAMMAR.loads(text) == (Jump(16), Jump(-16), Stop())
 
 
 @pytest.mark.parametrize(

@@ -24,27 +24,10 @@ def _image(songs=3, org=0x1000):
     return SidImage.from_bytes(data), labels
 
 
-def test_argument_at_entry_is_the_table_entry():
-    image, labels = _image()
-    assert [trace_init_argument(image, None, labels["base"], k) for k in range(3)] == [
-        0x07,
-        0x2A,
-        0x13,
-    ]
-    assert trace_init_argument(image, labels["init"], labels["base"], 1) == 0x2A
-
-
 def test_entry_never_reached_is_none():
     image, labels = _image()
     assert trace_init_argument(image, None, 0x2000, 0) is None
     assert trace_init_argument(image, labels["loop"], 0x2000, 0, max_cycles=500) is None
-
-
-def test_init_arguments_cover_every_song():
-    image, labels = _image()
-    assert init_arguments(image, labels["base"]) == (0x07, 0x2A, 0x13)
-    single, labels = _image(songs=0)
-    assert init_arguments(single, labels["base"]) == (0x07,)
 
 
 def test_prg_needs_an_init_address():

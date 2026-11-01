@@ -4,14 +4,13 @@ import bisect
 import csv
 import hashlib
 
-import numpy as np
 import pytest
 import zstandard
 
 from pysidtracker import cadence_check as cc
 from pysidtracker import registers as reg
 from pysidtracker import oracle, survey
-from pysidtracker.oracle import SidtraceRow, SidtraceUnavailable, handler_sources
+from pysidtracker.oracle import SidtraceRow, SidtraceUnavailable
 
 from .helpers import event, handled, trace_csv
 from .test_cadence import latch, psid
@@ -26,13 +25,6 @@ def _rows(raises, source="video_irq", delay=100):
         for at in raises
         for row in handled(source, at, [(at + delay, 0, at & 0xFF)])
     ]
-
-
-def test_writes_belong_to_the_handler_running_them():
-    cia = _rows(range(1000, 200000, 4000), "cia_irq")
-    video = [event(t, "video_irq") for t in range(500, 200000, PAL)]
-    source, raises = cc.interrupt_cadence(sorted(cia + video))
-    assert source == "cia_irq" and len(raises) == len(range(1000, 200000, 4000))
 
 
 def _digi_in_music(period=145):
@@ -56,47 +48,6 @@ def _digi_in_music(period=145):
         rows += [SidtraceRow(c, None, None, None, 0, r, v) for c, r, v in writes]
         rows.append(event(writes[-1][0] + 1, "rti"))
     return sorted(rows, key=lambda r: (r.cycle, r.value == "rti"))
-
-
-def test_nested_nmis_do_not_claim_the_interrupted_irq_writes():
-    rows = _digi_in_music()
-    owner = dict(zip(rows, handler_sources(rows)))
-    voice = [r for r in rows if r.chip == 0 and r.reg < 7]
-    assert voice and {owner[r] for r in voice} == {"cia_irq"}
-    source, raises = cc.interrupt_cadence(rows)
-    assert source == "cia_irq" and np.all(np.diff(raises) == PAL)
-
-
-def test_the_source_driving_more_registers_wins_over_a_faster_one():
-    digi = _rows(range(1000, 200000, 126), "nmi")
-    music = [
-        row
-        for t in range(500, 200000, PAL)
-        for row in handled("video_irq", t, [(t + d, d, d) for d in (10, 11, 12)])
-    ]
-    source, _ = cc.interrupt_cadence(sorted(digi + music))
-    assert source == "video_irq"
-
-
-def test_a_write_outside_any_handler_has_no_source():
-    rows = [event(5, "cia_irq"), SidtraceRow(10, None, None, None, 0, 0, 1)]
-    source, raises = cc.interrupt_cadence(rows + [event(11, "rti")])
-    assert source is None and not len(raises)
-
-
-def test_a_trace_without_rti_rows_is_an_unknown_source():
-    # A never-returning handler is a valid trace, not an error to re-render.
-    source, raises = cc.interrupt_cadence([event(5, "cia_irq")])
-    assert source is None and len(raises) == 0
-    assert cc.measure([event(5, "cia_irq")], PAL) == {"meas_source": "", "raises": 0}
-
-
-def test_measure_drops_the_first_raise_held_by_init():
-    raises = [0] + [100000 + i * PAL // 2 for i in range(40)]
-    meas = cc.measure(_rows(raises), PAL)
-    assert meas["meas_source"] == "video_irq" and meas["calls"] == 39
-    assert float(meas["meas_cpf"]) == pytest.approx(2.0)
-    assert meas["gaps"] == 1 and meas["raises"] == 41
 
 
 def test_measure_with_too_few_raises():

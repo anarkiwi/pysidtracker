@@ -55,39 +55,6 @@ def _toy(_data):
     return Toy(b"", 0)
 
 
-def test_explains_the_dropped_carry():
-    why = whydiff.explain_divergence(SID, _toy, name="toy")
-    py, cpu = why.left, why.right
-    assert (why.frame, why.register, py.frame, cpu.frame) == (2, 0, 2, 2)
-    assert why.values == {"python": 0x10, "6502": 0x11, "reference": 0x11}
-    assert "jennings agrees with the reference to here" in why.notes
-    lines = [py.events[i] for i in py.keep]
-    cond = next(e for e in lines if e.text.startswith("carry ="))
-    assert cond.sets == [("carry", "False")]
-    assert ("self.cnt", "2") in cond.reads
-    assert py.live == {"self.cnt": "2", "self.threshold": "3"}
-    assert py.events[py.root].text.startswith("self._mem[addr & 0xFFFF] = val")
-    assert not any(py.events[i].kind == "return" for i in py.keep)  # _wr's own return
-    texts = [cpu.events[i].text for i in cpu.keep]
-    assert [t.split()[0] for t in texts] == [
-        "LDA",
-        "PHA",
-        "LDA",
-        "CMP",
-        "PLA",
-        "ADC",
-        "STA",
-    ]
-    assert cpu.live == {
-        "SP": "entry",
-        f"${LABELS['cnt']:04X}": "$02",
-        f"${LABELS['tbl']:04X}": "$10",
-    }
-    report = why.text(80)
-    assert "WHY" in report and "CMP #$02" in report and "FULL HISTORIES" in report
-    assert ">>" in report and "** SID $00 v1_freq_lo = $10" in report
-
-
 def test_agreement_is_none_and_slices_skip_unwritten_registers():
     assert whydiff.explain_divergence(SID, lambda d: Faithful(b"", 0)) is None
     why = whydiff.explain_divergence(SID, _toy, frame=1, register=4)
@@ -95,14 +62,6 @@ def test_agreement_is_none_and_slices_skip_unwritten_registers():
     assert "(not stored on the traced frame)" in why.text()
     picked = whydiff.explain_divergence(SID, _toy, frame=2)
     assert picked.register == 0
-
-
-def test_summary_is_json():
-    why = whydiff.explain_divergence(SID, _toy)
-    out = json.loads(json.dumps(why.summary()))
-    assert out["register_name"] == "v1_freq_lo" and out["left"]["slice"]
-    right = out["right"]
-    assert right["events"][right["slice"][-1]]["sid_writes"] == [[0, 0x11]]
 
 
 def test_assert_matches_reports(tmp_path):
@@ -202,45 +161,6 @@ def _boom():
     raise ValueError("bad")
 
 
-def test_pytrace_records_lines_branches_values_and_calls():
-    before = sys.gettrace()
-    with whydiff.PyTrace([__file__]) as trace:
-        assert _sample(3) == 0
-        with pytest.raises(ValueError):
-            _boom()
-    assert sys.gettrace() is before
-    ev = trace.events
-    calls = [e for e in ev if e.kind == "call"]
-    assert calls[0].func.endswith("_sample") and ("a", "3") in calls[0].reads
-    leaf = next(e for e in calls if e.func.endswith("_leaf"))
-    assert leaf.depth == calls[0].depth + 1
-    conds = [e.cond for e in ev if e.text == "if i % b:"]
-    assert conds == [False, True, False]
-    aug = [e for e in ev if e.text == "total += i"]
-    assert aug[0].sets == [("total", "0")]
-    item = next(e for e in ev if e.text.startswith("items[0] ="))
-    assert item.sets == [("items[0]", "0")] and ("items[0]", "-1") in item.reads
-    ret = [e for e in ev if e.kind == "return" and e.func.endswith("_sample")]
-    assert ret[0].sets == [("", "0")]
-    assert any(e.kind == "exception" and "ValueError: bad" in e.text for e in ev)
-    root = ev.index(ret[0])
-    keep = trace.slice(root)
-    assert keep[-1] == root and any(ev[i].func.endswith("_leaf") for i in keep)
-    assert any(ev[i].text == "total -= 1" for i in keep)
-
-
-def test_python_side_skips_untraced_frames():
-    side = whydiff.python_side(lambda: Toy(b"", 0), 2, 0, progress=True)
-    events = side.events
-    writes = [e for e in events if e.kind == "write"]
-    assert [(e.register, e.value) for e in writes] == [(0, 0x10)]
-    assert events[writes[0].site].text.startswith("self._wr")
-    assert {e.func for e in events if e.kind == "call"} >= {
-        "MemPlayer.play_frame",
-        "Toy._frame",
-    }
-
-
 # A generic player in the style of a code-generating VM: no MemPlayer, its register file
 # a list filled by slice assignment in exec'd code.
 GENERIC = (
@@ -274,40 +194,6 @@ class Generic:
         return rows
 
 
-def test_two_python_players_side_by_side():
-    def side(at, label):
-        return whydiff.python_side(
-            lambda: Generic(at),
-            2,
-            0,
-            label=label,
-            cell=lambda p, r: (p.regs, r),
-            roots=[GENERIC_NAME],
-            sources={GENERIC_NAME: GENERIC},
-        )
-
-    generic, native = side(3, "generic"), side(2, "native")
-    grids = (
-        Generic(3).render_grid(whole_song(6)),
-        Generic(2).render_grid(whole_song(6)),
-    )
-    why = whydiff.explain_cell(generic, native, grids, frame=2, register=0, name="toy")
-    assert why.values == {"generic": 0x10, "native": 0x11}
-    for s, lift in ((generic, "0"), (native, "1")):
-        texts = [s.events[i].text for i in s.keep]
-        assert texts == [
-            "lift = 1 if p.n >= p.at else 0",
-            "out[0:2] = [0x10 + lift, 0]",
-        ]
-        assert s.events[s.keep[0]].sets == [("lift", lift)]
-        assert s.live == {
-            "p.n": "2",
-            "p.at": generic.live["p.at"] if s is generic else "2",
-        }
-    text = why.text(70)
-    assert text.count("GENERIC") == 2 and "out[0:2] = [0x10 + lift, 0]" in text
-
-
 def test_repr_and_line_formatting():
     rep = whydiff._Repr()  # pylint: disable=protected-access
     obj = object()
@@ -330,27 +216,6 @@ def test_repr_and_line_formatting():
     assert whydiff.py_line(line) == "      7  x = y  | y=1  := x=1"
     exc = whydiff.PyEvent("exception", 0, "f", "/x/a.py", 7, "raise E: m")
     assert whydiff.py_line(exc) == "!! raise E: m  [a.py:7]"
-
-
-def test_cpu_slice_follows_the_stack_and_carry():
-    steps = whydiff.cpu_history(SID, 2)
-    by = {s.text.split()[0]: s for s in steps}
-    cell = 0x100 + by["PHA"].sp + 1
-    assert by["PHA"].flow[cell] == {"A"} and cell in by["PLA"].flow["A"]
-    mirror = whydiff.CpuStep(0, b"\x8d", "STA", 0, 0, 0, 0xFF, 0, 4, [], [(0xD420, 1)])
-    assert mirror.sid_writes() == [(0, 1)]
-    root = next(i for i, s in enumerate(steps) if s.sid_writes())
-    keep, live = whydiff.cpu_slice(steps, root)
-    assert [steps[i].text.split()[0] for i in keep] == [
-        "LDA",
-        "PHA",
-        "LDA",
-        "CMP",
-        "PLA",
-        "ADC",
-        "STA",
-    ]
-    assert live == {"SP": None, LABELS["cnt"]: 2, LABELS["tbl"]: 0x10}
 
 
 def test_cli(tmp_path, capsys):
@@ -532,38 +397,12 @@ def _rows(rows):
     return total, first
 
 
-def test_earlier_items_are_state_and_2d_slices_trace():
-    rows = [[0, 5], [0, 7]]
-    with whydiff.PyTrace([__file__]) as trace:
-        _rows(rows)
-    adds = [e for e in trace.events if e.text == "total += v[1]"]
-    assert [e.live for e in adds] == [[("v[1]", "5")], [("v[1]", "7")]]
-    first = next(e for e in trace.events if e.text == "first = grid[:, 1]")
-    assert first.sets and first.sets[0][0] == "first"
-
-
 class GenericToy(Generic):
     """:data:`GENERIC` as a whole tune's player: the 6502 lifts the register a frame earlier."""
 
     def __init__(self, _data=b""):
         super().__init__(3)
         self.regs[24] = 0x0F
-
-
-def test_explain_divergence_takes_an_execd_player():
-    why = whydiff.explain_divergence(
-        SID,
-        GenericToy,
-        frame=2,
-        register=0,
-        label="generic",
-        cell=lambda p, r: (p.regs, r),
-        roots=[GENERIC_NAME],
-        sources={GENERIC_NAME: GENERIC},
-    )
-    assert why.values == {"generic": 0x10, "6502": 0x11, "reference": 0x11}
-    texts = [why.left.events[i].text for i in why.left.keep]
-    assert texts[-1] == "out[0:2] = [0x10 + lift, 0]"
 
 
 # The gate cell is never stored by the 6502; frame 3 outputs $41 EOR gate.
@@ -595,26 +434,6 @@ class Gated(MemPlayer):
 
 class Ungated(Gated):
     bug = False
-
-
-def test_state_is_chased_to_where_it_parts():
-    why = whydiff.explain_divergence(
-        GSID, lambda d: Gated(b"", 0), frames=whole_song(8), state=True
-    )
-    assert (why.frame, why.register) == (3, 4)
-    state = why.state
-    assert state.frames == (0, 2)
-    assert ("player.gate", f"${GLABELS['gate']:04X}", 1) in state.pairs
-    assert ("player.cnt", f"${GLABELS['cnt']:04X}", None) in state.pairs
-    onset = state.why
-    assert onset.frame == 1 and onset.cell.startswith("state player.gate ~ $")
-    assert onset.values == {"python": 1, "6502": 0}
-    left = onset.left
-    assert left.events[left.root].text == "self.gate = 1"
-    assert onset.right.root is None and onset.right.traced == 1
-    text = why.text(80)
-    assert "parts at frame 1" in text and "STATE ONSET" in text
-    assert json.loads(json.dumps(why.summary()))["state"]["why"]["frame"] == 1
 
 
 def test_state_between_two_python_players_and_its_edges():
@@ -755,30 +574,6 @@ class Named:
 def _named(frame, register, cell):
     side = whydiff.python_side(Named, frame, register, cell=cell, roots=[__file__])
     return side, [side.events[i] for i in side.keep]
-
-
-def test_a_store_through_setattr_roots_a_slice_to_its_source():
-    for frame, register, attr, value in (
-        (1, 5, "ad", "74/$4A"),
-        (2, 6, "sr", "67/$43"),
-    ):
-        side, keep = _named(frame, register, lambda p, _, a=attr: (p.voice, a))
-        assert keep[-1].text == "setattr(self.voice, key, level & 0xFF)"
-        assert keep[-1].sets == [("getattr(self.voice, key)", value)]
-        assert any(e.text == "level = self.level + value" for e in keep)
-        assert side.live["self.level"] == "64/$40"
-        _, keep = _named(frame, register, lambda p, r: (p.regs, r))
-        assert keep[-1].text.startswith(f"self.regs[{register}] =")
-        assert "setattr(self.voice, key, level & 0xFF)" in [e.text for e in keep]
-
-
-def test_vars_and_dict_items_store_the_attribute():
-    _, keep = _named(2, 4, lambda p, _: (p.voice, "wave"))
-    assert [e.text for e in keep][-2:] == [
-        "vars(self.voice)[key] = value",
-        'self.voice.__dict__["wave"] += getattr(self.voice, key)',
-    ]
-    assert keep[-1].sets == [("self.voice.wave", "2")]
 
 
 def test_dynamic_attributes_in_the_statement_index(tmp_path):

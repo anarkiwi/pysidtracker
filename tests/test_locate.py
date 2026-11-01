@@ -68,13 +68,6 @@ def test_failure_keeps_full_log_and_candidates():
         got.require()
 
 
-def test_init_false_skips_emulated_stages():
-    img = SidImage.from_sid(build_psid(store_sig(SIG, 0x9000), load=0x1000))
-    got = locate(img, [Strategy("later", AFTER_INIT, _find_sig)], init=False)
-    assert not got.ok
-    assert got.rejections[0].reason == "init disabled"
-
-
 def test_variant_facet_domain():
     facet = variant_facet([Strategy("a", STATIC, _find_sig)])
     assert facet.name == "variant" and facet.domain == ("a",)

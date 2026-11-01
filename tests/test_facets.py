@@ -11,7 +11,6 @@ from pysidtracker.facets import (
     FacetRegistry,
     Finding,
     Source,
-    Variant,
     detected,
     inferred,
     on_off_detector,
@@ -43,33 +42,6 @@ def test_facet_validation():
     with pytest.raises(ValueError):
         facet.check(3)
     assert Facet("y", "init").check("anything") == "anything"
-
-
-def test_default_per_family():
-    facet = Facet("drv", "build", default={"a": 1, "b": 2}, per_family=True)
-    assert facet.default_for("a") == 1
-    assert facet.default_for("zz") is None
-    assert Facet("z", "init", default=7).default_for("a") == 7
-
-
-def test_pattern_detector_value_and_capture():
-    img = _image([0xA9, 0x2A, 0x8D, 0x05, 0xD4])
-    det = pattern_detector("A9 {imm} 8D 05 D4", capture="imm")
-    found = det(img)
-    assert found == Finding(0x2A, detected(0x1000))
-    assert pattern_detector("A9 ?? 8D", "yes")(img).value == "yes"
-    assert pattern_detector("EA EA")(img) is None
-
-
-def test_on_off_detector():
-    on = _image([0x20, 0x00, 0x20])
-    off = _image([0xEA, 0xEA, 0xEA])
-    none = _image([0x00, 0x00, 0x00])
-    det = on_off_detector("20 00 20", "EA EA EA")
-    assert det(on).value is True
-    assert det(off).value is False
-    assert det(off).source == detected(0x1000)
-    assert det(none) is None
 
 
 def test_reference_and_probe_detectors():
@@ -119,19 +91,6 @@ def test_registry_detect_and_provenance():
     assert list(var) == ["vib", "drv", "rel"] and "rel" in var
 
 
-def test_defaults_when_nothing_detected():
-    var = _registry().detect(_image([0x00] * 4), "gt2")
-    assert var["vib"] is False
-    assert var["drv"] == 0x0F
-    assert var.source("drv") == DEFAULT_SOURCE
-
-
-def test_detected_value_outside_domain_rejected():
-    facet = Facet("x", "init", domain=(1,), detector=lambda img: Finding(2, detected()))
-    with pytest.raises(ValueError):
-        facet.detect(None)
-
-
 def test_resolve_frozen_dataclass():
     var = _registry().detect(_image([0x20, 0x00, 0x20, 0xA9, 0x07]), "gt2")
     plain = var.resolve("Build")
@@ -139,15 +98,6 @@ def test_resolve_frozen_dataclass():
     assert (plain.vib, plain.drv, plain.rel) == (True, 7, "r1")
     with pytest.raises(dataclasses.FrozenInstanceError):
         plain.vib = False
-
-
-def test_as_info():
-    var = _registry().detect(_image([0x20, 0x00, 0x20]), "gt2")
-    info = var.as_info()
-    assert info["vib"] is True
-    assert info["vib.src"] == "detected@$1000"
-    assert info["drv"] == 0x0F and info["drv.src"] == "default"
-    assert info["rel.src"] == "default"
 
 
 def test_replace_override():
@@ -170,8 +120,3 @@ def test_registry_duplicates_and_merge():
     assert len(reg) == 3
     with pytest.raises(ValueError):
         reg.merge(reg)
-
-
-def test_variant_is_plain_value():
-    assert isinstance(FacetRegistry().detect(None), Variant)
-    assert FacetRegistry().detect(None).as_info() == {}

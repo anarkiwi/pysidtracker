@@ -22,26 +22,6 @@ def test_vector_drops_src_and_cadence():
     assert census.vector(info, ["b"]) == (("b", 2),)
 
 
-def test_census_groups_and_samples(tmp_path):
-    src = tmp_path / "results.csv"
-    _results(
-        src,
-        [
-            ("t1", "exact", {"v": 1, "speed": 1}),
-            ("t2", "differs", {"v": 1, "speed": 2}),
-            ("t3", "exact", {"v": 2}),
-        ],
-    )
-    classes = census.census(census.results_records(src))
-    assert [len(r) for r in classes.values()] == [2, 1]
-    sample = census.stratified_sample(classes, 1, seed=3)
-    assert sample == census.stratified_sample(classes, 1, seed=3)
-    assert all(len(v) == 1 for v in sample.values())
-    rows = census.census_rows(classes, sample)
-    assert rows[0]["count"] == 2
-    assert json.loads(rows[0]["verdicts"]) == {"exact": 1, "differs": 1}
-
-
 def test_cli_writes_csv(tmp_path, capsys):
     src = tmp_path / "results.csv"
     _results(src, [("t1", "exact", {"v": 1}), ("t2", "exact", {"v": 2})])

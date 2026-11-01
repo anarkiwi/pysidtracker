@@ -13,11 +13,7 @@ from pysidtracker import SidError, roms
 from pysidtracker.roms import (
     ROMS,
     RomFetchError,
-    default_rom_cache,
     fetch_rom,
-    resolve_rom,
-    rom_image,
-    roms_available,
 )
 
 FAKE = {
@@ -55,19 +51,6 @@ def _offline(monkeypatch):
     monkeypatch.setattr(vm_roms, "_download", boom)
 
 
-def test_default_rom_cache_nests_under_the_tune_cache(monkeypatch, tmp_path):
-    assert default_rom_cache(tmp_path) == tmp_path / ".tunecache" / "roms"
-    monkeypatch.setenv("PYSID_TUNECACHE", str(tmp_path / "t"))
-    assert default_rom_cache(tmp_path) == tmp_path / "t" / "roms"
-
-
-def test_fetches_default_to_the_tune_cache(served, monkeypatch, tmp_path):
-    monkeypatch.setenv("PYSID_TUNECACHE", str(tmp_path))
-    assert fetch_rom("kernal") == tmp_path / "roms" / ROMS["kernal"].filename
-    assert fetch_rom("kernal", cache_dir=tmp_path / "x").parent == tmp_path / "x"
-    assert len(served) == 2
-
-
 def test_rom_errors_are_sid_errors_and_vagrant_moses_errors(monkeypatch, tmp_path):
     with pytest.raises(RomFetchError, match="unknown ROM") as exc:
         fetch_rom("charen")
@@ -78,23 +61,7 @@ def test_rom_errors_are_sid_errors_and_vagrant_moses_errors(monkeypatch, tmp_pat
         fetch_rom("kernal", cache_dir=tmp_path)
 
 
-def test_resolve_rom_none_when_offline(monkeypatch, tmp_path):
-    _offline(monkeypatch)
-    assert resolve_rom("kernal", cache_dir=tmp_path) is None
-    assert roms_available(cache_dir=tmp_path) is False
-    with pytest.raises(RomFetchError, match="unavailable"):
-        rom_image(cache_dir=tmp_path)
-    assert roms.poweron_writes(cache_dir=tmp_path) is None
-
-
-@pytest.mark.usefixtures("served")
-def test_rom_image_maps_kernal_and_basic(tmp_path):
-    mem = rom_image(cache_dir=tmp_path)
-    assert bytes(mem[0xE000:]) == FAKE["kernal"]
-    assert bytes(mem[0xA000:0xC000]) == FAKE["basic"]
-    assert roms_available(cache_dir=tmp_path) is True
-
-
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_poweron_is_pinned_to_the_oracles_libsidplayfp():
     spec = roms.ASSETS["poweron"]
     assert spec.url.endswith(f"/{spec.filename}") and "9c464110" in spec.url

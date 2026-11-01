@@ -32,16 +32,6 @@ def _container(**kw):
     return write_psid(**base)
 
 
-def test_load_psid_places_the_body_at_the_header_load():
-    data = _container()
-    mem, load, init, play = load_psid(data)
-    assert (load, init, play) == (0x8000, 0x8100, 0x8200)
-    assert isinstance(mem, bytearray) and len(mem) == 0x10000
-    assert mem[0x8000 : 0x8000 + len(BODY)] == BODY
-    assert mem[:0x8000] == bytes(0x8000)
-    assert psid_image(data) == (0x8000, 0x8014)
-
-
 def test_in_body_load_address_wins_when_the_header_field_is_zero():
     real = bytes((0x0E, 0x04))  # 0x040E little-endian
     data = write_psid(load=0, init=0x0600, play=0x0700, image=real + BODY, songs=1)

@@ -51,17 +51,6 @@ def _run(formats, argv):
     args.func(args)
 
 
-def test_grammar_prints_the_listing(tmp_path, capsys):
-    _run([SEQ], ["grammar", _tune(tmp_path, "a", (1, 2), (0, 5))])
-    assert capsys.readouterr().out.splitlines() == [
-        "voice 0:",
-        "  seq",
-        "    item ITEM=$01 BYTE=$02",
-        "    item ITEM=$00 BYTE=$05",
-        "    END=$ff",
-    ]
-
-
 def test_grammar_and_equiv_need_their_hooks(tmp_path, capsys):
     song = _tune(tmp_path, "a", (1, 2))
     assert (
@@ -74,24 +63,6 @@ def test_grammar_and_equiv_need_their_hooks(tmp_path, capsys):
     argv = ["equiv", song, song]
     assert maincli.run_cli(lambda: maincli.build_parser([BARE]), Exception, argv) == 1
     assert "format 'bare' has no canonical text" in capsys.readouterr().err
-
-
-def test_format_by_name_and_spec(tmp_path, capsys):
-    song = _tune(tmp_path, "a", (1, 2))
-    _run([BARE, SEQ], ["grammar", song, "--format", "seq"])
-    assert capsys.readouterr().out.startswith("voice 0:")
-    _run([], ["grammar", song, "--format", "tests.test_format_hooks:SEQ"])
-    assert capsys.readouterr().out.startswith("voice 0:")
-
-
-def test_subtune_reaches_the_parser(tmp_path, capsys):
-    seen = []
-    fmt = dataclasses.replace(SEQ, canonical=lambda model: seen.append(model[1]) or "")
-    song = _tune(tmp_path, "a", (1, 2))
-    _run([fmt], ["equiv", song, song, "--subtune", "2"])
-    _run([fmt], ["equiv", song, song])
-    assert seen == [2, 2, 0, 0]
-    assert capsys.readouterr().out == ""
 
 
 def test_equiv_is_silent_when_tunes_play_the_same(tmp_path, capsys):

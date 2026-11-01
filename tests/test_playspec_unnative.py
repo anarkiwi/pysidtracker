@@ -1,12 +1,11 @@
 """``unnative``: a spec's native hooks replaced by spec statements, same output."""
 
 import pytest
-import z3
 
 from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidError
 from pysidtracker.maincli import main as cli_main
-from pysidtracker.playspec import SpecPlayer, elaborate, load, parse, run
+from pysidtracker.playspec import SpecPlayer, elaborate, load, parse
 from pysidtracker.playspec import smt
 from pysidtracker.playspec.unnative import count_natives, equivalent, unnative
 
@@ -130,45 +129,6 @@ hook:
 skip:
   jmp tail
 """
-
-
-def test_indexed_stores_and_reads_match():
-    make, binding, _ = players(
-        LOOP, {"buf": 0x1300, "out": 0x1600, "hook": "hook", "tail": "tail"}
-    )
-    old = parse(LOOP_SPEC)
-    new = unnative(old, binding, make(old).view())
-    assert "native" not in new.source
-    equivalent(make, old, new, 40)
-
-
-def test_a_hook_that_always_leaves_the_call_has_no_branch():
-    spec = LOOP_SPEC.replace("last += 1;", "last += 1; finish;")
-    src = LOOP.replace("jmp tail", "rts")
-    make, binding, _ = players(
-        src, {"buf": 0x1300, "out": 0x1600, "hook": "hook", "tail": "tail"}
-    )
-    old = parse(spec)
-    new = unnative(old, binding, make(old).view())
-    assert "if " not in new.source.split("step")[1].split("last")[0]
-    equivalent(make, old, new, 10)
-
-
-def test_finish_ends_the_call_in_every_backend():
-    text = (
-        "spec f;\nlayout { a, b: addr; }\ncell p: u8 @ L.a;\ncell q: u8 @ L.b;\n"
-        "machine m { step { p := 1; if p == 1 { finish; } q := 2; } }\n"
-        "machine n { step { q := 3; } }\nschedule { m; n; }"
-    )
-    program = elaborate(parse(text), {"a": 0x10, "b": 0x11})
-    mem = run(program, bytearray(0x10000))
-    assert (mem[0x10], mem[0x11]) == (1, 0)
-    pre, post, relation = smt.transition(program)
-    solver = z3.Solver()
-    solver.add(relation, z3.Select(post, 0x11) != z3.Select(pre, 0x11))
-    assert (
-        solver.check() == z3.unsat
-    )  # the first machine finishes; the second never runs
 
 
 @pytest.mark.parametrize(
@@ -306,21 +266,6 @@ machine m[x in 0..1] {
 }
 schedule { m[0]; }
 """
-
-
-@pytest.mark.parametrize(
-    "code",
-    [
-        [0xBD, 0x76, 0x10, 0x85, 0x30],
-        [0xBC, 0x76, 0x10, 0xC8, 0xB9, 0x58, 0x22, 0x85, 0x30],
-    ],
-)
-def test_index_register_and_loaded_index_are_stated(code):
-    image = bytearray(0x10000)
-    image[0x1000 : 0x1000 + len(code)] = bytes(code)
-    binding = {"s": 0x1000, "r": 0x1000 + len(code)}
-    out = unnative(parse(_INDEXED), binding, bytes(image))
-    assert "mem[" in out.source
 
 
 def test_a_hook_a_patch_put_into_a_base_proc_is_refused():

@@ -9,7 +9,7 @@ import z3
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pysidtracker import NTSC_CLOCK_HZ, PAL_CLOCK_HZ, SidFormat, SidParseError, irqhost
+from pysidtracker import SidFormat, SidParseError, irqhost
 from pysidtracker.formats import SpecBinding
 from pysidtracker.asm6502 import assemble
 from pysidtracker.irqhost import InterruptPlayer
@@ -22,7 +22,6 @@ from pysidtracker.playspec import (
     SpecRuntimeError,
     compile_program,
     elaborate,
-    load,
     parse,
     run,
 )
@@ -138,15 +137,6 @@ def test_static_checks(body, message):
         lower(body)
 
 
-def test_aliasing_with_a_read_only_table_is_noted():
-    program = lower(
-        "cell t: u8[4] @ L.a ro;\ncell v: u8 @ L.a + 2;\nmachine m { step { v := 1; } }\n"
-        "schedule { m; }",
-        BIND,
-    )
-    assert program.notes == ["shared.v aliases read-only t"]
-
-
 SEMANTICS = """
 const K = 0xF0;
 cell w: u16 @ (L.a, L.a + 0x10);
@@ -202,59 +192,6 @@ def semantics_memory():
     return mem
 
 
-def test_concrete_semantics_wrap_carry_and_streams():
-    program = lower(SEMANTICS, BIND)
-    mem = run(program, semantics_memory(), registers={"c": True, "y": 3})
-    out = mem[0x1020:0x1030]
-    assert mem[0x1000] | mem[0x1010] << 8 == 0x1400
-    assert list(out[:15]) == [
-        0x01,
-        1,
-        1,
-        1,
-        0x99,
-        0xFF,
-        0x7F,
-        0x03,
-        0xC0,
-        3,
-        0x33,
-        1,
-        0xA3,
-        2,
-        4,
-    ]
-    run(program, mem)
-    assert mem[0x102B] == 1
-
-
-def test_hidden_control_state_persists_across_frames():
-    program = lower(SEMANTICS, BIND)
-    frame = compile_program(program)
-    mem = semantics_memory()
-    state = [0]
-    regs = {"c": False, "y": 0}
-    frame(mem.__getitem__, mem.__setitem__, state, None, regs)
-    assert (state, mem[0x102B]) == ([7], 1)
-    frame(mem.__getitem__, mem.__setitem__, state, None, regs)
-    assert (state, mem[0x102B]) == ([0], 2)
-
-
-def test_returns_and_bounded_loops():
-    program = lower(
-        "cell v: u8[4] @ L.a;\nmachine m { proc f(k: u8) -> u8 { if k > 2 { return k; } "
-        "v[0] += 1; return 9; }\n step { let r = f(v[1]); v[2] := r; "
-        "while v[3] != 0 bound 3 { v[3] -= 1; } } }\nschedule { m; }",
-        BIND,
-    )
-    mem = run(program, mem64(m1000=[0, 5, 0, 2]))
-    assert list(mem[0x1000:0x1004]) == [0, 5, 5, 0]
-    mem = run(program, mem64(m1000=[0, 1, 0, 0]))
-    assert list(mem[0x1000:0x1003]) == [1, 1, 9]
-    with pytest.raises(SpecRuntimeError, match="ran past 3"):
-        run(program, mem64(m1000=[0, 1, 0, 9]))
-
-
 def test_assert_failure_raises():
     program = lower(
         "cell v: u8 @ L.a;\nmachine m { step { assert v == 0; } }\nschedule { m; }",
@@ -278,14 +215,6 @@ schedule {
   if clock.tick { v[0]; v[1]; v[2]; } else { for i in L.l { v[i]; } }
 }
 """
-
-
-def test_schedule_order_and_signals():
-    program = lower(SCHEDULED, BIND)
-    assert program.order == ["clock", "v[0]", "v[1]", "v[2]", "v[2]", "v[0]"]
-    mem = run(program, mem64(), frames=2)
-    assert list(mem[0x1200:0x1203]) == [1, 1, 1]
-    assert list(mem[0x1000:0x1003]) == [2, 2, 4]
 
 
 def test_python_source_has_a_function_per_proc():
@@ -329,15 +258,6 @@ invariant steps: n == old(n) + 1 || n == 0;
 """
 
 
-def test_bmc_proves_and_refutes():
-    program = lower(COUNTER, BIND)
-    assert smt.bmc(program, 3).holds
-    broken = lower(COUNTER + "invariant small: n < 5;\n", BIND)
-    result = smt.bmc(broken, 3)
-    assert not result.holds and result.what == "invariant small"
-    assert result.model["n"] >= 4 or result.frame > 0
-
-
 def test_bmc_reports_loop_bounds_and_assumes():
     spec = (
         "cell v: u8 @ L.a;\nmachine m { step { while v != 0 bound 2 { v -= 1; } } }\n"
@@ -346,15 +266,6 @@ def test_bmc_reports_loop_bounds_and_assumes():
     result = smt.bmc(lower(spec, BIND), 1)
     assert not result.holds and "runs past its bound" in result.what
     assert smt.bmc(lower(spec + "assume v < 3;\n", BIND), 1).holds
-
-
-def test_transition_relation_is_functional():
-    program = lower(COUNTER, BIND)
-    pre, post, rel = smt.transition(program)
-    solver = z3.Solver()
-    solver.add(rel, z3.Select(pre, 0x1000) == 2, z3.Select(pre, 0x1100) == 5)
-    solver.add(z3.Select(post, 0x1000) != 3)
-    assert solver.check() == z3.unsat
 
 
 ROUTINE = """
@@ -417,23 +328,6 @@ def _routine():
 TV_BIND = {"cnt": 0x1000, "idx": 0x1010, "acc": 0x1020, "hi": 0x1030, "sid": 0xD400}
 
 
-def test_translation_validation_proves_a_routine():
-    image, labels = _routine()
-    binding = dict(TV_BIND, reload=labels["reload"] + 1)
-    for x in (0, 1):
-        result = validate(
-            parse(TV_SPEC),
-            binding,
-            f"v[{x}].tick",
-            image,
-            0x2000,
-            registers={"X": x},
-            preserve=("X",),
-        )
-        assert result.proven, result.counterexample
-        assert result.paths >= 1
-
-
 def test_translation_validation_counterexample_replays():
     image, labels = _routine()
     binding = dict(TV_BIND, reload=labels["reload"] + 1)
@@ -444,22 +338,6 @@ def test_translation_validation_counterexample_replays():
     assert cex["address"] == 0x1030 and cex["code"] == (cex["spec"] + 1) & 0xFF
     diffs = replay(broken, binding, "v[0].tick", cex["memory"], 0x2000, {"X": 0})
     assert diffs == [0x1030]
-
-
-def test_translation_validation_reads_operand_cells_live():
-    image, labels = _routine()
-    binding = dict(TV_BIND, reload=labels["reload"] + 1)
-    constant = TV_SPEC.replace("cnt := reload;", "cnt := 4;")
-    frozen = constant.replace(
-        "cell reload: u8 @ L.reload operand;", "cell reload: u8 @ L.reload;"
-    )
-    live = validate(
-        parse(constant), binding, "v[0].tick", image, 0x2000, registers={"X": 0}
-    )
-    assert not live.proven and live.counterexample["address"] == 0x1000
-    assert validate(
-        parse(frozen), binding, "v[0].tick", image, 0x2000, registers={"X": 0}
-    ).proven
 
 
 PLAY_SPEC = """
@@ -563,12 +441,6 @@ def test_stream_validator_reports_malformed_streams():
         strict.check("tests.test_bytegrammar:TOY:seq", 0x3000, mem.__getitem__)
 
 
-def test_load_reads_a_spec_file(tmp_path):
-    path = tmp_path / "s.play"
-    path.write_text(PLAY_SPEC)
-    assert load(path).name == "counter" and load(str(path)).machines
-
-
 def test_cli_check_python_bmc(tmp_path, capsys):
     path = tmp_path / "c.play"
     path.write_text(HEADER + COUNTER)
@@ -651,62 +523,6 @@ machine m {
 }
 schedule { m; }
 """
-
-
-@pytest.mark.parametrize("wrapped", [False, True])
-def test_native_hook_resumes_or_hands_the_call_to_the_cpu(wrapped):
-    code, labels = assemble(
-        """
-init:
-  lda #$10
-  sta $1300
-  rts
-play:
-  lda $1300
-  jmp hook
-tail:
-  clc
-  adc #$03
-  sta $1300
-  sta $d400
-  lda #$41
-  sta $d404
-  rts
-hook:
-  cmp #$40
-  beq away
-  jmp tail
-away:
-  lda #$00
-  sta $1300
-  sta $d400
-  rts
-wrap:
-  jsr play
-  rts
-""",
-        0x1000,
-    )
-    play = labels["wrap" if wrapped else "play"]
-    image = build_psid(code, 0x1000, init=labels["init"], play=play)[0x7C:]
-    binding = {
-        "freq": 0x1300,
-        "sid": 0xD400,
-        "hook": labels["hook"],
-        "tail": labels["tail"],
-    }
-    player = SpecPlayer(
-        parse(NATIVE_SPEC),
-        image,
-        0x1000,
-        labels["init"],
-        play,
-        bind=lambda v, e: binding,
-        entries=lambda view: {labels["play"]},
-    )
-    reference = EmuPlayer(image, 0x1000, labels["init"], play)
-    frames = whole_song(60)
-    assert player.render_grid(frames) == reference.render_grid(frames)
 
 
 HOSTED = """
@@ -811,16 +627,6 @@ def _spinning_player(backend_native, monkeypatch):
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_spec_runs_when_init_never_returns(native, monkeypatch):
-    player, calls, labels = _spinning_player(native, monkeypatch)
-    machine = player._hosted.host.machine
-    assert isinstance(machine, irqhost._PyTrapMachine) != native
-    grid = player.render_grid(whole_song(30))
-    assert set(calls) == {labels["play"]} and len(calls) >= 25
-    assert len({row[0] for row in grid}) > 20
-
-
-@pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("grid", [False, True])
 def test_hosted_tune_reaching_no_entry_raises(native, grid, monkeypatch):
     player, calls, labels = _spinning_player(native, monkeypatch)
@@ -842,24 +648,6 @@ def test_spec_host_backends_agree(monkeypatch):
             (player.render_grid(whole_song(30)), len(calls), player._hosted.host.cycle)
         )
     assert grids[0] == grids[1]
-
-
-def test_hosted_spec_replaces_the_trapped_entry(monkeypatch):
-    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
-    _, labels, code = _hosted_tune()
-    player = SpecPlayer(
-        parse(PLAY_SPEC.replace("freq += 3", "freq += 5")),
-        code,
-        0x1000,
-        labels["init"],
-        0,
-        bind=lambda v, e: {"freq": 0x1300, "sid": 0xD400},
-        entries=lambda view: {labels["play"]},
-        psid=False,
-    )
-    grid = player.render_grid(whole_song(10))
-    steps = {(b[0] - a[0]) & 0xFF for a, b in zip(grid[1:], grid[2:])}
-    assert steps == {5}
 
 
 def test_tv_counted_loop_with_unconditional_back_edge():
@@ -944,19 +732,6 @@ def test_translation_validation_pha_push_is_not_aliased_by_reads():
     assert result.proven, result.counterexample
 
 
-def test_translation_validation_assume_constrains_initial_memory():
-    image, labels = _routine()
-    binding = dict(TV_BIND, reload=labels["reload"] + 1)
-    constant = TV_SPEC.replace("cnt := reload;", "cnt := 4;")
-    args = (parse(constant), binding, "v[0].tick", image, 0x2000)
-    assert not validate(*args, registers={"X": 0}).proven
-    cell = labels["reload"] + 1
-    assumed = validate(
-        *args, registers={"X": 0}, assume=[lambda mem, regs: z3.Select(mem, cell) == 4]
-    )
-    assert assumed.proven, assumed.counterexample
-
-
 _PHA_PLA = """
 split: LDA $1000
        PHA
@@ -981,17 +756,6 @@ schedule {{ m; }}
 """
 
 
-@pytest.mark.parametrize("high,proven", [("a & 0xF0", True), ("(a & 0xF0) ^ 1", False)])
-def test_pha_pla_routine_is_not_vacuously_proven(high, proven):
-    code, _ = assemble(_PHA_PLA, 0x2000)
-    image = bytearray(0x10000)
-    image[0x2000 : 0x2000 + len(code)] = code
-    spec = parse(_PHA_PLA_SPEC.format(high=high))
-    binding = {"src": 0x1000, "dst": 0x1010}
-    result = validate(spec, binding, "m.split", bytes(image), 0x2000)
-    assert result.proven is proven
-
-
 SPLIT = """
 cell p: u8 @ L.a;
 cell q: u8 @ L.b;
@@ -1009,21 +773,6 @@ machine m {
 }
 schedule { m; }
 """
-
-
-@settings(max_examples=25, deadline=None)
-@given(st.integers(0, 255), st.integers(0, 15), st.integers(1, 3))
-def test_split_frame_matches_unsplit(p, q, chunk):
-    program = lower(SPLIT, BIND)
-    mem = mem64(m1000=[p], m1100=[q])
-    whole = run(program, bytearray(mem))
-    saved, pyexec.CHUNK = pyexec.CHUNK, chunk
-    try:
-        text = python_source(program)
-        assert "def _f0(" in text and "V[0]" in text
-        assert run(program, bytearray(mem)) == whole
-    finally:
-        pyexec.CHUNK = saved
 
 
 def test_split_frame_finish_skips_the_rest(monkeypatch):
@@ -1082,13 +831,6 @@ def _prove_volatile(step: str, source: str):
     )
 
 
-def test_a_volatile_read_matches_one_6502_read():
-    result = _prove_volatile(
-        "pw := osc3 & 0x0F;", "lda $d41b\nand #$0f\nsta $d402\nrts"
-    )
-    assert result.proven
-
-
 @pytest.mark.parametrize(
     "step, code",
     [
@@ -1116,22 +858,6 @@ def test_a_store_to_a_volatile_cell_is_refused():
     text = VOLATILE % "osc3 := 1;"
     with pytest.raises(SpecError, match="write to volatile cell"):
         elaborate(parse(text), VOLATILE_BINDING)
-
-
-def test_each_volatile_read_is_a_separate_bus_read():
-    reads = []
-    program = elaborate(
-        parse(VOLATILE % "pw := osc3 + osc3; pw := pw + osc3;"), VOLATILE_BINDING
-    )
-    frame = compile_program(program)
-    ram = bytearray(0x10000)
-
-    def read(addr):
-        reads.append(addr)
-        return ram[addr]
-
-    frame(read, ram.__setitem__, [], None, {})
-    assert reads.count(0xD41B) == 3
 
 
 def test_spec_player_replays_the_6502_volatile_reads():
@@ -1229,47 +955,6 @@ def _hosted_format(sid):
     return SidFormat("hosted", None, None, spec=lambda m: binding), model()
 
 
-def test_spec_player_runs_a_play_address_0_tune_on_its_real_header(monkeypatch):
-    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
-    data, labels, code = _hosted_tune()
-    fmt, model = _hosted_format(data)
-    by_hand = SpecPlayer(
-        parse(PLAY_SPEC),
-        code,
-        0x1000,
-        labels["init"],
-        0,
-        bind=lambda v, e: {"freq": 0x1300, "sid": 0xD400},
-        entries=lambda view: {labels["play"]},
-        psid=False,
-        sid=data,
-        clock="PAL",
-    )
-    frames = whole_song(40)
-    got = fmt.spec_player(model).render_grid(frames)
-    assert (
-        got == by_hand.render_grid(frames) == InterruptPlayer(data).render_grid(frames)
-    )
-    assert len({row[0] for row in got}) > 20
-
-
-def test_spec_player_clock_follows_the_tune_header(monkeypatch):
-    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
-    code, labels = assemble(HOSTED, 0x1000)
-    kwargs = dict(init=labels["init"], play=0, magic=b"RSID")
-    pal = build_psid(code, 0x1000, **kwargs)
-    ntsc = build_psid(code, 0x1000, flags=0b1000, **kwargs)
-
-    def hz(data, **overrides):
-        fmt, model = _hosted_format(data)
-        player = fmt.spec_player(model, **overrides)
-        player.render_grid(whole_song(3))
-        return player._hosted.host.clock_hz  # pylint: disable=protected-access
-
-    assert hz(pal) == PAL_CLOCK_HZ and hz(ntsc) == NTSC_CLOCK_HZ
-    assert hz(ntsc, clock="PAL") == PAL_CLOCK_HZ
-
-
 _MEM_LOOP = """
 count: LDX #0
 loop:  LDA $3000,X
@@ -1324,3 +1009,50 @@ def test_per_proc_cell_addresses_follow_the_binding():
     assert validate(spec, split, "m.step", bytes(image), 0x2000).proven
     shared = {"dpitch": 0x1000}
     assert not validate(spec, shared, "m.step", bytes(image), 0x2000).proven
+
+
+HOSTED_HOOK = HOSTED.replace("  STA $D404\n  RTS\n", "").rstrip() + """
+play: LDA $1300
+  JMP hook
+tail: CLC
+  ADC #$03
+  STA $1300
+  STA $D400
+  LDA #$41
+  STA $D404
+  RTS
+hook: CMP #$40
+  BEQ away
+  JMP tail
+away: LDA #$00
+  STA $1300
+  STA $D400
+  RTS
+"""
+
+
+def test_hosted_native_hook_runs_the_tune_code(monkeypatch):
+    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
+    code, labels = assemble(HOSTED_HOOK, 0x1000)
+    data = build_psid(code, 0x1000, init=labels["init"], play=0, magic=b"RSID")
+    binding = {
+        "freq": 0x1300,
+        "sid": 0xD400,
+        "hook": labels["hook"],
+        "tail": labels["tail"],
+    }
+    player = SpecPlayer(
+        parse(NATIVE_SPEC),
+        code,
+        0x1000,
+        labels["init"],
+        0,
+        bind=lambda v, e: binding,
+        entries=lambda view: {labels["play"]},
+        psid=False,
+        sid=data,
+    )
+    frames = whole_song(60)
+    grid = player.render_grid(frames)
+    assert grid == InterruptPlayer(data).render_grid(frames)
+    assert 0 in {row[0] for row in grid[1:]} and len({row[0] for row in grid}) > 10

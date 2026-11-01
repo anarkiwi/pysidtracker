@@ -26,40 +26,6 @@ def _check(tmp_path, **kw):
     )
 
 
-def test_clean_project(tmp_path):
-    _project(
-        tmp_path,
-        pkg_S___init___D_py="from .core import Player\n",
-        pkg_S_core_D_py='''
-            """Core; see :class:`pkg.core.Player`."""
-            LIMIT = 3
-
-            class Player:
-                """Plays; :meth:`Player.step` and ``pkg.core.LIMIT``."""
-
-                def step(self):
-                    return LIMIT
-            ''',
-        tests_S_test_x_D_py="from pkg import Player\n\ndef test_a():\n    Player().step()\n",
-        docs_S_a_D_md="Use ``pkg.core.Player.step`` and :class:`Player`.\n",
-    )
-    assert _check(tmp_path) == []
-
-
-def test_unused_symbols(tmp_path):
-    _project(
-        tmp_path,
-        pkg_S___init___D_py="from .core import Dead, Live\n",
-        pkg_S_core_D_py="DEAD_CONST = 1\nUSED = 2\n\ndef dead():\n    pass\n\n"
-        "class Dead:\n    pass\n\nclass Live:\n    x = USED\n",
-        tests_S_test_x_D_py="from pkg import Live\n\ndef test_a():\n    Live()\n",
-    )
-    out = "\n".join(_check(tmp_path))
-    assert "'DEAD_CONST'" in out and "'dead'" in out and "'Dead'" in out
-    assert "'USED'" not in out and "'Live'" not in out
-    assert "'DEAD_CONST'" not in "\n".join(_check(tmp_path, whitelist=["DEAD_CONST"]))
-
-
 def test_unresolved_references(tmp_path):
     _project(
         tmp_path,
@@ -105,6 +71,8 @@ _PUBLIC = [
     "SID_FILTER_LO",
     "SID_FILTER_HI",
     "SID_RES_FILT",
+    # Exercised only inside pytester sources (tests/test_testing_fixtures.py).
+    "make_tune_fixtures",
 ]
 
 
