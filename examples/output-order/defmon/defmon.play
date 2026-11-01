@@ -1,0 +1,1133 @@
+spec defmon_ordered;
+
+const V0_FREQ_LO = 0;
+const V0_FREQ_HI = 1;
+const V0_PW_LO = 2;
+const V0_PW_HI = 3;
+const V0_CTRL = 4;
+const V0_AD = 5;
+const V0_SR = 6;
+const V1_FREQ_LO = 7;
+const V1_FREQ_HI = 8;
+const V1_PW_LO = 9;
+const V1_PW_HI = 10;
+const V1_CTRL = 11;
+const V1_AD = 12;
+const V1_SR = 13;
+const V2_FREQ_LO = 14;
+const V2_FREQ_HI = 15;
+const V2_PW_LO = 16;
+const V2_PW_HI = 17;
+const V2_CTRL = 18;
+const V2_AD = 19;
+const V2_SR = 20;
+const FC_HI = 22;
+const RES_FILT = 23;
+const MODE_VOL = 24;
+
+cell sid: u8[25] @ 0xd400 out;
+cell cp: u8 @ 0x10ca;
+cell cursor: u8 @ 0x10eb operand;
+cell cut_hi: u8 @ 0x10be operand;
+cell cut_lo: u8 @ 0x10b6 operand;
+cell cut_step_hi: u8 @ 0x10c0 operand;
+cell cut_step_lo: u8 @ 0x10b9 operand;
+cell dl: u8[256] @ 0x1e00 ro;
+cell fv: u8 @ 0x10af;
+cell op_hi: u8 @ 0x10bf operand;
+cell pitch_hi: u8[256] @ 0x1638 ro notes(hi, -24);
+cell pitch_hi_prev: u8[256] @ 0x161f ro notes(hi, -49);
+cell pitch_hi_step: u8[256] @ 0x1620 ro notes(hi, -48);
+cell pitch_lo: u8[256] @ 0x159c ro notes(lo, -24);
+cell pitch_lo_prev: u8[256] @ 0x1583 ro notes(lo, -49);
+cell pitch_lo_step: u8[256] @ 0x1584 ro notes(lo, -48);
+cell reader0_count_a: u8 @ 0x12e0 operand;
+cell reader0_count_b: u8 @ 0x1373 operand;
+cell reader0_flag: u8 @ 0x11b5 operand;
+cell reader0_gate_a: u8 @ 0x1182 operand;
+cell reader0_gate_b: u8 @ 0x1190 operand;
+cell reader0_gate_n: u8 @ 0x119e operand;
+cell reader0_mode: u8 @ 0x101b;
+cell reader0_note: u8 @ 0x137f;
+cell reader0_note_base: u8 @ 0x12ed operand;
+cell reader0_row_a: u8 @ 0x12ef operand;
+cell reader0_row_b: u8 @ 0x1382 operand;
+cell reader0_slide_hi: u8 @ 0x101a;
+cell reader0_slide_lo: u8 @ 0x1019;
+cell reader1_count_a: u8 @ 0x1311 operand;
+cell reader1_count_b: u8 @ 0x13a4 operand;
+cell reader1_flag: u8 @ 0x123d operand;
+cell reader1_gate_a: u8 @ 0x120a operand;
+cell reader1_gate_b: u8 @ 0x1218 operand;
+cell reader1_gate_n: u8 @ 0x1226 operand;
+cell reader1_mode: u8 @ 0x104c;
+cell reader1_note: u8 @ 0x13b0;
+cell reader1_note_base: u8 @ 0x131e operand;
+cell reader1_row_a: u8 @ 0x1320 operand;
+cell reader1_row_b: u8 @ 0x13b3 operand;
+cell reader1_slide_hi: u8 @ 0x104b;
+cell reader1_slide_lo: u8 @ 0x104a;
+cell reader2_count_a: u8 @ 0x1342 operand;
+cell reader2_count_b: u8 @ 0x13d5 operand;
+cell reader2_flag: u8 @ 0x12c5 operand;
+cell reader2_gate_a: u8 @ 0x1292 operand;
+cell reader2_gate_b: u8 @ 0x12a0 operand;
+cell reader2_gate_n: u8 @ 0x12ae operand;
+cell reader2_mode: u8 @ 0x107d;
+cell reader2_note: u8 @ 0x13e1;
+cell reader2_note_base: u8 @ 0x134f operand;
+cell reader2_row_a: u8 @ 0x1351 operand;
+cell reader2_row_b: u8 @ 0x13e4 operand;
+cell reader2_slide_hi: u8 @ 0x107c;
+cell reader2_slide_lo: u8 @ 0x107b;
+cell res: u8 @ 0x10aa;
+cell rows_hi: u8[256] @ 0x1900 ro;
+cell rows_lo: u8[256] @ 0x1800 ro;
+cell trigger: u8 @ 0x10d9 operand;
+cell v1: u8[256] @ 0x1b00 ro;
+cell v2: u8[256] @ 0x1c00 ro;
+cell v3: u8[256] @ 0x1d00 ro;
+cell voice0_depth: u8 @ 0x101e;
+cell voice0_freq_hi: u8 @ 0x102f operand;
+cell voice0_freq_lo: u8 @ 0x102d operand;
+cell voice0_hi: u8 @ 0x1025;
+cell voice0_lo: u8 @ 0x1023;
+cell voice1_depth: u8 @ 0x104f;
+cell voice1_freq_hi: u8 @ 0x1060 operand;
+cell voice1_freq_lo: u8 @ 0x105e operand;
+cell voice1_hi: u8 @ 0x1056;
+cell voice1_lo: u8 @ 0x1054;
+cell voice2_depth: u8 @ 0x1080;
+cell voice2_freq_hi: u8 @ 0x1091 operand;
+cell voice2_freq_lo: u8 @ 0x108f operand;
+cell voice2_hi: u8 @ 0x1087;
+cell voice2_lo: u8 @ 0x1085;
+cell walker_c0: u8 @ 0x114a operand;
+cell walker_c1: u8 @ 0x11d2 operand;
+cell walker_c2: u8 @ 0x125a operand;
+cell walker_count: u8 @ 0x14ed;
+cell walker_owner: u8 @ 0x14ec;
+
+machine defmon_ordered {
+  step {
+    let c: bool = false;
+    if (op_hi == 0xe9) {
+      c := !((cut_lo < cut_step_lo) || (cut_lo == cut_step_lo));
+      cut_lo := ((cut_lo - cut_step_lo) - 1);
+      let cin: bool = c;
+      c := !((cut_hi < cut_step_hi) || (!c && (cut_hi == cut_step_hi)));
+      cut_hi := ((cut_hi - cut_step_hi) - u8(!cin));
+    } else {
+      c := ((cut_lo + cut_step_lo) < cut_lo);
+      cut_lo := (cut_lo + cut_step_lo);
+      let cin_2: bool = c;
+      c := (((cut_hi + cut_step_hi) < cut_hi) || (c && ((cut_hi + cut_step_hi) == 0xff)));
+      cut_hi := ((cut_hi + cut_step_hi) + u8(cin_2));
+    }
+    if ((cut_hi & 0x80) != 0) {
+      cut_hi := 2;
+    }
+    let out: u8 = ((cut_hi + cp) + u8(c));
+    if (((out & 0x80) != 0) || (out < 2)) {
+      out := 2;
+    }
+    sid[FC_HI] := out;
+    sid[RES_FILT] := res;
+    sid[MODE_VOL] := (fv | 0xf);
+    sid[V0_AD] := mem[0x1039];
+    sid[V0_SR] := mem[0x1037];
+    sid[V0_CTRL] := (mem[0x103b] ^ mem[0x103d]);
+    sid[V0_FREQ_LO] := voice0_freq_lo;
+    sid[V0_FREQ_HI] := voice0_freq_hi;
+    sid[V0_PW_LO] := voice0_lo;
+    sid[V0_PW_HI] := voice0_hi;
+    sid[V1_AD] := mem[0x106a];
+    sid[V1_SR] := mem[0x1068];
+    sid[V1_CTRL] := (mem[0x106c] ^ mem[0x106e]);
+    sid[V1_FREQ_LO] := voice1_freq_lo;
+    sid[V1_FREQ_HI] := voice1_freq_hi;
+    sid[V1_PW_LO] := voice1_lo;
+    sid[V1_PW_HI] := voice1_hi;
+    sid[V2_AD] := mem[0x109b];
+    sid[V2_SR] := mem[0x1099];
+    sid[V2_CTRL] := (mem[0x109d] ^ mem[0x109f]);
+    sid[V2_FREQ_LO] := voice2_freq_lo;
+    sid[V2_FREQ_HI] := voice2_freq_hi;
+    sid[V2_PW_LO] := voice2_lo;
+    sid[V2_PW_HI] := voice2_hi;
+    if ((trigger & 0x80) != 0) {
+      let t: u8 = (trigger & 0xf);
+      trigger := t;
+      walker_c0 := t;
+      walker_c1 := t;
+      walker_c2 := t;
+      let y: u8 = cursor;
+      if ((v1[cursor] & 0x80) != 0) {
+        if (v3[cursor] == 0) {
+          y := v2[cursor];
+        } elif (walker_owner != cursor) {
+          walker_owner := cursor;
+          walker_count := v3[cursor];
+          y := v2[cursor];
+        } else {
+          walker_count := (walker_count - 1);
+          if (walker_count != 0) {
+            y := v2[cursor];
+          } else {
+            walker_owner := 0;
+            y := (cursor + 1);
+          }
+        }
+      }
+      let w16: u16 = word(mem[(0x1a00 + u16(v1[y]))], mem[(0x1a80 + u16(v1[y]))]);
+      mem[0x1186] := lo(w16);
+      mem[0x1187] := hi(w16);
+      let w16_2: u16 = word(mem[(0x1a00 + u16(v2[y]))], mem[(0x1a80 + u16(v2[y]))]);
+      mem[0x120e] := lo(w16_2);
+      mem[0x120f] := hi(w16_2);
+      let w16_3: u16 = word(mem[(0x1a00 + u16(v3[y]))], mem[(0x1a80 + u16(v3[y]))]);
+      mem[0x1296] := lo(w16_3);
+      mem[0x1297] := hi(w16_3);
+      cursor := (y + 1);
+    }
+    let cond: bool = !((walker_c0 & 0x80) != 0);
+    if !((walker_c0 & 0x80) != 0) {
+      walker_c0 := (walker_c0 - 1);
+      if ((walker_c0 & 0x80) != 0) {
+        let w16_4: u16 = word(mem[0x1186], mem[0x1187]);
+        mem[0x1194] := lo(w16_4);
+        mem[0x1195] := hi(w16_4);
+        let w16_5: u16 = word(mem[0x1186], mem[0x1187]);
+        mem[0x11a2] := lo(w16_5);
+        mem[0x11a3] := hi(w16_5);
+        let f: u8 = mem[word(mem[0x1186], mem[0x1187])];
+        reader0_flag := f;
+        reader0_gate_a := (f << 1);
+        reader0_gate_b := (f << 2);
+        reader0_gate_n := (f << 3);
+      }
+    }
+    if !cond {
+      let y_2: u8 = 1;
+      if ((reader0_gate_a & 0x80) != 0) {
+        reader0_row_a := mem[(word(mem[0x1186], mem[0x1187]) + 1)];
+        reader0_count_a := 0;
+        y_2 := 2;
+      }
+      if ((reader0_gate_b & 0x80) != 0) {
+        reader0_row_b := mem[(word(mem[0x1194], mem[0x1195]) + u16(y_2))];
+        reader0_count_b := 0;
+        y_2 := (y_2 + 1);
+      }
+      if ((reader0_gate_n & 0x80) != 0) {
+        let n: u8 = mem[(word(mem[0x11a2], mem[0x11a3]) + u16(y_2))];
+        reader0_note_base := n;
+        reader0_note := n;
+        reader0_slide_lo := 0;
+        reader0_slide_hi := 0;
+        reader0_mode := 0;
+        y_2 := (y_2 + 1);
+      }
+      if ((reader0_flag & 0x80) != 0) {
+        trigger := reader0_flag;
+      } else {
+        let w16_6: u16 = (word(mem[0x1186], mem[0x1187]) + u16(y_2));
+        mem[0x1186] := lo(w16_6);
+        mem[0x1187] := hi(w16_6);
+        walker_c0 := (reader0_flag & 0xf);
+      }
+    }
+    let cond_2: bool = !((walker_c1 & 0x80) != 0);
+    if !((walker_c1 & 0x80) != 0) {
+      walker_c1 := (walker_c1 - 1);
+      if ((walker_c1 & 0x80) != 0) {
+        let w16_7: u16 = word(mem[0x120e], mem[0x120f]);
+        mem[0x121c] := lo(w16_7);
+        mem[0x121d] := hi(w16_7);
+        let w16_8: u16 = word(mem[0x120e], mem[0x120f]);
+        mem[0x122a] := lo(w16_8);
+        mem[0x122b] := hi(w16_8);
+        let f_2: u8 = mem[word(mem[0x120e], mem[0x120f])];
+        reader1_flag := f_2;
+        reader1_gate_a := (f_2 << 1);
+        reader1_gate_b := (f_2 << 2);
+        reader1_gate_n := (f_2 << 3);
+      }
+    }
+    if !cond_2 {
+      let y_3: u8 = 1;
+      if ((reader1_gate_a & 0x80) != 0) {
+        reader1_row_a := mem[(word(mem[0x120e], mem[0x120f]) + 1)];
+        reader1_count_a := 0;
+        y_3 := 2;
+      }
+      if ((reader1_gate_b & 0x80) != 0) {
+        reader1_row_b := mem[(word(mem[0x121c], mem[0x121d]) + u16(y_3))];
+        reader1_count_b := 0;
+        y_3 := (y_3 + 1);
+      }
+      if ((reader1_gate_n & 0x80) != 0) {
+        let n_2: u8 = mem[(word(mem[0x122a], mem[0x122b]) + u16(y_3))];
+        reader1_note_base := n_2;
+        reader1_note := n_2;
+        reader1_slide_lo := 0;
+        reader1_slide_hi := 0;
+        reader1_mode := 0;
+        y_3 := (y_3 + 1);
+      }
+      if ((reader1_flag & 0x80) != 0) {
+        trigger := reader1_flag;
+      } else {
+        let w16_9: u16 = (word(mem[0x120e], mem[0x120f]) + u16(y_3));
+        mem[0x120e] := lo(w16_9);
+        mem[0x120f] := hi(w16_9);
+        walker_c1 := (reader1_flag & 0xf);
+      }
+    }
+    let cond_3: bool = !((walker_c2 & 0x80) != 0);
+    if !((walker_c2 & 0x80) != 0) {
+      walker_c2 := (walker_c2 - 1);
+      if ((walker_c2 & 0x80) != 0) {
+        let w16_10: u16 = word(mem[0x1296], mem[0x1297]);
+        mem[0x12a4] := lo(w16_10);
+        mem[0x12a5] := hi(w16_10);
+        let w16_11: u16 = word(mem[0x1296], mem[0x1297]);
+        mem[0x12b2] := lo(w16_11);
+        mem[0x12b3] := hi(w16_11);
+        let f_3: u8 = mem[word(mem[0x1296], mem[0x1297])];
+        reader2_flag := f_3;
+        reader2_gate_a := (f_3 << 1);
+        reader2_gate_b := (f_3 << 2);
+        reader2_gate_n := (f_3 << 3);
+      }
+    }
+    if !cond_3 {
+      let y_4: u8 = 1;
+      if ((reader2_gate_a & 0x80) != 0) {
+        reader2_row_a := mem[(word(mem[0x1296], mem[0x1297]) + 1)];
+        reader2_count_a := 0;
+        y_4 := 2;
+      }
+      if ((reader2_gate_b & 0x80) != 0) {
+        reader2_row_b := mem[(word(mem[0x12a4], mem[0x12a5]) + u16(y_4))];
+        reader2_count_b := 0;
+        y_4 := (y_4 + 1);
+      }
+      if ((reader2_gate_n & 0x80) != 0) {
+        let n_3: u8 = mem[(word(mem[0x12b2], mem[0x12b3]) + u16(y_4))];
+        reader2_note_base := n_3;
+        reader2_note := n_3;
+        reader2_slide_lo := 0;
+        reader2_slide_hi := 0;
+        reader2_mode := 0;
+        y_4 := (y_4 + 1);
+      }
+      if ((reader2_flag & 0x80) != 0) {
+        trigger := reader2_flag;
+      } else {
+        let w16_12: u16 = (word(mem[0x1296], mem[0x1297]) + u16(y_4));
+        mem[0x1296] := lo(w16_12);
+        mem[0x1297] := hi(w16_12);
+        walker_c2 := (reader2_flag & 0xf);
+      }
+    }
+    let m_00fb: u8 = 0;
+    let m_00fc: u8 = 0;
+    if !((reader0_count_a & 0x80) != 0) {
+      if (reader0_count_a != 0) {
+        reader0_count_a := (reader0_count_a - 1);
+      } else {
+        let eff: u8 = reader0_row_a;
+        if (rows_hi[reader0_row_a] == 0) {
+          eff := rows_lo[reader0_row_a];
+        }
+        m_00fc := rows_hi[eff];
+        reader0_count_a := dl[eff];
+        reader0_row_a := (eff + 1);
+        m_00fb := rows_lo[eff];
+        let base: u16 = word(m_00fb, m_00fc);
+        let pos: u8 = 1;
+        let low: u8 = mem[(base + 0)];
+        if (low != 0) {
+          if ((low & 0x40) != 0) {
+            pos := 2;
+            mem[0x103b] := mem[(base + 1)];
+          }
+          if ((low & 0x80) != 0) {
+            let nx: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            mem[0x103d] := nx;
+          }
+          if ((low & 0x20) != 0) {
+            let nx_2: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            mem[0x1039] := nx_2;
+          }
+          if ((low & 0x10) != 0) {
+            let nx_3: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            mem[0x1037] := nx_3;
+          }
+          if ((low & 8) != 0) {
+            let nx_4: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            reader0_note := ite(((nx_4 & 0x80) != 0), (nx_4 & 0x7f), ((nx_4 + reader0_note_base) & 0x7f));
+          }
+          if ((low & 4) != 0) {
+            let nx_5: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            reader0_mode := nx_5;
+          }
+          if ((low & 2) != 0) {
+            let nx_6: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            voice0_hi := nx_6;
+            voice0_lo := (nx_6 & 0xf0);
+          }
+        }
+        let nx_7: u8 = mem[(base + u16(pos))];
+        pos := (pos + 1);
+        if !(nx_7 == 0) {
+          if ((nx_7 & 0x80) != 0) {
+            let nx_8: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            voice0_depth := nx_8;
+          }
+          if ((nx_7 & 0x40) != 0) {
+            let nx_9: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            if (nx_9 == 0) {
+              res := (res & mem[0x1021]);
+            } elif ((nx_9 & 8) != 0) {
+              res := (((res & 0xf) | nx_9) | mem[0x1020]);
+            } else {
+              res := nx_9;
+            }
+          }
+          if ((nx_7 & 0x20) != 0) {
+            let nx_10: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            fv := nx_10;
+          }
+          if ((nx_7 & 0x10) != 0) {
+            let nx_11: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            cp := nx_11;
+          }
+          if ((nx_7 & 8) != 0) {
+            let nx_12: u8 = mem[(base + u16(pos))];
+            pos := (pos + 1);
+            let nx_13: u8 = mem[(base + u16(pos))];
+            if !((nx_13 & 0x80) != 0) {
+              cut_lo := nx_12;
+              cut_hi := nx_13;
+              cut_step_lo := 0;
+              cut_step_hi := 0;
+            } elif ((nx_13 & 0x40) != 0) {
+              cut_step_lo := nx_12;
+              cut_step_hi := (nx_13 & 0x3f);
+              op_hi := 0xe9;
+            } else {
+              cut_step_lo := nx_12;
+              cut_step_hi := (nx_13 & 0x7f);
+              op_hi := 0x69;
+            }
+          }
+        }
+      }
+    }
+    if !((reader1_count_a & 0x80) != 0) {
+      if (reader1_count_a != 0) {
+        reader1_count_a := (reader1_count_a - 1);
+      } else {
+        let eff_2: u8 = reader1_row_a;
+        if (rows_hi[reader1_row_a] == 0) {
+          eff_2 := rows_lo[reader1_row_a];
+        }
+        m_00fc := rows_hi[eff_2];
+        reader1_count_a := dl[eff_2];
+        reader1_row_a := (eff_2 + 1);
+        m_00fb := rows_lo[eff_2];
+        let base_2: u16 = word(m_00fb, m_00fc);
+        let pos_2: u8 = 1;
+        let low_2: u8 = mem[(base_2 + 0)];
+        if (low_2 != 0) {
+          if ((low_2 & 0x40) != 0) {
+            pos_2 := 2;
+            mem[0x106c] := mem[(base_2 + 1)];
+          }
+          if ((low_2 & 0x80) != 0) {
+            let nx_14: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            mem[0x106e] := nx_14;
+          }
+          if ((low_2 & 0x20) != 0) {
+            let nx_15: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            mem[0x106a] := nx_15;
+          }
+          if ((low_2 & 0x10) != 0) {
+            let nx_16: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            mem[0x1068] := nx_16;
+          }
+          if ((low_2 & 8) != 0) {
+            let nx_17: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            reader1_note := ite(((nx_17 & 0x80) != 0), (nx_17 & 0x7f), ((nx_17 + reader1_note_base) & 0x7f));
+          }
+          if ((low_2 & 4) != 0) {
+            let nx_18: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            reader1_mode := nx_18;
+          }
+          if ((low_2 & 2) != 0) {
+            let nx_19: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            voice1_hi := nx_19;
+            voice1_lo := (nx_19 & 0xf0);
+          }
+        }
+        let nx_20: u8 = mem[(base_2 + u16(pos_2))];
+        pos_2 := (pos_2 + 1);
+        if !(nx_20 == 0) {
+          if ((nx_20 & 0x80) != 0) {
+            let nx_21: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            voice1_depth := nx_21;
+          }
+          if ((nx_20 & 0x40) != 0) {
+            let nx_22: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            if (nx_22 == 0) {
+              res := (res & mem[0x1052]);
+            } elif ((nx_22 & 8) != 0) {
+              res := (((res & 0xf) | nx_22) | mem[0x1051]);
+            } else {
+              res := nx_22;
+            }
+          }
+          if ((nx_20 & 0x20) != 0) {
+            let nx_23: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            fv := nx_23;
+          }
+          if ((nx_20 & 0x10) != 0) {
+            let nx_24: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            cp := nx_24;
+          }
+          if ((nx_20 & 8) != 0) {
+            let nx_25: u8 = mem[(base_2 + u16(pos_2))];
+            pos_2 := (pos_2 + 1);
+            let nx_26: u8 = mem[(base_2 + u16(pos_2))];
+            if !((nx_26 & 0x80) != 0) {
+              cut_lo := nx_25;
+              cut_hi := nx_26;
+              cut_step_lo := 0;
+              cut_step_hi := 0;
+            } elif ((nx_26 & 0x40) != 0) {
+              cut_step_lo := nx_25;
+              cut_step_hi := (nx_26 & 0x3f);
+              op_hi := 0xe9;
+            } else {
+              cut_step_lo := nx_25;
+              cut_step_hi := (nx_26 & 0x7f);
+              op_hi := 0x69;
+            }
+          }
+        }
+      }
+    }
+    if !((reader2_count_a & 0x80) != 0) {
+      if (reader2_count_a != 0) {
+        reader2_count_a := (reader2_count_a - 1);
+      } else {
+        let eff_3: u8 = reader2_row_a;
+        if (rows_hi[reader2_row_a] == 0) {
+          eff_3 := rows_lo[reader2_row_a];
+        }
+        m_00fc := rows_hi[eff_3];
+        reader2_count_a := dl[eff_3];
+        reader2_row_a := (eff_3 + 1);
+        m_00fb := rows_lo[eff_3];
+        let base_3: u16 = word(m_00fb, m_00fc);
+        let pos_3: u8 = 1;
+        let low_3: u8 = mem[(base_3 + 0)];
+        if (low_3 != 0) {
+          if ((low_3 & 0x40) != 0) {
+            pos_3 := 2;
+            mem[0x109d] := mem[(base_3 + 1)];
+          }
+          if ((low_3 & 0x80) != 0) {
+            let nx_27: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            mem[0x109f] := nx_27;
+          }
+          if ((low_3 & 0x20) != 0) {
+            let nx_28: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            mem[0x109b] := nx_28;
+          }
+          if ((low_3 & 0x10) != 0) {
+            let nx_29: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            mem[0x1099] := nx_29;
+          }
+          if ((low_3 & 8) != 0) {
+            let nx_30: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            reader2_note := ite(((nx_30 & 0x80) != 0), (nx_30 & 0x7f), ((nx_30 + reader2_note_base) & 0x7f));
+          }
+          if ((low_3 & 4) != 0) {
+            let nx_31: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            reader2_mode := nx_31;
+          }
+          if ((low_3 & 2) != 0) {
+            let nx_32: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            voice2_hi := nx_32;
+            voice2_lo := (nx_32 & 0xf0);
+          }
+        }
+        let nx_33: u8 = mem[(base_3 + u16(pos_3))];
+        pos_3 := (pos_3 + 1);
+        if !(nx_33 == 0) {
+          if ((nx_33 & 0x80) != 0) {
+            let nx_34: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            voice2_depth := nx_34;
+          }
+          if ((nx_33 & 0x40) != 0) {
+            let nx_35: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            if (nx_35 == 0) {
+              res := (res & mem[0x1083]);
+            } elif ((nx_35 & 8) != 0) {
+              res := (((res & 0xf) | nx_35) | mem[0x1082]);
+            } else {
+              res := nx_35;
+            }
+          }
+          if ((nx_33 & 0x20) != 0) {
+            let nx_36: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            fv := nx_36;
+          }
+          if ((nx_33 & 0x10) != 0) {
+            let nx_37: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            cp := nx_37;
+          }
+          if ((nx_33 & 8) != 0) {
+            let nx_38: u8 = mem[(base_3 + u16(pos_3))];
+            pos_3 := (pos_3 + 1);
+            let nx_39: u8 = mem[(base_3 + u16(pos_3))];
+            if !((nx_39 & 0x80) != 0) {
+              cut_lo := nx_38;
+              cut_hi := nx_39;
+              cut_step_lo := 0;
+              cut_step_hi := 0;
+            } elif ((nx_39 & 0x40) != 0) {
+              cut_step_lo := nx_38;
+              cut_step_hi := (nx_39 & 0x3f);
+              op_hi := 0xe9;
+            } else {
+              cut_step_lo := nx_38;
+              cut_step_hi := (nx_39 & 0x7f);
+              op_hi := 0x69;
+            }
+          }
+        }
+      }
+    }
+    if !((reader0_count_b & 0x80) != 0) {
+      if (reader0_count_b != 0) {
+        reader0_count_b := (reader0_count_b - 1);
+      } else {
+        let eff_4: u8 = reader0_row_b;
+        if (rows_hi[reader0_row_b] == 0) {
+          eff_4 := rows_lo[reader0_row_b];
+        }
+        m_00fc := rows_hi[eff_4];
+        reader0_count_b := dl[eff_4];
+        reader0_row_b := (eff_4 + 1);
+        m_00fb := rows_lo[eff_4];
+        let base_4: u16 = word(m_00fb, m_00fc);
+        let pos_4: u8 = 1;
+        let low_4: u8 = mem[(base_4 + 0)];
+        if (low_4 != 0) {
+          if ((low_4 & 0x40) != 0) {
+            pos_4 := 2;
+            mem[0x103b] := mem[(base_4 + 1)];
+          }
+          if ((low_4 & 0x80) != 0) {
+            let nx_40: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            mem[0x103d] := nx_40;
+          }
+          if ((low_4 & 0x20) != 0) {
+            let nx_41: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            mem[0x1039] := nx_41;
+          }
+          if ((low_4 & 0x10) != 0) {
+            let nx_42: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            mem[0x1037] := nx_42;
+          }
+          if ((low_4 & 8) != 0) {
+            let nx_43: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            reader0_note := ite(((nx_43 & 0x80) != 0), (nx_43 & 0x7f), ((nx_43 + reader0_note_base) & 0x7f));
+          }
+          if ((low_4 & 4) != 0) {
+            let nx_44: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            reader0_mode := nx_44;
+          }
+          if ((low_4 & 2) != 0) {
+            let nx_45: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            voice0_hi := nx_45;
+            voice0_lo := (nx_45 & 0xf0);
+          }
+        }
+        let nx_46: u8 = mem[(base_4 + u16(pos_4))];
+        pos_4 := (pos_4 + 1);
+        if !(nx_46 == 0) {
+          if ((nx_46 & 0x80) != 0) {
+            let nx_47: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            voice0_depth := nx_47;
+          }
+          if ((nx_46 & 0x40) != 0) {
+            let nx_48: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            if (nx_48 == 0) {
+              res := (res & mem[0x1021]);
+            } elif ((nx_48 & 8) != 0) {
+              res := (((res & 0xf) | nx_48) | mem[0x1020]);
+            } else {
+              res := nx_48;
+            }
+          }
+          if ((nx_46 & 0x20) != 0) {
+            let nx_49: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            fv := nx_49;
+          }
+          if ((nx_46 & 0x10) != 0) {
+            let nx_50: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            cp := nx_50;
+          }
+          if ((nx_46 & 8) != 0) {
+            let nx_51: u8 = mem[(base_4 + u16(pos_4))];
+            pos_4 := (pos_4 + 1);
+            let nx_52: u8 = mem[(base_4 + u16(pos_4))];
+            if !((nx_52 & 0x80) != 0) {
+              cut_lo := nx_51;
+              cut_hi := nx_52;
+              cut_step_lo := 0;
+              cut_step_hi := 0;
+            } elif ((nx_52 & 0x40) != 0) {
+              cut_step_lo := nx_51;
+              cut_step_hi := (nx_52 & 0x3f);
+              op_hi := 0xe9;
+            } else {
+              cut_step_lo := nx_51;
+              cut_step_hi := (nx_52 & 0x7f);
+              op_hi := 0x69;
+            }
+          }
+        }
+      }
+    }
+    if !((reader1_count_b & 0x80) != 0) {
+      if (reader1_count_b != 0) {
+        reader1_count_b := (reader1_count_b - 1);
+      } else {
+        let eff_5: u8 = reader1_row_b;
+        if (rows_hi[reader1_row_b] == 0) {
+          eff_5 := rows_lo[reader1_row_b];
+        }
+        m_00fc := rows_hi[eff_5];
+        reader1_count_b := dl[eff_5];
+        reader1_row_b := (eff_5 + 1);
+        m_00fb := rows_lo[eff_5];
+        let base_5: u16 = word(m_00fb, m_00fc);
+        let pos_5: u8 = 1;
+        let low_5: u8 = mem[(base_5 + 0)];
+        if (low_5 != 0) {
+          if ((low_5 & 0x40) != 0) {
+            pos_5 := 2;
+            mem[0x106c] := mem[(base_5 + 1)];
+          }
+          if ((low_5 & 0x80) != 0) {
+            let nx_53: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            mem[0x106e] := nx_53;
+          }
+          if ((low_5 & 0x20) != 0) {
+            let nx_54: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            mem[0x106a] := nx_54;
+          }
+          if ((low_5 & 0x10) != 0) {
+            let nx_55: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            mem[0x1068] := nx_55;
+          }
+          if ((low_5 & 8) != 0) {
+            let nx_56: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            reader1_note := ite(((nx_56 & 0x80) != 0), (nx_56 & 0x7f), ((nx_56 + reader1_note_base) & 0x7f));
+          }
+          if ((low_5 & 4) != 0) {
+            let nx_57: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            reader1_mode := nx_57;
+          }
+          if ((low_5 & 2) != 0) {
+            let nx_58: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            voice1_hi := nx_58;
+            voice1_lo := (nx_58 & 0xf0);
+          }
+        }
+        let nx_59: u8 = mem[(base_5 + u16(pos_5))];
+        pos_5 := (pos_5 + 1);
+        if !(nx_59 == 0) {
+          if ((nx_59 & 0x80) != 0) {
+            let nx_60: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            voice1_depth := nx_60;
+          }
+          if ((nx_59 & 0x40) != 0) {
+            let nx_61: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            if (nx_61 == 0) {
+              res := (res & mem[0x1052]);
+            } elif ((nx_61 & 8) != 0) {
+              res := (((res & 0xf) | nx_61) | mem[0x1051]);
+            } else {
+              res := nx_61;
+            }
+          }
+          if ((nx_59 & 0x20) != 0) {
+            let nx_62: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            fv := nx_62;
+          }
+          if ((nx_59 & 0x10) != 0) {
+            let nx_63: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            cp := nx_63;
+          }
+          if ((nx_59 & 8) != 0) {
+            let nx_64: u8 = mem[(base_5 + u16(pos_5))];
+            pos_5 := (pos_5 + 1);
+            let nx_65: u8 = mem[(base_5 + u16(pos_5))];
+            if !((nx_65 & 0x80) != 0) {
+              cut_lo := nx_64;
+              cut_hi := nx_65;
+              cut_step_lo := 0;
+              cut_step_hi := 0;
+            } elif ((nx_65 & 0x40) != 0) {
+              cut_step_lo := nx_64;
+              cut_step_hi := (nx_65 & 0x3f);
+              op_hi := 0xe9;
+            } else {
+              cut_step_lo := nx_64;
+              cut_step_hi := (nx_65 & 0x7f);
+              op_hi := 0x69;
+            }
+          }
+        }
+      }
+    }
+    if !((reader2_count_b & 0x80) != 0) {
+      if (reader2_count_b != 0) {
+        reader2_count_b := (reader2_count_b - 1);
+      } else {
+        let eff_6: u8 = reader2_row_b;
+        if (rows_hi[reader2_row_b] == 0) {
+          eff_6 := rows_lo[reader2_row_b];
+        }
+        m_00fc := rows_hi[eff_6];
+        reader2_count_b := dl[eff_6];
+        reader2_row_b := (eff_6 + 1);
+        m_00fb := rows_lo[eff_6];
+        let base_6: u16 = word(m_00fb, m_00fc);
+        let pos_6: u8 = 1;
+        let low_6: u8 = mem[(base_6 + 0)];
+        if (low_6 != 0) {
+          if ((low_6 & 0x40) != 0) {
+            pos_6 := 2;
+            mem[0x109d] := mem[(base_6 + 1)];
+          }
+          if ((low_6 & 0x80) != 0) {
+            let nx_66: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            mem[0x109f] := nx_66;
+          }
+          if ((low_6 & 0x20) != 0) {
+            let nx_67: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            mem[0x109b] := nx_67;
+          }
+          if ((low_6 & 0x10) != 0) {
+            let nx_68: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            mem[0x1099] := nx_68;
+          }
+          if ((low_6 & 8) != 0) {
+            let nx_69: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            reader2_note := ite(((nx_69 & 0x80) != 0), (nx_69 & 0x7f), ((nx_69 + reader2_note_base) & 0x7f));
+          }
+          if ((low_6 & 4) != 0) {
+            let nx_70: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            reader2_mode := nx_70;
+          }
+          if ((low_6 & 2) != 0) {
+            let nx_71: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            voice2_hi := nx_71;
+            voice2_lo := (nx_71 & 0xf0);
+          }
+        }
+        let nx_72: u8 = mem[(base_6 + u16(pos_6))];
+        pos_6 := (pos_6 + 1);
+        if !(nx_72 == 0) {
+          if ((nx_72 & 0x80) != 0) {
+            let nx_73: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            voice2_depth := nx_73;
+          }
+          if ((nx_72 & 0x40) != 0) {
+            let nx_74: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            if (nx_74 == 0) {
+              res := (res & mem[0x1083]);
+            } elif ((nx_74 & 8) != 0) {
+              res := (((res & 0xf) | nx_74) | mem[0x1082]);
+            } else {
+              res := nx_74;
+            }
+          }
+          if ((nx_72 & 0x20) != 0) {
+            let nx_75: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            fv := nx_75;
+          }
+          if ((nx_72 & 0x10) != 0) {
+            let nx_76: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            cp := nx_76;
+          }
+          if ((nx_72 & 8) != 0) {
+            let nx_77: u8 = mem[(base_6 + u16(pos_6))];
+            pos_6 := (pos_6 + 1);
+            let nx_78: u8 = mem[(base_6 + u16(pos_6))];
+            if !((nx_78 & 0x80) != 0) {
+              cut_lo := nx_77;
+              cut_hi := nx_78;
+              cut_step_lo := 0;
+              cut_step_hi := 0;
+            } elif ((nx_78 & 0x40) != 0) {
+              cut_step_lo := nx_77;
+              cut_step_hi := (nx_78 & 0x3f);
+              op_hi := 0xe9;
+            } else {
+              cut_step_lo := nx_77;
+              cut_step_hi := (nx_78 & 0x7f);
+              op_hi := 0x69;
+            }
+          }
+        }
+      }
+    }
+    let plo: u8 = pitch_lo[reader2_note];
+    let phi: u8 = pitch_hi[reader2_note];
+    let cy: bool = false;
+    let step_lo: u8 = 0;
+    let step_hi: u8 = 0;
+    if (reader2_mode == 0) {
+      voice2_freq_lo := (plo + 2);
+      voice2_freq_hi := phi;
+      cy := ((plo + 2) < plo);
+    } elif !((reader2_mode & 0x80) != 0) {
+      let y_5: u8 = (reader2_mode + reader2_note);
+      let plo_prev: u8 = pitch_lo_prev[y_5];
+      let plo_step: u8 = pitch_lo_step[y_5];
+      step_lo := (plo_step - plo_prev);
+      step_hi := ((pitch_hi_step[y_5] - pitch_hi_prev[y_5]) - u8((plo_step < plo_prev)));
+      voice2_freq_lo := (plo + step_lo);
+      let c_2: bool = ((plo + step_lo) < plo);
+      voice2_freq_hi := ((phi + step_hi) + u8(c_2));
+      cy := (((phi + step_hi) < phi) || (c_2 && ((phi + step_hi) == 0xff)));
+    } else {
+      let r: u16 = u16(((reader2_mode << 1) & 0x7f));
+      if !((reader2_mode & 0x40) != 0) {
+        let c_3: bool = ((reader2_slide_lo + mem[(0x1578 + r)]) < reader2_slide_lo);
+        reader2_slide_lo := (reader2_slide_lo + mem[(0x1578 + r)]);
+        reader2_slide_hi := ((reader2_slide_hi + mem[(0x1614 + r)]) + u8(c_3));
+      } else {
+        let b: bool = (reader2_slide_lo < mem[(0x1578 + r)]);
+        reader2_slide_lo := (reader2_slide_lo - mem[(0x1578 + r)]);
+        reader2_slide_hi := ((reader2_slide_hi - mem[(0x1614 + r)]) - u8(b));
+      }
+      voice2_freq_lo := (plo + reader2_slide_lo);
+      let c_4: bool = ((plo + reader2_slide_lo) < plo);
+      voice2_freq_hi := ((phi + reader2_slide_hi) + u8(c_4));
+      cy := (((phi + reader2_slide_hi) < phi) || (c_4 && ((phi + reader2_slide_hi) == 0xff)));
+    }
+    if !(voice2_depth == 0) {
+      if ((voice2_depth & 0x80) != 0) {
+        let c_5: bool = ((voice2_lo + (voice2_depth & 0x7f)) < voice2_lo);
+        voice2_lo := (voice2_lo + (voice2_depth & 0x7f));
+        if c_5 {
+          if (voice2_hi == 0xf) {
+            voice2_lo := 0xf8;
+            voice2_depth := (voice2_depth ^ 0x80);
+          } else {
+            voice2_hi := (voice2_hi + 1);
+          }
+        }
+      } else {
+        let b_2: bool = ((voice2_lo < voice2_depth) || (!cy && (voice2_lo == voice2_depth)));
+        voice2_lo := ((voice2_lo - voice2_depth) - u8(!cy));
+        if b_2 {
+          if (voice2_hi == 0) {
+            voice2_lo := 1;
+            voice2_depth := (voice2_depth ^ 0x80);
+          } else {
+            voice2_hi := (voice2_hi - 1);
+          }
+        }
+      }
+    }
+    let plo_2: u8 = pitch_lo[reader1_note];
+    let phi_2: u8 = pitch_hi[reader1_note];
+    let cy_2: bool = false;
+    if (reader1_mode == 0) {
+      voice1_freq_lo := (plo_2 + 1);
+      voice1_freq_hi := phi_2;
+      cy_2 := ((plo_2 + 1) < plo_2);
+    } elif !((reader1_mode & 0x80) != 0) {
+      let y_6: u8 = (reader1_mode + reader1_note);
+      let plo_prev_2: u8 = pitch_lo_prev[y_6];
+      let plo_step_2: u8 = pitch_lo_step[y_6];
+      step_lo := (plo_step_2 - plo_prev_2);
+      step_hi := ((pitch_hi_step[y_6] - pitch_hi_prev[y_6]) - u8((plo_step_2 < plo_prev_2)));
+      voice1_freq_lo := (plo_2 + step_lo);
+      let c_6: bool = ((plo_2 + step_lo) < plo_2);
+      voice1_freq_hi := ((phi_2 + step_hi) + u8(c_6));
+      cy_2 := (((phi_2 + step_hi) < phi_2) || (c_6 && ((phi_2 + step_hi) == 0xff)));
+    } else {
+      let r_2: u16 = u16(((reader1_mode << 1) & 0x7f));
+      if !((reader1_mode & 0x40) != 0) {
+        let c_7: bool = ((reader1_slide_lo + mem[(0x1578 + r_2)]) < reader1_slide_lo);
+        reader1_slide_lo := (reader1_slide_lo + mem[(0x1578 + r_2)]);
+        reader1_slide_hi := ((reader1_slide_hi + mem[(0x1614 + r_2)]) + u8(c_7));
+      } else {
+        let b_3: bool = (reader1_slide_lo < mem[(0x1578 + r_2)]);
+        reader1_slide_lo := (reader1_slide_lo - mem[(0x1578 + r_2)]);
+        reader1_slide_hi := ((reader1_slide_hi - mem[(0x1614 + r_2)]) - u8(b_3));
+      }
+      voice1_freq_lo := (plo_2 + reader1_slide_lo);
+      let c_8: bool = ((plo_2 + reader1_slide_lo) < plo_2);
+      voice1_freq_hi := ((phi_2 + reader1_slide_hi) + u8(c_8));
+      cy_2 := (((phi_2 + reader1_slide_hi) < phi_2) || (c_8 && ((phi_2 + reader1_slide_hi) == 0xff)));
+    }
+    if !(voice1_depth == 0) {
+      if ((voice1_depth & 0x80) != 0) {
+        let c_9: bool = ((voice1_lo + (voice1_depth & 0x7f)) < voice1_lo);
+        voice1_lo := (voice1_lo + (voice1_depth & 0x7f));
+        if c_9 {
+          if (voice1_hi == 0xf) {
+            voice1_lo := 0xf8;
+            voice1_depth := (voice1_depth ^ 0x80);
+          } else {
+            voice1_hi := (voice1_hi + 1);
+          }
+        }
+      } else {
+        let b_4: bool = ((voice1_lo < voice1_depth) || (!cy_2 && (voice1_lo == voice1_depth)));
+        voice1_lo := ((voice1_lo - voice1_depth) - u8(!cy_2));
+        if b_4 {
+          if (voice1_hi == 0) {
+            voice1_lo := 1;
+            voice1_depth := (voice1_depth ^ 0x80);
+          } else {
+            voice1_hi := (voice1_hi - 1);
+          }
+        }
+      }
+    }
+    let plo_3: u8 = pitch_lo[reader0_note];
+    let phi_3: u8 = pitch_hi[reader0_note];
+    let cy_3: bool = false;
+    if (reader0_mode == 0) {
+      voice0_freq_lo := (plo_3 + 0);
+      voice0_freq_hi := phi_3;
+      cy_3 := ((plo_3 + 0) < plo_3);
+    } elif !((reader0_mode & 0x80) != 0) {
+      let y_7: u8 = (reader0_mode + reader0_note);
+      let plo_prev_3: u8 = pitch_lo_prev[y_7];
+      let plo_step_3: u8 = pitch_lo_step[y_7];
+      step_lo := (plo_step_3 - plo_prev_3);
+      step_hi := ((pitch_hi_step[y_7] - pitch_hi_prev[y_7]) - u8((plo_step_3 < plo_prev_3)));
+      voice0_freq_lo := (plo_3 + step_lo);
+      let c_10: bool = ((plo_3 + step_lo) < plo_3);
+      voice0_freq_hi := ((phi_3 + step_hi) + u8(c_10));
+      cy_3 := (((phi_3 + step_hi) < phi_3) || (c_10 && ((phi_3 + step_hi) == 0xff)));
+    } else {
+      let r_3: u16 = u16(((reader0_mode << 1) & 0x7f));
+      if !((reader0_mode & 0x40) != 0) {
+        let c_11: bool = ((reader0_slide_lo + mem[(0x1578 + r_3)]) < reader0_slide_lo);
+        reader0_slide_lo := (reader0_slide_lo + mem[(0x1578 + r_3)]);
+        reader0_slide_hi := ((reader0_slide_hi + mem[(0x1614 + r_3)]) + u8(c_11));
+      } else {
+        let b_5: bool = (reader0_slide_lo < mem[(0x1578 + r_3)]);
+        reader0_slide_lo := (reader0_slide_lo - mem[(0x1578 + r_3)]);
+        reader0_slide_hi := ((reader0_slide_hi - mem[(0x1614 + r_3)]) - u8(b_5));
+      }
+      voice0_freq_lo := (plo_3 + reader0_slide_lo);
+      let c_12: bool = ((plo_3 + reader0_slide_lo) < plo_3);
+      voice0_freq_hi := ((phi_3 + reader0_slide_hi) + u8(c_12));
+      cy_3 := (((phi_3 + reader0_slide_hi) < phi_3) || (c_12 && ((phi_3 + reader0_slide_hi) == 0xff)));
+    }
+    if !(voice0_depth == 0) {
+      if ((voice0_depth & 0x80) != 0) {
+        let c_13: bool = ((voice0_lo + (voice0_depth & 0x7f)) < voice0_lo);
+        voice0_lo := (voice0_lo + (voice0_depth & 0x7f));
+        if c_13 {
+          if (voice0_hi == 0xf) {
+            voice0_lo := 0xf8;
+            voice0_depth := (voice0_depth ^ 0x80);
+          } else {
+            voice0_hi := (voice0_hi + 1);
+          }
+        }
+      } else {
+        let b_6: bool = ((voice0_lo < voice0_depth) || (!cy_3 && (voice0_lo == voice0_depth)));
+        voice0_lo := ((voice0_lo - voice0_depth) - u8(!cy_3));
+        if b_6 {
+          if (voice0_hi == 0) {
+            voice0_lo := 1;
+            voice0_depth := (voice0_depth ^ 0x80);
+          } else {
+            voice0_hi := (voice0_hi - 1);
+          }
+        }
+      }
+    }
+  }
+}
+
+schedule { defmon_ordered; }

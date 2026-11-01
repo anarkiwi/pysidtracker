@@ -1,0 +1,1864 @@
+spec musicassembler_ordered;
+
+const V0_FREQ_LO = 0;
+const V0_FREQ_HI = 1;
+const V0_PW_LO = 2;
+const V0_PW_HI = 3;
+const V0_CTRL = 4;
+const V0_AD = 5;
+const V0_SR = 6;
+const V1_FREQ_LO = 7;
+const V1_FREQ_HI = 8;
+const V1_PW_LO = 9;
+const V1_PW_HI = 10;
+const V1_CTRL = 11;
+const V1_AD = 12;
+const V1_SR = 13;
+const V2_FREQ_LO = 14;
+const V2_FREQ_HI = 15;
+const V2_PW_LO = 16;
+const V2_PW_HI = 17;
+const V2_CTRL = 18;
+const V2_AD = 19;
+const V2_SR = 20;
+const FC_HI = 22;
+const RES_FILT = 23;
+
+cell sid: u8[25] @ 0xd400 out;
+cell arp_dir: u8[4] @ 0x12c3 ro;
+cell fc_acc: u8 @ 0x129e;
+cell fc_acc_reset: u8 @ 0x1266;
+cell fc_ctr: u8 @ 0x1296;
+cell fc_ctr_reset: u8 @ 0x126b;
+cell fc_step: u8 @ 0x12a0;
+cell filter_owner: u8 @ 0x1262;
+cell freq_hi: u8[128] @ 0x11c5 ro notes(hi, 0);
+cell freq_lo: u8[128] @ 0x1437 ro notes(lo, 0);
+cell i_ad: u8[256] @ 0x196d ro;
+cell i_arp_speed: u8[256] @ 0x1972 ro;
+cell i_porta: u8[256] @ 0x1974 ro;
+cell i_pulse: u8[256] @ 0x1970 ro;
+cell i_pulse_step: u8[256] @ 0x1971 ro;
+cell i_sr: u8[256] @ 0x196e ro;
+cell i_wave: u8[256] @ 0x196f ro;
+cell tempo: u8 @ 0x1090;
+cell voice0_arp_phase: u8 @ 0x12bd;
+cell voice0_arp_substep: u8 @ 0x10dd;
+cell voice0_dur: u8 @ 0x108a;
+cell voice0_flags: u8 @ 0x00fd;
+cell voice0_freq_hi_w: u8 @ 0x10cf;
+cell voice0_freq_lo_w: u8 @ 0x10cc;
+cell voice0_gate_ctrl: u8 @ 0x1084;
+cell voice0_gate_mask: u8 @ 0x1031;
+cell voice0_instr_cursor: u8 @ 0x1144;
+cell voice0_instr_x8: u8 @ 0x13d9;
+cell voice0_note_ctl: u8 @ 0x1141;
+cell voice0_note_index: u8 @ 0x10c9;
+cell voice0_order_cursor: u8 @ 0x1087;
+cell voice0_pat_cursor: u8 @ 0x1081;
+cell voice0_pattern_id: u8 @ 0x108d;
+cell voice0_porta_ctr: u8 @ 0x114d;
+cell voice0_pw_dir: u8 @ 0x10e3;
+cell voice0_pw_hi: u8 @ 0x13df;
+cell voice0_pw_lo: u8 @ 0x13dc;
+cell voice0_pw_substep: u8 @ 0x10e0;
+cell voice0_repeat: u8 @ 0x10e9;
+cell voice0_transrep: u8 @ 0x10e6;
+cell voice0_vib_freq_hi: u8 @ 0x12b6;
+cell voice0_vib_freq_lo: u8 @ 0x13e2;
+cell voice0_vib_hi_step: u8 @ 0x114a;
+cell voice0_vib_lo_step: u8 @ 0x1147;
+cell voice0_vib_toggle: u8 @ 0x12b9;
+cell voice1_arp_phase: u8 @ 0x12be;
+cell voice1_arp_substep: u8 @ 0x10de;
+cell voice1_dur: u8 @ 0x108b;
+cell voice1_flags: u8 @ 0x00fe;
+cell voice1_freq_hi_w: u8 @ 0x10d0;
+cell voice1_freq_lo_w: u8 @ 0x10cd;
+cell voice1_gate_ctrl: u8 @ 0x1085;
+cell voice1_gate_mask: u8 @ 0x1032;
+cell voice1_instr_cursor: u8 @ 0x1145;
+cell voice1_instr_x8: u8 @ 0x13da;
+cell voice1_note_ctl: u8 @ 0x1142;
+cell voice1_note_index: u8 @ 0x10ca;
+cell voice1_order_cursor: u8 @ 0x1088;
+cell voice1_pat_cursor: u8 @ 0x1082;
+cell voice1_pattern_id: u8 @ 0x108e;
+cell voice1_porta_ctr: u8 @ 0x114e;
+cell voice1_pw_dir: u8 @ 0x10e4;
+cell voice1_pw_hi: u8 @ 0x13e0;
+cell voice1_pw_lo: u8 @ 0x13dd;
+cell voice1_pw_substep: u8 @ 0x10e1;
+cell voice1_repeat: u8 @ 0x10ea;
+cell voice1_transrep: u8 @ 0x10e7;
+cell voice1_vib_freq_hi: u8 @ 0x12b7;
+cell voice1_vib_freq_lo: u8 @ 0x13e3;
+cell voice1_vib_hi_step: u8 @ 0x114b;
+cell voice1_vib_lo_step: u8 @ 0x1148;
+cell voice1_vib_toggle: u8 @ 0x12ba;
+cell voice2_arp_phase: u8 @ 0x12bf;
+cell voice2_arp_substep: u8 @ 0x10df;
+cell voice2_dur: u8 @ 0x108c;
+cell voice2_flags: u8 @ 0x00ff;
+cell voice2_freq_hi_w: u8 @ 0x10d1;
+cell voice2_freq_lo_w: u8 @ 0x10ce;
+cell voice2_gate_ctrl: u8 @ 0x1086;
+cell voice2_gate_mask: u8 @ 0x1033;
+cell voice2_instr_cursor: u8 @ 0x1146;
+cell voice2_instr_x8: u8 @ 0x13db;
+cell voice2_note_ctl: u8 @ 0x1143;
+cell voice2_note_index: u8 @ 0x10cb;
+cell voice2_order_cursor: u8 @ 0x1089;
+cell voice2_pat_cursor: u8 @ 0x1083;
+cell voice2_pattern_id: u8 @ 0x108f;
+cell voice2_porta_ctr: u8 @ 0x114f;
+cell voice2_pw_dir: u8 @ 0x10e5;
+cell voice2_pw_hi: u8 @ 0x13e1;
+cell voice2_pw_lo: u8 @ 0x13de;
+cell voice2_pw_substep: u8 @ 0x10e2;
+cell voice2_repeat: u8 @ 0x10eb;
+cell voice2_transrep: u8 @ 0x10e8;
+cell voice2_vib_freq_hi: u8 @ 0x12b8;
+cell voice2_vib_freq_lo: u8 @ 0x13e4;
+cell voice2_vib_hi_step: u8 @ 0x114c;
+cell voice2_vib_lo_step: u8 @ 0x1149;
+cell voice2_vib_toggle: u8 @ 0x12bb;
+
+machine musicassembler_ordered {
+  step {
+    let out_v0_ad: u8 = 0;
+    let out2_v0_ctrl: u8 = 0;
+    let out_v0_ctrl: u8 = 0;
+    let out_v1_ad: u8 = 0;
+    let out2_v1_ctrl: u8 = 0;
+    let out_v1_ctrl: u8 = 0;
+    let out_v2_ctrl: u8 = 0;
+    tempo := (tempo - 1);
+    let cond: bool = ((tempo & 0x80) != 0);
+    if ((tempo & 0x80) != 0) {
+      tempo := 3;
+    }
+    let prog: u8 = 0;
+    let prog_2: u8 = 0;
+    let prog_3: u8 = 0;
+    let ascend: bool = false;
+    let ascend_2: bool = false;
+    let ascend_3: bool = false;
+    let b: bool = false;
+    let b_2: bool = false;
+    let b_3: bool = false;
+    let c: bool = false;
+    let c_2: bool = false;
+    let c_3: bool = false;
+    let c_4: bool = false;
+    let c_5: bool = false;
+    let c_6: bool = false;
+    let c_7: bool = false;
+    let c_8: bool = false;
+    let c_9: bool = false;
+    let c_10: bool = false;
+    let c_11: bool = false;
+    let c_12: bool = false;
+    let cutoff: u8 = 0;
+    let cutoff_2: u8 = 0;
+    let cutoff_3: u8 = 0;
+    let cutoff_4: u8 = 0;
+    let cutoff_5: u8 = 0;
+    let cutoff_6: u8 = 0;
+    let down: u8 = 0;
+    let down_2: u8 = 0;
+    let down_3: u8 = 0;
+    let limit: u8 = 0;
+    let limit_2: u8 = 0;
+    let limit_3: u8 = 0;
+    let marker: u8 = 0;
+    let marker_2: u8 = 0;
+    let marker_3: u8 = 0;
+    let pitch: u8 = 0;
+    let pitch_2: u8 = 0;
+    let pitch_3: u8 = 0;
+    let pulse: u8 = 0;
+    let pulse_2: u8 = 0;
+    let pulse_3: u8 = 0;
+    let sr: u8 = 0;
+    let sr_2: u8 = 0;
+    let sr_3: u8 = 0;
+    let src: u8 = 0;
+    let src_2: u8 = 0;
+    let src_3: u8 = 0;
+    let step_2: u8 = 0;
+    let step_3: u8 = 0;
+    let step_4: u8 = 0;
+    let step_5: u8 = 0;
+    let step_6: u8 = 0;
+    let step_7: u8 = 0;
+    let toggled: u8 = 0;
+    let toggled_2: u8 = 0;
+    let toggled_3: u8 = 0;
+    let y: u8 = 0;
+    let y_2: u8 = 0;
+    let y_3: u8 = 0;
+    let y_4: u8 = 0;
+    let y_5: u8 = 0;
+    let y_6: u8 = 0;
+    let m_00fa: u8 = 0;
+    let m_00fb: u8 = 0;
+    let zp_tmp: u8 = 0;
+    let pitch_op: u8 = 0;
+    let out2_v2_ctrl: u8 = 0;
+    let ret_sid_final: bool = false;
+    let ret_sid_final_2: bool = false;
+    let ret_sid_final_3: bool = false;
+    let w16: u16 = 0;
+    let w16_2: u16 = 0;
+    let w16_3: u16 = 0;
+    if cond {
+      voice0_dur := (voice0_dur - 1);
+      let cond_2: bool = ((voice0_dur & 0x80) != 0);
+      let cond_3: bool = false;
+      let cond_4: bool = false;
+      let cond_5: bool = false;
+      let cond_6: bool = false;
+      let cond_7: bool = false;
+      let cond_8: bool = false;
+      let cond_9: bool = false;
+      let res: u8 = 0;
+      if ((voice0_dur & 0x80) != 0) {
+        cond_9 := (voice0_pattern_id == 0xfe);
+        if (voice0_pattern_id == 0xfe) {
+          voice0_gate_ctrl := (voice0_gate_ctrl & 0xfe);
+        } else {
+          let w16_4: u16 = word(mem[(0x1958 + u16(voice0_pattern_id))], mem[(0x1943 + u16(voice0_pattern_id))]);
+          m_00fa := lo(w16_4);
+          m_00fb := hi(w16_4);
+          let pat_base: u16 = word(m_00fa, m_00fb);
+          let nx: u8 = mem[(pat_base + u16(voice0_pat_cursor))];
+          let pat_pos: u8 = (voice0_pat_cursor + 1);
+          cond_8 := (0xa0 <= nx);
+          if (0xa0 <= nx) {
+            voice0_dur := (nx & 0x1f);
+          } else {
+            cond_7 := (0x80 <= nx);
+            let ctl2: u8 = 0;
+            let ctl: u8 = 0;
+            let hi_2: u8 = 0;
+            let idx: u8 = 0;
+            let lo_2: u8 = 0;
+            let param: u8 = 0;
+            if (0x80 <= nx) {
+              voice0_instr_x8 := (nx << 3);
+              let nx_2: u8 = mem[(pat_base + u16(pat_pos))];
+              pat_pos := (pat_pos + 1);
+              cond_4 := (0x60 <= nx_2);
+              if (0x60 <= nx_2) {
+                voice0_dur := (nx_2 & 0x1f);
+                voice0_gate_mask := 0xfe;
+                voice0_gate_ctrl := (voice0_gate_ctrl & 0xfe);
+              } else {
+                idx := ((voice0_transrep >> 4) + nx_2);
+                voice0_note_index := idx;
+                lo_2 := freq_lo[idx];
+                voice0_freq_lo_w := lo_2;
+                voice0_vib_freq_lo := lo_2;
+                hi_2 := freq_hi[idx];
+                voice0_freq_hi_w := hi_2;
+                voice0_vib_freq_hi := hi_2;
+                zp_tmp := pat_pos;
+                pat_pos := pat_pos;
+                ctl := mem[(pat_base + u16((zp_tmp + 0)))];
+                voice0_note_ctl := ctl;
+                voice0_dur := (ctl & 0x1f);
+                ctl2 := mem[(pat_base + u16((zp_tmp + 0)))];
+                cond_3 := ((ctl2 & 0x80) != 0);
+                if ((ctl2 & 0x80) != 0) {
+                  filter_owner := 0;
+                  pat_pos := (zp_tmp + 1);
+                  param := mem[(pat_base + u16((pat_pos + 0)))];
+                  fc_acc_reset := param;
+                  fc_step := (((param & 0xf) << 1) - 0x10);
+                  pat_pos := (pat_pos + 1);
+                  res := mem[(pat_base + u16((pat_pos + 0)))];
+                  if (res != 0) {
+                    fc_ctr_reset := res;
+                  }
+                } elif ((ctl2 & 0x20) != 0) {
+                  pat_pos := (zp_tmp + 1);
+                  voice0_vib_lo_step := mem[(pat_base + u16((pat_pos + 0)))];
+                  pat_pos := (pat_pos + 1);
+                  voice0_vib_hi_step := mem[(pat_base + u16((pat_pos + 0)))];
+                }
+                pat_pos := (pat_pos + 1);
+                voice0_gate_mask := 0xff;
+                voice0_vib_toggle := 0xff;
+                voice0_arp_substep := 0;
+                voice0_arp_phase := 0;
+              }
+            } else {
+              cond_6 := (0x60 <= nx);
+              if (0x60 <= nx) {
+                voice0_dur := (nx & 0x1f);
+                voice0_gate_mask := 0xfe;
+                voice0_gate_ctrl := (voice0_gate_ctrl & 0xfe);
+              } else {
+                idx := ((voice0_transrep >> 4) + nx);
+                voice0_note_index := idx;
+                lo_2 := freq_lo[idx];
+                voice0_freq_lo_w := lo_2;
+                voice0_vib_freq_lo := lo_2;
+                hi_2 := freq_hi[idx];
+                voice0_freq_hi_w := hi_2;
+                voice0_vib_freq_hi := hi_2;
+                zp_tmp := pat_pos;
+                pat_pos := pat_pos;
+                ctl := mem[(pat_base + u16((zp_tmp + 0)))];
+                voice0_note_ctl := ctl;
+                voice0_dur := (ctl & 0x1f);
+                ctl2 := mem[(pat_base + u16((zp_tmp + 0)))];
+                cond_5 := ((ctl2 & 0x80) != 0);
+                if ((ctl2 & 0x80) != 0) {
+                  filter_owner := 0;
+                  pat_pos := (zp_tmp + 1);
+                  param := mem[(pat_base + u16((pat_pos + 0)))];
+                  fc_acc_reset := param;
+                  fc_step := (((param & 0xf) << 1) - 0x10);
+                  pat_pos := (pat_pos + 1);
+                  res := mem[(pat_base + u16((pat_pos + 0)))];
+                  if (res != 0) {
+                    fc_ctr_reset := res;
+                  }
+                } elif ((ctl2 & 0x20) != 0) {
+                  pat_pos := (zp_tmp + 1);
+                  voice0_vib_lo_step := mem[(pat_base + u16((pat_pos + 0)))];
+                  pat_pos := (pat_pos + 1);
+                  voice0_vib_hi_step := mem[(pat_base + u16((pat_pos + 0)))];
+                }
+                pat_pos := (pat_pos + 1);
+                voice0_gate_mask := 0xff;
+                voice0_vib_toggle := 0xff;
+                voice0_arp_substep := 0;
+                voice0_arp_phase := 0;
+              }
+            }
+          }
+          if (mem[(pat_base + u16((pat_pos + 0)))] != 0xff) {
+            voice0_pat_cursor := pat_pos;
+          } else {
+            voice0_repeat := (voice0_repeat - 1);
+            if ((voice0_repeat & 0x80) != 0) {
+              let ord_pos: u8 = (voice0_order_cursor + 2);
+              if (mem[(0x1898 + u16((ord_pos + 0)))] == 0xff) {
+                ord_pos := 0;
+              }
+              voice0_order_cursor := ord_pos;
+              voice0_pattern_id := mem[(0x1898 + u16((ord_pos + 0)))];
+              let tr: u8 = mem[(0x1898 + u16((ord_pos + 1)))];
+              voice0_transrep := tr;
+              voice0_repeat := (tr & 0xf);
+            }
+            voice0_pat_cursor := 0;
+          }
+        }
+      }
+      let cond_10: bool = !cond_2;
+      let cond_11: bool = false;
+      let cond_12: bool = false;
+      let cond_13: bool = false;
+      let cond_14: bool = false;
+      let cond_15: bool = false;
+      let cond_16: bool = false;
+      if !cond_2 {
+        cond_13 := ((voice0_note_ctl & 0x40) == 0);
+        if ((voice0_note_ctl & 0x40) == 0) {
+          voice0_instr_cursor := 0;
+          m_00fa := i_ad[voice0_instr_x8];
+          sr_3 := i_sr[voice0_instr_x8];
+          out_v0_ad := m_00fa;
+          out_v0_ctrl := (voice0_gate_ctrl & 0xfe);
+          voice0_gate_ctrl := i_wave[voice0_instr_x8];
+          pulse_3 := i_pulse[voice0_instr_x8];
+          voice0_pw_lo := pulse_3;
+          voice0_pw_hi := pulse_3;
+          if (0 == filter_owner) {
+            fc_acc := fc_acc_reset;
+            fc_ctr := fc_ctr_reset;
+          }
+          voice0_pw_substep := 0;
+          voice0_pw_dir := 0;
+          voice0_porta_ctr := (i_arp_speed[voice0_instr_x8] >> 3);
+          voice0_note_ctl := ((voice0_note_ctl & 0xbf) | 0x40);
+          voice0_flags := i_porta[voice0_instr_x8];
+        } else {
+          cond_12 := ((voice0_note_ctl & 0x40) == 0x40);
+          if ((voice0_note_ctl & 0x40) == 0x40) {
+            cond_11 := ((0 == filter_owner) && (fc_ctr != 0));
+            if ((0 == filter_owner) && (fc_ctr != 0)) {
+              fc_ctr := (fc_ctr - 1);
+              cutoff_5 := (fc_acc + fc_step);
+              fc_acc := cutoff_5;
+            }
+            if ((voice0_flags & 0xf) != 0) {
+              prog_3 := (voice0_flags & 0xf);
+              w16_3 := word(mem[(0x1498 + u16(prog_3))], mem[(0x14a8 + u16(prog_3))]);
+              m_00fa := lo(w16_3);
+              m_00fb := hi(w16_3);
+              voice0_gate_ctrl := (mem[(word(m_00fa, m_00fb) + u16(voice0_instr_cursor))] & voice0_gate_mask);
+              y_5 := (voice0_instr_cursor + 1);
+              pitch_3 := mem[(word(m_00fa, m_00fb) + u16(y_5))];
+              if (pitch_3 < 0x80) {
+                pitch_3 := (pitch_3 + voice0_note_index);
+              }
+              pitch_op := (pitch_3 & 0x7f);
+              y_5 := (y_5 + 1);
+              cutoff_6 := mem[(word(m_00fa, m_00fb) + u16(y_5))];
+              if (cutoff_6 != 0) {
+                fc_acc := cutoff_6;
+              }
+              y_5 := (y_5 + 1);
+              marker_3 := mem[(word(m_00fa, m_00fb) + u16(y_5))];
+              if (marker_3 == 0xfe) {
+                voice0_flags := (voice0_flags & 0xf0);
+              } elif (marker_3 == 0xff) {
+                y_5 := 0;
+              }
+              voice0_instr_cursor := y_5;
+              voice0_freq_lo_w := freq_lo[pitch_op];
+              voice0_freq_hi_w := freq_hi[pitch_op];
+            } elif (((voice0_note_ctl & 0x20) == 0) && ((voice0_flags & 0x10) != 0)) {
+              voice0_porta_ctr := (voice0_porta_ctr - 1);
+              if ((voice0_porta_ctr & 0x80) != 0) {
+                voice0_porta_ctr := (voice0_porta_ctr + 1);
+                ascend_3 := (arp_dir[(voice0_arp_phase & 3)] != 0);
+                y_6 := 0;
+                if !ascend_3 {
+                  y_6 := voice0_instr_x8;
+                  step_6 := mem[(0x1973 + u16(voice0_instr_x8))];
+                  down_3 := (voice0_freq_lo_w - step_6);
+                  c_9 := (step_6 <= voice0_freq_lo_w);
+                  voice0_freq_lo_w := down_3;
+                  if !c_9 {
+                    voice0_freq_hi_w := (voice0_freq_hi_w - 1);
+                    ascend_3 := (voice0_freq_hi_w == 0);
+                  }
+                }
+                if ascend_3 {
+                  y_6 := voice0_instr_x8;
+                  step_7 := mem[(0x1973 + u16(voice0_instr_x8))];
+                  src_3 := voice0_freq_lo_w;
+                  voice0_freq_lo_w := (voice0_freq_lo_w + step_7);
+                  if ((src_3 + step_7) < src_3) {
+                    voice0_freq_hi_w := (voice0_freq_hi_w + 1);
+                  }
+                }
+                voice0_arp_substep := (voice0_arp_substep + 1);
+                if ((i_arp_speed[y_6] & 0xf) == voice0_arp_substep) {
+                  voice0_arp_substep := 0;
+                  voice0_arp_phase := (voice0_arp_phase + 1);
+                }
+              }
+            }
+            zp_tmp := i_pulse_step[voice0_instr_x8];
+            if ((voice0_flags & 0x40) != 0) {
+              c_10 := ((zp_tmp + voice0_pw_lo) < zp_tmp);
+              voice0_pw_lo := (zp_tmp + voice0_pw_lo);
+              voice0_pw_hi := ((zp_tmp + voice0_pw_hi) + u8(c_10));
+            } elif ((voice0_flags & 0x20) != 0) {
+              if (voice0_pw_dir != 0) {
+                c_11 := ((voice0_pw_lo + zp_tmp) < voice0_pw_lo);
+                voice0_pw_lo := (voice0_pw_lo + zp_tmp);
+                if c_11 {
+                  voice0_pw_hi := (voice0_pw_hi + 1);
+                }
+              } else {
+                b_3 := (voice0_pw_lo < zp_tmp);
+                voice0_pw_lo := (voice0_pw_lo - zp_tmp);
+                if b_3 {
+                  voice0_pw_hi := (voice0_pw_hi - 1);
+                }
+              }
+              voice0_pw_substep := (voice0_pw_substep + 1);
+              limit_3 := (zp_tmp & 0xf);
+              if (limit_3 == voice0_pw_substep) {
+                voice0_pw_substep := 0;
+                voice0_pw_dir := (voice0_pw_dir ^ 1);
+              }
+            }
+          }
+        }
+        ret_sid_final_3 := false;
+        out2_v0_ctrl := out_v0_ctrl;
+        cond_15 := ((voice0_note_ctl & 0x20) != 0);
+        if ((voice0_note_ctl & 0x20) != 0) {
+          toggled_3 := 0;
+          if ((voice0_vib_lo_step & 1) != 0) {
+            toggled_3 := (voice0_vib_toggle ^ 0xff);
+            voice0_vib_toggle := toggled_3;
+          }
+          cond_14 := (toggled_3 == 0);
+          if (toggled_3 == 0) {
+            c_12 := ((voice0_vib_freq_lo + voice0_vib_lo_step) < voice0_vib_freq_lo);
+            voice0_vib_freq_lo := (voice0_vib_freq_lo + voice0_vib_lo_step);
+            voice0_vib_freq_hi := (voice0_vib_freq_hi + (voice0_vib_hi_step + u8(c_12)));
+            ret_sid_final_3 := true;
+          }
+        }
+        cond_16 := !ret_sid_final_3;
+      }
+      voice1_dur := (voice1_dur - 1);
+      let cond_17: bool = ((voice1_dur & 0x80) != 0);
+      let cond_18: bool = false;
+      let cond_19: bool = false;
+      let cond_20: bool = false;
+      let cond_21: bool = false;
+      let cond_22: bool = false;
+      let cond_23: bool = false;
+      let cond_24: bool = false;
+      let res_2: u8 = 0;
+      if ((voice1_dur & 0x80) != 0) {
+        cond_24 := (voice1_pattern_id == 0xfe);
+        if (voice1_pattern_id == 0xfe) {
+          voice1_gate_ctrl := (voice1_gate_ctrl & 0xfe);
+        } else {
+          let w16_5: u16 = word(mem[(0x1958 + u16(voice1_pattern_id))], mem[(0x1943 + u16(voice1_pattern_id))]);
+          m_00fa := lo(w16_5);
+          m_00fb := hi(w16_5);
+          let pat_base_2: u16 = word(m_00fa, m_00fb);
+          let nx_3: u8 = mem[(pat_base_2 + u16(voice1_pat_cursor))];
+          let pat_pos_2: u8 = (voice1_pat_cursor + 1);
+          cond_23 := (0xa0 <= nx_3);
+          if (0xa0 <= nx_3) {
+            voice1_dur := (nx_3 & 0x1f);
+          } else {
+            cond_22 := (0x80 <= nx_3);
+            let ctl2_2: u8 = 0;
+            let ctl_2: u8 = 0;
+            let hi_3: u8 = 0;
+            let idx_2: u8 = 0;
+            let lo_3: u8 = 0;
+            let param_2: u8 = 0;
+            if (0x80 <= nx_3) {
+              voice1_instr_x8 := (nx_3 << 3);
+              let nx_4: u8 = mem[(pat_base_2 + u16(pat_pos_2))];
+              pat_pos_2 := (pat_pos_2 + 1);
+              cond_19 := (0x60 <= nx_4);
+              if (0x60 <= nx_4) {
+                voice1_dur := (nx_4 & 0x1f);
+                voice1_gate_mask := 0xfe;
+                voice1_gate_ctrl := (voice1_gate_ctrl & 0xfe);
+              } else {
+                idx_2 := ((voice1_transrep >> 4) + nx_4);
+                voice1_note_index := idx_2;
+                lo_3 := freq_lo[idx_2];
+                voice1_freq_lo_w := lo_3;
+                voice1_vib_freq_lo := lo_3;
+                hi_3 := freq_hi[idx_2];
+                voice1_freq_hi_w := hi_3;
+                voice1_vib_freq_hi := hi_3;
+                zp_tmp := pat_pos_2;
+                pat_pos_2 := pat_pos_2;
+                ctl_2 := mem[(pat_base_2 + u16((zp_tmp + 0)))];
+                voice1_note_ctl := ctl_2;
+                voice1_dur := (ctl_2 & 0x1f);
+                ctl2_2 := mem[(pat_base_2 + u16((zp_tmp + 0)))];
+                cond_18 := ((ctl2_2 & 0x80) != 0);
+                if ((ctl2_2 & 0x80) != 0) {
+                  filter_owner := 1;
+                  pat_pos_2 := (zp_tmp + 1);
+                  param_2 := mem[(pat_base_2 + u16((pat_pos_2 + 0)))];
+                  fc_acc_reset := param_2;
+                  fc_step := (((param_2 & 0xf) << 1) - 0x10);
+                  pat_pos_2 := (pat_pos_2 + 1);
+                  res_2 := mem[(pat_base_2 + u16((pat_pos_2 + 0)))];
+                  if (res_2 != 0) {
+                    fc_ctr_reset := res_2;
+                  }
+                } elif ((ctl2_2 & 0x20) != 0) {
+                  pat_pos_2 := (zp_tmp + 1);
+                  voice1_vib_lo_step := mem[(pat_base_2 + u16((pat_pos_2 + 0)))];
+                  pat_pos_2 := (pat_pos_2 + 1);
+                  voice1_vib_hi_step := mem[(pat_base_2 + u16((pat_pos_2 + 0)))];
+                }
+                pat_pos_2 := (pat_pos_2 + 1);
+                voice1_gate_mask := 0xff;
+                voice1_vib_toggle := 0xff;
+                voice1_arp_substep := 0;
+                voice1_arp_phase := 0;
+              }
+            } else {
+              cond_21 := (0x60 <= nx_3);
+              if (0x60 <= nx_3) {
+                voice1_dur := (nx_3 & 0x1f);
+                voice1_gate_mask := 0xfe;
+                voice1_gate_ctrl := (voice1_gate_ctrl & 0xfe);
+              } else {
+                idx_2 := ((voice1_transrep >> 4) + nx_3);
+                voice1_note_index := idx_2;
+                lo_3 := freq_lo[idx_2];
+                voice1_freq_lo_w := lo_3;
+                voice1_vib_freq_lo := lo_3;
+                hi_3 := freq_hi[idx_2];
+                voice1_freq_hi_w := hi_3;
+                voice1_vib_freq_hi := hi_3;
+                zp_tmp := pat_pos_2;
+                pat_pos_2 := pat_pos_2;
+                ctl_2 := mem[(pat_base_2 + u16((zp_tmp + 0)))];
+                voice1_note_ctl := ctl_2;
+                voice1_dur := (ctl_2 & 0x1f);
+                ctl2_2 := mem[(pat_base_2 + u16((zp_tmp + 0)))];
+                cond_20 := ((ctl2_2 & 0x80) != 0);
+                if ((ctl2_2 & 0x80) != 0) {
+                  filter_owner := 1;
+                  pat_pos_2 := (zp_tmp + 1);
+                  param_2 := mem[(pat_base_2 + u16((pat_pos_2 + 0)))];
+                  fc_acc_reset := param_2;
+                  fc_step := (((param_2 & 0xf) << 1) - 0x10);
+                  pat_pos_2 := (pat_pos_2 + 1);
+                  res_2 := mem[(pat_base_2 + u16((pat_pos_2 + 0)))];
+                  if (res_2 != 0) {
+                    fc_ctr_reset := res_2;
+                  }
+                } elif ((ctl2_2 & 0x20) != 0) {
+                  pat_pos_2 := (zp_tmp + 1);
+                  voice1_vib_lo_step := mem[(pat_base_2 + u16((pat_pos_2 + 0)))];
+                  pat_pos_2 := (pat_pos_2 + 1);
+                  voice1_vib_hi_step := mem[(pat_base_2 + u16((pat_pos_2 + 0)))];
+                }
+                pat_pos_2 := (pat_pos_2 + 1);
+                voice1_gate_mask := 0xff;
+                voice1_vib_toggle := 0xff;
+                voice1_arp_substep := 0;
+                voice1_arp_phase := 0;
+              }
+            }
+          }
+          if (mem[(pat_base_2 + u16((pat_pos_2 + 0)))] != 0xff) {
+            voice1_pat_cursor := pat_pos_2;
+          } else {
+            voice1_repeat := (voice1_repeat - 1);
+            if ((voice1_repeat & 0x80) != 0) {
+              let ord_pos_2: u8 = (voice1_order_cursor + 2);
+              if (mem[(0x1877 + u16((ord_pos_2 + 0)))] == 0xff) {
+                ord_pos_2 := 0;
+              }
+              voice1_order_cursor := ord_pos_2;
+              voice1_pattern_id := mem[(0x1877 + u16((ord_pos_2 + 0)))];
+              let tr_2: u8 = mem[(0x1877 + u16((ord_pos_2 + 1)))];
+              voice1_transrep := tr_2;
+              voice1_repeat := (tr_2 & 0xf);
+            }
+            voice1_pat_cursor := 0;
+          }
+        }
+      }
+      let cond_25: bool = !cond_17;
+      let cond_26: bool = false;
+      let cond_27: bool = false;
+      let cond_28: bool = false;
+      let cond_29: bool = false;
+      let cond_30: bool = false;
+      let cond_31: bool = false;
+      if !cond_17 {
+        cond_28 := ((voice1_note_ctl & 0x40) == 0);
+        if ((voice1_note_ctl & 0x40) == 0) {
+          voice1_instr_cursor := 0;
+          m_00fa := i_ad[voice1_instr_x8];
+          sr := i_sr[voice1_instr_x8];
+          out_v1_ad := m_00fa;
+          out_v1_ctrl := (voice1_gate_ctrl & 0xfe);
+          voice1_gate_ctrl := i_wave[voice1_instr_x8];
+          pulse := i_pulse[voice1_instr_x8];
+          voice1_pw_lo := pulse;
+          voice1_pw_hi := pulse;
+          if (1 == filter_owner) {
+            fc_acc := fc_acc_reset;
+            fc_ctr := fc_ctr_reset;
+          }
+          voice1_pw_substep := 0;
+          voice1_pw_dir := 0;
+          voice1_porta_ctr := (i_arp_speed[voice1_instr_x8] >> 3);
+          voice1_note_ctl := ((voice1_note_ctl & 0xbf) | 0x40);
+          voice1_flags := i_porta[voice1_instr_x8];
+        } else {
+          cond_27 := ((voice1_note_ctl & 0x40) == 0x40);
+          if ((voice1_note_ctl & 0x40) == 0x40) {
+            cond_26 := ((1 == filter_owner) && (fc_ctr != 0));
+            if ((1 == filter_owner) && (fc_ctr != 0)) {
+              fc_ctr := (fc_ctr - 1);
+              cutoff := (fc_acc + fc_step);
+              fc_acc := cutoff;
+            }
+            if ((voice1_flags & 0xf) != 0) {
+              prog := (voice1_flags & 0xf);
+              w16 := word(mem[(0x1498 + u16(prog))], mem[(0x14a8 + u16(prog))]);
+              m_00fa := lo(w16);
+              m_00fb := hi(w16);
+              voice1_gate_ctrl := (mem[(word(m_00fa, m_00fb) + u16(voice1_instr_cursor))] & voice1_gate_mask);
+              y := (voice1_instr_cursor + 1);
+              pitch := mem[(word(m_00fa, m_00fb) + u16(y))];
+              if (pitch < 0x80) {
+                pitch := (pitch + voice1_note_index);
+              }
+              pitch_op := (pitch & 0x7f);
+              y := (y + 1);
+              cutoff_2 := mem[(word(m_00fa, m_00fb) + u16(y))];
+              if (cutoff_2 != 0) {
+                fc_acc := cutoff_2;
+              }
+              y := (y + 1);
+              marker := mem[(word(m_00fa, m_00fb) + u16(y))];
+              if (marker == 0xfe) {
+                voice1_flags := (voice1_flags & 0xf0);
+              } elif (marker == 0xff) {
+                y := 0;
+              }
+              voice1_instr_cursor := y;
+              voice1_freq_lo_w := freq_lo[pitch_op];
+              voice1_freq_hi_w := freq_hi[pitch_op];
+            } elif (((voice1_note_ctl & 0x20) == 0) && ((voice1_flags & 0x10) != 0)) {
+              voice1_porta_ctr := (voice1_porta_ctr - 1);
+              if ((voice1_porta_ctr & 0x80) != 0) {
+                voice1_porta_ctr := (voice1_porta_ctr + 1);
+                ascend := (arp_dir[(voice1_arp_phase & 3)] != 0);
+                y_2 := 0;
+                if !ascend {
+                  y_2 := voice1_instr_x8;
+                  step_2 := mem[(0x1973 + u16(voice1_instr_x8))];
+                  down := (voice1_freq_lo_w - step_2);
+                  c := (step_2 <= voice1_freq_lo_w);
+                  voice1_freq_lo_w := down;
+                  if !c {
+                    voice1_freq_hi_w := (voice1_freq_hi_w - 1);
+                    ascend := (voice1_freq_hi_w == 0);
+                  }
+                }
+                if ascend {
+                  y_2 := voice1_instr_x8;
+                  step_3 := mem[(0x1973 + u16(voice1_instr_x8))];
+                  src := voice1_freq_lo_w;
+                  voice1_freq_lo_w := (voice1_freq_lo_w + step_3);
+                  if ((src + step_3) < src) {
+                    voice1_freq_hi_w := (voice1_freq_hi_w + 1);
+                  }
+                }
+                voice1_arp_substep := (voice1_arp_substep + 1);
+                if ((i_arp_speed[y_2] & 0xf) == voice1_arp_substep) {
+                  voice1_arp_substep := 0;
+                  voice1_arp_phase := (voice1_arp_phase + 1);
+                }
+              }
+            }
+            zp_tmp := i_pulse_step[voice1_instr_x8];
+            if ((voice1_flags & 0x40) != 0) {
+              c_2 := ((zp_tmp + voice1_pw_lo) < zp_tmp);
+              voice1_pw_lo := (zp_tmp + voice1_pw_lo);
+              voice1_pw_hi := ((zp_tmp + voice1_pw_hi) + u8(c_2));
+            } elif ((voice1_flags & 0x20) != 0) {
+              if (voice1_pw_dir != 0) {
+                c_3 := ((voice1_pw_lo + zp_tmp) < voice1_pw_lo);
+                voice1_pw_lo := (voice1_pw_lo + zp_tmp);
+                if c_3 {
+                  voice1_pw_hi := (voice1_pw_hi + 1);
+                }
+              } else {
+                b := (voice1_pw_lo < zp_tmp);
+                voice1_pw_lo := (voice1_pw_lo - zp_tmp);
+                if b {
+                  voice1_pw_hi := (voice1_pw_hi - 1);
+                }
+              }
+              voice1_pw_substep := (voice1_pw_substep + 1);
+              limit := (zp_tmp & 0xf);
+              if (limit == voice1_pw_substep) {
+                voice1_pw_substep := 0;
+                voice1_pw_dir := (voice1_pw_dir ^ 1);
+              }
+            }
+          }
+        }
+        ret_sid_final := false;
+        out2_v1_ctrl := out_v1_ctrl;
+        cond_30 := ((voice1_note_ctl & 0x20) != 0);
+        if ((voice1_note_ctl & 0x20) != 0) {
+          toggled := 0;
+          if ((voice1_vib_lo_step & 1) != 0) {
+            toggled := (voice1_vib_toggle ^ 0xff);
+            voice1_vib_toggle := toggled;
+          }
+          cond_29 := (toggled == 0);
+          if (toggled == 0) {
+            c_4 := ((voice1_vib_freq_lo + voice1_vib_lo_step) < voice1_vib_freq_lo);
+            voice1_vib_freq_lo := (voice1_vib_freq_lo + voice1_vib_lo_step);
+            voice1_vib_freq_hi := (voice1_vib_freq_hi + (voice1_vib_hi_step + u8(c_4)));
+            ret_sid_final := true;
+          }
+        }
+        cond_31 := !ret_sid_final;
+      }
+      voice2_dur := (voice2_dur - 1);
+      let cond_32: bool = ((voice2_dur & 0x80) != 0);
+      let cond_33: bool = false;
+      let cond_34: bool = false;
+      let cond_35: bool = false;
+      let cond_36: bool = false;
+      let cond_37: bool = false;
+      let cond_38: bool = false;
+      let cond_39: bool = false;
+      let res_3: u8 = 0;
+      if ((voice2_dur & 0x80) != 0) {
+        cond_39 := (voice2_pattern_id == 0xfe);
+        if (voice2_pattern_id == 0xfe) {
+          voice2_gate_ctrl := (voice2_gate_ctrl & 0xfe);
+        } else {
+          let w16_6: u16 = word(mem[(0x1958 + u16(voice2_pattern_id))], mem[(0x1943 + u16(voice2_pattern_id))]);
+          m_00fa := lo(w16_6);
+          m_00fb := hi(w16_6);
+          let pat_base_3: u16 = word(m_00fa, m_00fb);
+          let nx_5: u8 = mem[(pat_base_3 + u16(voice2_pat_cursor))];
+          let pat_pos_3: u8 = (voice2_pat_cursor + 1);
+          cond_38 := (0xa0 <= nx_5);
+          if (0xa0 <= nx_5) {
+            voice2_dur := (nx_5 & 0x1f);
+          } else {
+            cond_37 := (0x80 <= nx_5);
+            let ctl2_3: u8 = 0;
+            let ctl_3: u8 = 0;
+            let hi_4: u8 = 0;
+            let idx_3: u8 = 0;
+            let lo_4: u8 = 0;
+            let param_3: u8 = 0;
+            if (0x80 <= nx_5) {
+              voice2_instr_x8 := (nx_5 << 3);
+              let nx_6: u8 = mem[(pat_base_3 + u16(pat_pos_3))];
+              pat_pos_3 := (pat_pos_3 + 1);
+              cond_34 := (0x60 <= nx_6);
+              if (0x60 <= nx_6) {
+                voice2_dur := (nx_6 & 0x1f);
+                voice2_gate_mask := 0xfe;
+                voice2_gate_ctrl := (voice2_gate_ctrl & 0xfe);
+              } else {
+                idx_3 := ((voice2_transrep >> 4) + nx_6);
+                voice2_note_index := idx_3;
+                lo_4 := freq_lo[idx_3];
+                voice2_freq_lo_w := lo_4;
+                voice2_vib_freq_lo := lo_4;
+                hi_4 := freq_hi[idx_3];
+                voice2_freq_hi_w := hi_4;
+                voice2_vib_freq_hi := hi_4;
+                zp_tmp := pat_pos_3;
+                pat_pos_3 := pat_pos_3;
+                ctl_3 := mem[(pat_base_3 + u16((zp_tmp + 0)))];
+                voice2_note_ctl := ctl_3;
+                voice2_dur := (ctl_3 & 0x1f);
+                ctl2_3 := mem[(pat_base_3 + u16((zp_tmp + 0)))];
+                cond_33 := ((ctl2_3 & 0x80) != 0);
+                if ((ctl2_3 & 0x80) != 0) {
+                  filter_owner := 2;
+                  pat_pos_3 := (zp_tmp + 1);
+                  param_3 := mem[(pat_base_3 + u16((pat_pos_3 + 0)))];
+                  fc_acc_reset := param_3;
+                  fc_step := (((param_3 & 0xf) << 1) - 0x10);
+                  pat_pos_3 := (pat_pos_3 + 1);
+                  res_3 := mem[(pat_base_3 + u16((pat_pos_3 + 0)))];
+                  if (res_3 != 0) {
+                    fc_ctr_reset := res_3;
+                  }
+                } elif ((ctl2_3 & 0x20) != 0) {
+                  pat_pos_3 := (zp_tmp + 1);
+                  voice2_vib_lo_step := mem[(pat_base_3 + u16((pat_pos_3 + 0)))];
+                  pat_pos_3 := (pat_pos_3 + 1);
+                  voice2_vib_hi_step := mem[(pat_base_3 + u16((pat_pos_3 + 0)))];
+                }
+                pat_pos_3 := (pat_pos_3 + 1);
+                voice2_gate_mask := 0xff;
+                voice2_vib_toggle := 0xff;
+                voice2_arp_substep := 0;
+                voice2_arp_phase := 0;
+              }
+            } else {
+              cond_36 := (0x60 <= nx_5);
+              if (0x60 <= nx_5) {
+                voice2_dur := (nx_5 & 0x1f);
+                voice2_gate_mask := 0xfe;
+                voice2_gate_ctrl := (voice2_gate_ctrl & 0xfe);
+              } else {
+                idx_3 := ((voice2_transrep >> 4) + nx_5);
+                voice2_note_index := idx_3;
+                lo_4 := freq_lo[idx_3];
+                voice2_freq_lo_w := lo_4;
+                voice2_vib_freq_lo := lo_4;
+                hi_4 := freq_hi[idx_3];
+                voice2_freq_hi_w := hi_4;
+                voice2_vib_freq_hi := hi_4;
+                zp_tmp := pat_pos_3;
+                pat_pos_3 := pat_pos_3;
+                ctl_3 := mem[(pat_base_3 + u16((zp_tmp + 0)))];
+                voice2_note_ctl := ctl_3;
+                voice2_dur := (ctl_3 & 0x1f);
+                ctl2_3 := mem[(pat_base_3 + u16((zp_tmp + 0)))];
+                cond_35 := ((ctl2_3 & 0x80) != 0);
+                if ((ctl2_3 & 0x80) != 0) {
+                  filter_owner := 2;
+                  pat_pos_3 := (zp_tmp + 1);
+                  param_3 := mem[(pat_base_3 + u16((pat_pos_3 + 0)))];
+                  fc_acc_reset := param_3;
+                  fc_step := (((param_3 & 0xf) << 1) - 0x10);
+                  pat_pos_3 := (pat_pos_3 + 1);
+                  res_3 := mem[(pat_base_3 + u16((pat_pos_3 + 0)))];
+                  if (res_3 != 0) {
+                    fc_ctr_reset := res_3;
+                  }
+                } elif ((ctl2_3 & 0x20) != 0) {
+                  pat_pos_3 := (zp_tmp + 1);
+                  voice2_vib_lo_step := mem[(pat_base_3 + u16((pat_pos_3 + 0)))];
+                  pat_pos_3 := (pat_pos_3 + 1);
+                  voice2_vib_hi_step := mem[(pat_base_3 + u16((pat_pos_3 + 0)))];
+                }
+                pat_pos_3 := (pat_pos_3 + 1);
+                voice2_gate_mask := 0xff;
+                voice2_vib_toggle := 0xff;
+                voice2_arp_substep := 0;
+                voice2_arp_phase := 0;
+              }
+            }
+          }
+          if (mem[(pat_base_3 + u16((pat_pos_3 + 0)))] != 0xff) {
+            voice2_pat_cursor := pat_pos_3;
+          } else {
+            voice2_repeat := (voice2_repeat - 1);
+            if ((voice2_repeat & 0x80) != 0) {
+              let ord_pos_3: u8 = (voice2_order_cursor + 2);
+              if (mem[(0x185a + u16((ord_pos_3 + 0)))] == 0xff) {
+                ord_pos_3 := 0;
+              }
+              voice2_order_cursor := ord_pos_3;
+              voice2_pattern_id := mem[(0x185a + u16((ord_pos_3 + 0)))];
+              let tr_3: u8 = mem[(0x185a + u16((ord_pos_3 + 1)))];
+              voice2_transrep := tr_3;
+              voice2_repeat := (tr_3 & 0xf);
+            }
+            voice2_pat_cursor := 0;
+          }
+        }
+      }
+      if !cond_32 {
+        let cond_40: bool = ((voice2_note_ctl & 0x40) == 0);
+        if ((voice2_note_ctl & 0x40) == 0) {
+          if ite(cond_25, ite(cond_28, ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false), ite(cond_27, ite(cond_26, true, ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false)), ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false))), ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false)) {
+            sid[FC_HI] := ite(cond_25, ite(cond_28, ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0), ite(cond_27, ite(cond_26, cutoff, ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0)), ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0))), ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0));
+          }
+          if ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_23, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_18, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false))), ite(cond_21, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_20, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)))))), ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)) {
+            sid[RES_FILT] := ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_23, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_18, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0))), ite(cond_21, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_20, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))))), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0));
+          }
+          if ite(cond_10, cond_13, false) {
+            sid[V0_AD] := out_v0_ad;
+          }
+          if ite(cond_10, cond_13, false) {
+            sid[V0_SR] := ite(cond_10, ite(cond_13, sr_3, 0), 0);
+          }
+          if ite(cond_10, cond_13, false) {
+            sid[V0_CTRL] := out2_v0_ctrl;
+          }
+          if cond_10 {
+            sid[V0_CTRL] := voice0_gate_ctrl;
+          }
+          if ite(cond_10, ite(cond_16, true, ite(cond_15, cond_14, false)), false) {
+            sid[V0_FREQ_LO] := ite(cond_10, ite(cond_16, voice0_freq_lo_w, ite(cond_15, ite(cond_14, voice0_vib_freq_lo, 0), 0)), 0);
+          }
+          if ite(cond_10, ite(cond_16, true, ite(cond_15, cond_14, false)), false) {
+            sid[V0_FREQ_HI] := ite(cond_10, ite(cond_16, voice0_freq_hi_w, ite(cond_15, ite(cond_14, voice0_vib_freq_hi, 0), 0)), 0);
+          }
+          if cond_10 {
+            sid[V0_PW_LO] := voice0_pw_lo;
+          }
+          if cond_10 {
+            sid[V0_PW_HI] := voice0_pw_hi;
+          }
+          if ite(cond_25, cond_28, false) {
+            sid[V1_AD] := out_v1_ad;
+          }
+          if ite(cond_25, cond_28, false) {
+            sid[V1_SR] := ite(cond_25, ite(cond_28, sr, 0), 0);
+          }
+          if ite(cond_25, cond_28, false) {
+            sid[V1_CTRL] := out2_v1_ctrl;
+          }
+          if cond_25 {
+            sid[V1_CTRL] := voice1_gate_ctrl;
+          }
+          if ite(cond_25, ite(cond_31, true, ite(cond_30, cond_29, false)), false) {
+            sid[V1_FREQ_LO] := ite(cond_25, ite(cond_31, voice1_freq_lo_w, ite(cond_30, ite(cond_29, voice1_vib_freq_lo, 0), 0)), 0);
+          }
+          if ite(cond_25, ite(cond_31, true, ite(cond_30, cond_29, false)), false) {
+            sid[V1_FREQ_HI] := ite(cond_25, ite(cond_31, voice1_freq_hi_w, ite(cond_30, ite(cond_29, voice1_vib_freq_hi, 0), 0)), 0);
+          }
+          if cond_25 {
+            sid[V1_PW_LO] := voice1_pw_lo;
+          }
+          if cond_25 {
+            sid[V1_PW_HI] := voice1_pw_hi;
+          }
+          voice2_instr_cursor := 0;
+          m_00fa := i_ad[voice2_instr_x8];
+          sr_2 := i_sr[voice2_instr_x8];
+          sid[V2_AD] := m_00fa;
+          sid[V2_SR] := sr_2;
+          out_v2_ctrl := (voice2_gate_ctrl & 0xfe);
+          voice2_gate_ctrl := i_wave[voice2_instr_x8];
+          pulse_2 := i_pulse[voice2_instr_x8];
+          voice2_pw_lo := pulse_2;
+          voice2_pw_hi := pulse_2;
+          if (2 == filter_owner) {
+            fc_acc := fc_acc_reset;
+            fc_ctr := fc_ctr_reset;
+          }
+          voice2_pw_substep := 0;
+          voice2_pw_dir := 0;
+          voice2_porta_ctr := (i_arp_speed[voice2_instr_x8] >> 3);
+          voice2_note_ctl := ((voice2_note_ctl & 0xbf) | 0x40);
+          voice2_flags := i_porta[voice2_instr_x8];
+        } elif ((voice2_note_ctl & 0x40) == 0x40) {
+          let cond_41: bool = ((2 == filter_owner) && (fc_ctr != 0));
+          if ((2 == filter_owner) && (fc_ctr != 0)) {
+            fc_ctr := (fc_ctr - 1);
+            cutoff_3 := (fc_acc + fc_step);
+            fc_acc := cutoff_3;
+          }
+          if ite(cond_41, true, ite(cond_25, ite(cond_28, ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false), ite(cond_27, ite(cond_26, true, ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false)), ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false))), ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false))) {
+            sid[FC_HI] := ite(cond_41, cutoff_3, ite(cond_25, ite(cond_28, ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0), ite(cond_27, ite(cond_26, cutoff, ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0)), ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0))), ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0)));
+          }
+          if ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_23, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_18, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false))), ite(cond_21, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_20, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)))))), ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)) {
+            sid[RES_FILT] := ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_23, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_18, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0))), ite(cond_21, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_20, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))))), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0));
+          }
+          if ite(cond_10, cond_13, false) {
+            sid[V0_AD] := out_v0_ad;
+          }
+          if ite(cond_10, cond_13, false) {
+            sid[V0_SR] := ite(cond_10, ite(cond_13, sr_3, 0), 0);
+          }
+          if ite(cond_10, cond_13, false) {
+            sid[V0_CTRL] := out2_v0_ctrl;
+          }
+          if cond_10 {
+            sid[V0_CTRL] := voice0_gate_ctrl;
+          }
+          if ite(cond_10, ite(cond_16, true, ite(cond_15, cond_14, false)), false) {
+            sid[V0_FREQ_LO] := ite(cond_10, ite(cond_16, voice0_freq_lo_w, ite(cond_15, ite(cond_14, voice0_vib_freq_lo, 0), 0)), 0);
+          }
+          if ite(cond_10, ite(cond_16, true, ite(cond_15, cond_14, false)), false) {
+            sid[V0_FREQ_HI] := ite(cond_10, ite(cond_16, voice0_freq_hi_w, ite(cond_15, ite(cond_14, voice0_vib_freq_hi, 0), 0)), 0);
+          }
+          if cond_10 {
+            sid[V0_PW_LO] := voice0_pw_lo;
+          }
+          if cond_10 {
+            sid[V0_PW_HI] := voice0_pw_hi;
+          }
+          if ite(cond_25, cond_28, false) {
+            sid[V1_AD] := out_v1_ad;
+          }
+          if ite(cond_25, cond_28, false) {
+            sid[V1_SR] := ite(cond_25, ite(cond_28, sr, 0), 0);
+          }
+          if ite(cond_25, cond_28, false) {
+            sid[V1_CTRL] := out2_v1_ctrl;
+          }
+          if cond_25 {
+            sid[V1_CTRL] := voice1_gate_ctrl;
+          }
+          if ite(cond_25, ite(cond_31, true, ite(cond_30, cond_29, false)), false) {
+            sid[V1_FREQ_LO] := ite(cond_25, ite(cond_31, voice1_freq_lo_w, ite(cond_30, ite(cond_29, voice1_vib_freq_lo, 0), 0)), 0);
+          }
+          if ite(cond_25, ite(cond_31, true, ite(cond_30, cond_29, false)), false) {
+            sid[V1_FREQ_HI] := ite(cond_25, ite(cond_31, voice1_freq_hi_w, ite(cond_30, ite(cond_29, voice1_vib_freq_hi, 0), 0)), 0);
+          }
+          if cond_25 {
+            sid[V1_PW_LO] := voice1_pw_lo;
+          }
+          if cond_25 {
+            sid[V1_PW_HI] := voice1_pw_hi;
+          }
+          if ((voice2_flags & 0xf) != 0) {
+            prog_2 := (voice2_flags & 0xf);
+            w16_2 := word(mem[(0x1498 + u16(prog_2))], mem[(0x14a8 + u16(prog_2))]);
+            m_00fa := lo(w16_2);
+            m_00fb := hi(w16_2);
+            voice2_gate_ctrl := (mem[(word(m_00fa, m_00fb) + u16(voice2_instr_cursor))] & voice2_gate_mask);
+            y_3 := (voice2_instr_cursor + 1);
+            pitch_2 := mem[(word(m_00fa, m_00fb) + u16(y_3))];
+            if (pitch_2 < 0x80) {
+              pitch_2 := (pitch_2 + voice2_note_index);
+            }
+            pitch_op := (pitch_2 & 0x7f);
+            y_3 := (y_3 + 1);
+            cutoff_4 := mem[(word(m_00fa, m_00fb) + u16(y_3))];
+            if (cutoff_4 != 0) {
+              fc_acc := cutoff_4;
+            }
+            y_3 := (y_3 + 1);
+            marker_2 := mem[(word(m_00fa, m_00fb) + u16(y_3))];
+            if (marker_2 == 0xfe) {
+              voice2_flags := (voice2_flags & 0xf0);
+            } elif (marker_2 == 0xff) {
+              y_3 := 0;
+            }
+            voice2_instr_cursor := y_3;
+            voice2_freq_lo_w := freq_lo[pitch_op];
+            voice2_freq_hi_w := freq_hi[pitch_op];
+          } elif (((voice2_note_ctl & 0x20) == 0) && ((voice2_flags & 0x10) != 0)) {
+            voice2_porta_ctr := (voice2_porta_ctr - 1);
+            if ((voice2_porta_ctr & 0x80) != 0) {
+              voice2_porta_ctr := (voice2_porta_ctr + 1);
+              ascend_2 := (arp_dir[(voice2_arp_phase & 3)] != 0);
+              y_4 := 0;
+              if !ascend_2 {
+                y_4 := voice2_instr_x8;
+                step_4 := mem[(0x1973 + u16(voice2_instr_x8))];
+                down_2 := (voice2_freq_lo_w - step_4);
+                c_5 := (step_4 <= voice2_freq_lo_w);
+                voice2_freq_lo_w := down_2;
+                if !c_5 {
+                  voice2_freq_hi_w := (voice2_freq_hi_w - 1);
+                  ascend_2 := (voice2_freq_hi_w == 0);
+                }
+              }
+              if ascend_2 {
+                y_4 := voice2_instr_x8;
+                step_5 := mem[(0x1973 + u16(voice2_instr_x8))];
+                src_2 := voice2_freq_lo_w;
+                voice2_freq_lo_w := (voice2_freq_lo_w + step_5);
+                if ((src_2 + step_5) < src_2) {
+                  voice2_freq_hi_w := (voice2_freq_hi_w + 1);
+                }
+              }
+              voice2_arp_substep := (voice2_arp_substep + 1);
+              if ((i_arp_speed[y_4] & 0xf) == voice2_arp_substep) {
+                voice2_arp_substep := 0;
+                voice2_arp_phase := (voice2_arp_phase + 1);
+              }
+            }
+          }
+          zp_tmp := i_pulse_step[voice2_instr_x8];
+          if ((voice2_flags & 0x40) != 0) {
+            c_6 := ((zp_tmp + voice2_pw_lo) < zp_tmp);
+            voice2_pw_lo := (zp_tmp + voice2_pw_lo);
+            voice2_pw_hi := ((zp_tmp + voice2_pw_hi) + u8(c_6));
+          } elif ((voice2_flags & 0x20) != 0) {
+            if (voice2_pw_dir != 0) {
+              c_7 := ((voice2_pw_lo + zp_tmp) < voice2_pw_lo);
+              voice2_pw_lo := (voice2_pw_lo + zp_tmp);
+              if c_7 {
+                voice2_pw_hi := (voice2_pw_hi + 1);
+              }
+            } else {
+              b_2 := (voice2_pw_lo < zp_tmp);
+              voice2_pw_lo := (voice2_pw_lo - zp_tmp);
+              if b_2 {
+                voice2_pw_hi := (voice2_pw_hi - 1);
+              }
+            }
+            voice2_pw_substep := (voice2_pw_substep + 1);
+            limit_2 := (zp_tmp & 0xf);
+            if (limit_2 == voice2_pw_substep) {
+              voice2_pw_substep := 0;
+              voice2_pw_dir := (voice2_pw_dir ^ 1);
+            }
+          }
+        } else {
+          if ite(cond_25, ite(cond_28, ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false), ite(cond_27, ite(cond_26, true, ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false)), ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false))), ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false)) {
+            sid[FC_HI] := ite(cond_25, ite(cond_28, ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0), ite(cond_27, ite(cond_26, cutoff, ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0)), ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0))), ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0));
+          }
+          if ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_23, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_18, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false))), ite(cond_21, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_20, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)))))), ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)) {
+            sid[RES_FILT] := ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_23, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_18, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0))), ite(cond_21, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_20, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))))), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0));
+          }
+          if ite(cond_10, cond_13, false) {
+            sid[V0_AD] := out_v0_ad;
+          }
+          if ite(cond_10, cond_13, false) {
+            sid[V0_SR] := ite(cond_10, ite(cond_13, sr_3, 0), 0);
+          }
+          if ite(cond_10, cond_13, false) {
+            sid[V0_CTRL] := out2_v0_ctrl;
+          }
+          if cond_10 {
+            sid[V0_CTRL] := voice0_gate_ctrl;
+          }
+          if ite(cond_10, ite(cond_16, true, ite(cond_15, cond_14, false)), false) {
+            sid[V0_FREQ_LO] := ite(cond_10, ite(cond_16, voice0_freq_lo_w, ite(cond_15, ite(cond_14, voice0_vib_freq_lo, 0), 0)), 0);
+          }
+          if ite(cond_10, ite(cond_16, true, ite(cond_15, cond_14, false)), false) {
+            sid[V0_FREQ_HI] := ite(cond_10, ite(cond_16, voice0_freq_hi_w, ite(cond_15, ite(cond_14, voice0_vib_freq_hi, 0), 0)), 0);
+          }
+          if cond_10 {
+            sid[V0_PW_LO] := voice0_pw_lo;
+          }
+          if cond_10 {
+            sid[V0_PW_HI] := voice0_pw_hi;
+          }
+          if ite(cond_25, cond_28, false) {
+            sid[V1_AD] := out_v1_ad;
+          }
+          if ite(cond_25, cond_28, false) {
+            sid[V1_SR] := ite(cond_25, ite(cond_28, sr, 0), 0);
+          }
+          if ite(cond_25, cond_28, false) {
+            sid[V1_CTRL] := out2_v1_ctrl;
+          }
+          if cond_25 {
+            sid[V1_CTRL] := voice1_gate_ctrl;
+          }
+          if ite(cond_25, ite(cond_31, true, ite(cond_30, cond_29, false)), false) {
+            sid[V1_FREQ_LO] := ite(cond_25, ite(cond_31, voice1_freq_lo_w, ite(cond_30, ite(cond_29, voice1_vib_freq_lo, 0), 0)), 0);
+          }
+          if ite(cond_25, ite(cond_31, true, ite(cond_30, cond_29, false)), false) {
+            sid[V1_FREQ_HI] := ite(cond_25, ite(cond_31, voice1_freq_hi_w, ite(cond_30, ite(cond_29, voice1_vib_freq_hi, 0), 0)), 0);
+          }
+          if cond_25 {
+            sid[V1_PW_LO] := voice1_pw_lo;
+          }
+          if cond_25 {
+            sid[V1_PW_HI] := voice1_pw_hi;
+          }
+        }
+        ret_sid_final_2 := false;
+        out2_v2_ctrl := out_v2_ctrl;
+        if cond_40 {
+          sid[V2_CTRL] := out2_v2_ctrl;
+        }
+        sid[V2_CTRL] := voice2_gate_ctrl;
+        let cond_42: bool = ((voice2_note_ctl & 0x20) != 0);
+        let cond_43: bool = false;
+        if ((voice2_note_ctl & 0x20) != 0) {
+          toggled_2 := 0;
+          if ((voice2_vib_lo_step & 1) != 0) {
+            toggled_2 := (voice2_vib_toggle ^ 0xff);
+            voice2_vib_toggle := toggled_2;
+          }
+          cond_43 := (toggled_2 == 0);
+          if (toggled_2 == 0) {
+            c_8 := ((voice2_vib_freq_lo + voice2_vib_lo_step) < voice2_vib_freq_lo);
+            voice2_vib_freq_lo := (voice2_vib_freq_lo + voice2_vib_lo_step);
+            voice2_vib_freq_hi := (voice2_vib_freq_hi + (voice2_vib_hi_step + u8(c_8)));
+            ret_sid_final_2 := true;
+          }
+        }
+        if !ret_sid_final_2 {
+          sid[V2_FREQ_LO] := voice2_freq_lo_w;
+          sid[V2_FREQ_HI] := voice2_freq_hi_w;
+          sid[V2_PW_LO] := voice2_pw_lo;
+          sid[V2_PW_HI] := voice2_pw_hi;
+        } else {
+          if ite(cond_42, cond_43, false) {
+            sid[V2_FREQ_LO] := ite(cond_42, ite(cond_43, voice2_vib_freq_lo, 0), 0);
+          }
+          if ite(cond_42, cond_43, false) {
+            sid[V2_FREQ_HI] := ite(cond_42, ite(cond_43, voice2_vib_freq_hi, 0), 0);
+          }
+          sid[V2_PW_LO] := voice2_pw_lo;
+          sid[V2_PW_HI] := voice2_pw_hi;
+        }
+      } else {
+        if ite(cond_25, ite(cond_28, ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false), ite(cond_27, ite(cond_26, true, ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false)), ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false))), ite(cond_10, ite(cond_13, false, ite(cond_12, cond_11, false)), false)) {
+          sid[FC_HI] := ite(cond_25, ite(cond_28, ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0), ite(cond_27, ite(cond_26, cutoff, ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0)), ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0))), ite(cond_10, ite(cond_13, 0, ite(cond_12, ite(cond_11, cutoff_5, 0), 0)), 0));
+        }
+        if ite(cond_39, ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_23, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_18, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false))), ite(cond_21, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_20, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)))))), ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)), ite(cond_38, ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_23, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_18, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false))), ite(cond_21, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_20, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)))))), ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)), ite(cond_37, ite(cond_34, ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_23, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_18, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false))), ite(cond_21, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_20, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)))))), ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)), ite(cond_33, true, ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_23, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_18, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false))), ite(cond_21, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_20, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)))))), ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)))), ite(cond_36, ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_23, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_18, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false))), ite(cond_21, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_20, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)))))), ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)), ite(cond_35, true, ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_23, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_18, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false))), ite(cond_21, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false), ite(cond_20, true, ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false)))))), ite(cond_2, ite(cond_9, false, ite(cond_8, false, ite(cond_7, ite(cond_4, false, cond_3), ite(cond_6, false, cond_5)))), false))))))) {
+          sid[RES_FILT] := ite(cond_39, ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_23, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_18, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0))), ite(cond_21, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_20, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))))), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)), ite(cond_38, ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_23, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_18, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0))), ite(cond_21, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_20, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))))), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)), ite(cond_37, ite(cond_34, ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_23, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_18, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0))), ite(cond_21, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_20, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))))), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)), ite(cond_33, ite((res_3 != 0), 0xf7, 0xf0), ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_23, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_18, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0))), ite(cond_21, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_20, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))))), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))), ite(cond_36, ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_23, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_18, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0))), ite(cond_21, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_20, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))))), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)), ite(cond_35, ite((res_3 != 0), 0xf7, 0xf0), ite(cond_17, ite(cond_24, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_23, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_22, ite(cond_19, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_18, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0))), ite(cond_21, ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0), ite(cond_20, ite((res_2 != 0), 0xf3, 0xf0), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))))), ite(cond_2, ite(cond_9, 0, ite(cond_8, 0, ite(cond_7, ite(cond_4, 0, ite(cond_3, ite((res != 0), 0xf1, 0xf0), 0)), ite(cond_6, 0, ite(cond_5, ite((res != 0), 0xf1, 0xf0), 0))))), 0)))))));
+        }
+        if ite(cond_10, cond_13, false) {
+          sid[V0_AD] := out_v0_ad;
+        }
+        if ite(cond_10, cond_13, false) {
+          sid[V0_SR] := ite(cond_10, ite(cond_13, sr_3, 0), 0);
+        }
+        if ite(cond_10, cond_13, false) {
+          sid[V0_CTRL] := out2_v0_ctrl;
+        }
+        if cond_10 {
+          sid[V0_CTRL] := voice0_gate_ctrl;
+        }
+        if ite(cond_10, ite(cond_16, true, ite(cond_15, cond_14, false)), false) {
+          sid[V0_FREQ_LO] := ite(cond_10, ite(cond_16, voice0_freq_lo_w, ite(cond_15, ite(cond_14, voice0_vib_freq_lo, 0), 0)), 0);
+        }
+        if ite(cond_10, ite(cond_16, true, ite(cond_15, cond_14, false)), false) {
+          sid[V0_FREQ_HI] := ite(cond_10, ite(cond_16, voice0_freq_hi_w, ite(cond_15, ite(cond_14, voice0_vib_freq_hi, 0), 0)), 0);
+        }
+        if cond_10 {
+          sid[V0_PW_LO] := voice0_pw_lo;
+        }
+        if cond_10 {
+          sid[V0_PW_HI] := voice0_pw_hi;
+        }
+        if ite(cond_25, cond_28, false) {
+          sid[V1_AD] := out_v1_ad;
+        }
+        if ite(cond_25, cond_28, false) {
+          sid[V1_SR] := ite(cond_25, ite(cond_28, sr, 0), 0);
+        }
+        if ite(cond_25, cond_28, false) {
+          sid[V1_CTRL] := out2_v1_ctrl;
+        }
+        if cond_25 {
+          sid[V1_CTRL] := voice1_gate_ctrl;
+        }
+        if ite(cond_25, ite(cond_31, true, ite(cond_30, cond_29, false)), false) {
+          sid[V1_FREQ_LO] := ite(cond_25, ite(cond_31, voice1_freq_lo_w, ite(cond_30, ite(cond_29, voice1_vib_freq_lo, 0), 0)), 0);
+        }
+        if ite(cond_25, ite(cond_31, true, ite(cond_30, cond_29, false)), false) {
+          sid[V1_FREQ_HI] := ite(cond_25, ite(cond_31, voice1_freq_hi_w, ite(cond_30, ite(cond_29, voice1_vib_freq_hi, 0), 0)), 0);
+        }
+        if cond_25 {
+          sid[V1_PW_LO] := voice1_pw_lo;
+        }
+        if cond_25 {
+          sid[V1_PW_HI] := voice1_pw_hi;
+        }
+      }
+    } else {
+      let cond_44: bool = ((voice0_note_ctl & 0x40) == 0);
+      let cond_45: bool = false;
+      let cond_46: bool = false;
+      if ((voice0_note_ctl & 0x40) == 0) {
+        voice0_instr_cursor := 0;
+        m_00fa := i_ad[voice0_instr_x8];
+        sr_3 := i_sr[voice0_instr_x8];
+        out_v0_ad := m_00fa;
+        out_v0_ctrl := (voice0_gate_ctrl & 0xfe);
+        voice0_gate_ctrl := i_wave[voice0_instr_x8];
+        pulse_3 := i_pulse[voice0_instr_x8];
+        voice0_pw_lo := pulse_3;
+        voice0_pw_hi := pulse_3;
+        if (0 == filter_owner) {
+          fc_acc := fc_acc_reset;
+          fc_ctr := fc_ctr_reset;
+        }
+        voice0_pw_substep := 0;
+        voice0_pw_dir := 0;
+        voice0_porta_ctr := (i_arp_speed[voice0_instr_x8] >> 3);
+        voice0_note_ctl := ((voice0_note_ctl & 0xbf) | 0x40);
+        voice0_flags := i_porta[voice0_instr_x8];
+      } else {
+        cond_46 := ((voice0_note_ctl & 0x40) == 0x40);
+        if ((voice0_note_ctl & 0x40) == 0x40) {
+          cond_45 := ((0 == filter_owner) && (fc_ctr != 0));
+          if ((0 == filter_owner) && (fc_ctr != 0)) {
+            fc_ctr := (fc_ctr - 1);
+            cutoff_5 := (fc_acc + fc_step);
+            fc_acc := cutoff_5;
+          }
+          if ((voice0_flags & 0xf) != 0) {
+            prog_3 := (voice0_flags & 0xf);
+            w16_3 := word(mem[(0x1498 + u16(prog_3))], mem[(0x14a8 + u16(prog_3))]);
+            m_00fa := lo(w16_3);
+            m_00fb := hi(w16_3);
+            voice0_gate_ctrl := (mem[(word(m_00fa, m_00fb) + u16(voice0_instr_cursor))] & voice0_gate_mask);
+            y_5 := (voice0_instr_cursor + 1);
+            pitch_3 := mem[(word(m_00fa, m_00fb) + u16(y_5))];
+            if (pitch_3 < 0x80) {
+              pitch_3 := (pitch_3 + voice0_note_index);
+            }
+            pitch_op := (pitch_3 & 0x7f);
+            y_5 := (y_5 + 1);
+            cutoff_6 := mem[(word(m_00fa, m_00fb) + u16(y_5))];
+            if (cutoff_6 != 0) {
+              fc_acc := cutoff_6;
+            }
+            y_5 := (y_5 + 1);
+            marker_3 := mem[(word(m_00fa, m_00fb) + u16(y_5))];
+            if (marker_3 == 0xfe) {
+              voice0_flags := (voice0_flags & 0xf0);
+            } elif (marker_3 == 0xff) {
+              y_5 := 0;
+            }
+            voice0_instr_cursor := y_5;
+            voice0_freq_lo_w := freq_lo[pitch_op];
+            voice0_freq_hi_w := freq_hi[pitch_op];
+          } elif (((voice0_note_ctl & 0x20) == 0) && ((voice0_flags & 0x10) != 0)) {
+            voice0_porta_ctr := (voice0_porta_ctr - 1);
+            if ((voice0_porta_ctr & 0x80) != 0) {
+              voice0_porta_ctr := (voice0_porta_ctr + 1);
+              ascend_3 := (arp_dir[(voice0_arp_phase & 3)] != 0);
+              y_6 := 0;
+              if !ascend_3 {
+                y_6 := voice0_instr_x8;
+                step_6 := mem[(0x1973 + u16(voice0_instr_x8))];
+                down_3 := (voice0_freq_lo_w - step_6);
+                c_9 := (step_6 <= voice0_freq_lo_w);
+                voice0_freq_lo_w := down_3;
+                if !c_9 {
+                  voice0_freq_hi_w := (voice0_freq_hi_w - 1);
+                  ascend_3 := (voice0_freq_hi_w == 0);
+                }
+              }
+              if ascend_3 {
+                y_6 := voice0_instr_x8;
+                step_7 := mem[(0x1973 + u16(voice0_instr_x8))];
+                src_3 := voice0_freq_lo_w;
+                voice0_freq_lo_w := (voice0_freq_lo_w + step_7);
+                if ((src_3 + step_7) < src_3) {
+                  voice0_freq_hi_w := (voice0_freq_hi_w + 1);
+                }
+              }
+              voice0_arp_substep := (voice0_arp_substep + 1);
+              if ((i_arp_speed[y_6] & 0xf) == voice0_arp_substep) {
+                voice0_arp_substep := 0;
+                voice0_arp_phase := (voice0_arp_phase + 1);
+              }
+            }
+          }
+          zp_tmp := i_pulse_step[voice0_instr_x8];
+          if ((voice0_flags & 0x40) != 0) {
+            c_10 := ((zp_tmp + voice0_pw_lo) < zp_tmp);
+            voice0_pw_lo := (zp_tmp + voice0_pw_lo);
+            voice0_pw_hi := ((zp_tmp + voice0_pw_hi) + u8(c_10));
+          } elif ((voice0_flags & 0x20) != 0) {
+            if (voice0_pw_dir != 0) {
+              c_11 := ((voice0_pw_lo + zp_tmp) < voice0_pw_lo);
+              voice0_pw_lo := (voice0_pw_lo + zp_tmp);
+              if c_11 {
+                voice0_pw_hi := (voice0_pw_hi + 1);
+              }
+            } else {
+              b_3 := (voice0_pw_lo < zp_tmp);
+              voice0_pw_lo := (voice0_pw_lo - zp_tmp);
+              if b_3 {
+                voice0_pw_hi := (voice0_pw_hi - 1);
+              }
+            }
+            voice0_pw_substep := (voice0_pw_substep + 1);
+            limit_3 := (zp_tmp & 0xf);
+            if (limit_3 == voice0_pw_substep) {
+              voice0_pw_substep := 0;
+              voice0_pw_dir := (voice0_pw_dir ^ 1);
+            }
+          }
+        }
+      }
+      ret_sid_final_3 := false;
+      out2_v0_ctrl := out_v0_ctrl;
+      let cond_47: bool = ((voice0_note_ctl & 0x20) != 0);
+      let cond_48: bool = false;
+      if ((voice0_note_ctl & 0x20) != 0) {
+        toggled_3 := 0;
+        if ((voice0_vib_lo_step & 1) != 0) {
+          toggled_3 := (voice0_vib_toggle ^ 0xff);
+          voice0_vib_toggle := toggled_3;
+        }
+        cond_48 := (toggled_3 == 0);
+        if (toggled_3 == 0) {
+          c_12 := ((voice0_vib_freq_lo + voice0_vib_lo_step) < voice0_vib_freq_lo);
+          voice0_vib_freq_lo := (voice0_vib_freq_lo + voice0_vib_lo_step);
+          voice0_vib_freq_hi := (voice0_vib_freq_hi + (voice0_vib_hi_step + u8(c_12)));
+          ret_sid_final_3 := true;
+        }
+      }
+      let cond_49: bool = !ret_sid_final_3;
+      let cond_50: bool = ((voice1_note_ctl & 0x40) == 0);
+      let cond_51: bool = false;
+      let cond_52: bool = false;
+      if ((voice1_note_ctl & 0x40) == 0) {
+        voice1_instr_cursor := 0;
+        m_00fa := i_ad[voice1_instr_x8];
+        sr := i_sr[voice1_instr_x8];
+        out_v1_ctrl := (voice1_gate_ctrl & 0xfe);
+        voice1_gate_ctrl := i_wave[voice1_instr_x8];
+        pulse := i_pulse[voice1_instr_x8];
+        voice1_pw_lo := pulse;
+        voice1_pw_hi := pulse;
+        if (1 == filter_owner) {
+          fc_acc := fc_acc_reset;
+          fc_ctr := fc_ctr_reset;
+        }
+        voice1_pw_substep := 0;
+        voice1_pw_dir := 0;
+        voice1_porta_ctr := (i_arp_speed[voice1_instr_x8] >> 3);
+        voice1_note_ctl := ((voice1_note_ctl & 0xbf) | 0x40);
+        voice1_flags := i_porta[voice1_instr_x8];
+      } else {
+        cond_51 := ((voice1_note_ctl & 0x40) == 0x40);
+        if ((voice1_note_ctl & 0x40) == 0x40) {
+          cond_52 := ((1 == filter_owner) && (fc_ctr != 0));
+          if ((1 == filter_owner) && (fc_ctr != 0)) {
+            fc_ctr := (fc_ctr - 1);
+            cutoff := (fc_acc + fc_step);
+            fc_acc := cutoff;
+          }
+          if ((voice1_flags & 0xf) != 0) {
+            prog := (voice1_flags & 0xf);
+            w16 := word(mem[(0x1498 + u16(prog))], mem[(0x14a8 + u16(prog))]);
+            m_00fa := lo(w16);
+            m_00fb := hi(w16);
+            voice1_gate_ctrl := (mem[(word(m_00fa, m_00fb) + u16(voice1_instr_cursor))] & voice1_gate_mask);
+            y := (voice1_instr_cursor + 1);
+            pitch := mem[(word(m_00fa, m_00fb) + u16(y))];
+            if (pitch < 0x80) {
+              pitch := (pitch + voice1_note_index);
+            }
+            pitch_op := (pitch & 0x7f);
+            y := (y + 1);
+            cutoff_2 := mem[(word(m_00fa, m_00fb) + u16(y))];
+            if (cutoff_2 != 0) {
+              fc_acc := cutoff_2;
+            }
+            y := (y + 1);
+            marker := mem[(word(m_00fa, m_00fb) + u16(y))];
+            if (marker == 0xfe) {
+              voice1_flags := (voice1_flags & 0xf0);
+            } elif (marker == 0xff) {
+              y := 0;
+            }
+            voice1_instr_cursor := y;
+            voice1_freq_lo_w := freq_lo[pitch_op];
+            voice1_freq_hi_w := freq_hi[pitch_op];
+          } elif (((voice1_note_ctl & 0x20) == 0) && ((voice1_flags & 0x10) != 0)) {
+            voice1_porta_ctr := (voice1_porta_ctr - 1);
+            if ((voice1_porta_ctr & 0x80) != 0) {
+              voice1_porta_ctr := (voice1_porta_ctr + 1);
+              ascend := (arp_dir[(voice1_arp_phase & 3)] != 0);
+              y_2 := 0;
+              if !ascend {
+                y_2 := voice1_instr_x8;
+                step_2 := mem[(0x1973 + u16(voice1_instr_x8))];
+                down := (voice1_freq_lo_w - step_2);
+                c := (step_2 <= voice1_freq_lo_w);
+                voice1_freq_lo_w := down;
+                if !c {
+                  voice1_freq_hi_w := (voice1_freq_hi_w - 1);
+                  ascend := (voice1_freq_hi_w == 0);
+                }
+              }
+              if ascend {
+                y_2 := voice1_instr_x8;
+                step_3 := mem[(0x1973 + u16(voice1_instr_x8))];
+                src := voice1_freq_lo_w;
+                voice1_freq_lo_w := (voice1_freq_lo_w + step_3);
+                if ((src + step_3) < src) {
+                  voice1_freq_hi_w := (voice1_freq_hi_w + 1);
+                }
+              }
+              voice1_arp_substep := (voice1_arp_substep + 1);
+              if ((i_arp_speed[y_2] & 0xf) == voice1_arp_substep) {
+                voice1_arp_substep := 0;
+                voice1_arp_phase := (voice1_arp_phase + 1);
+              }
+            }
+          }
+          zp_tmp := i_pulse_step[voice1_instr_x8];
+          if ((voice1_flags & 0x40) != 0) {
+            c_2 := ((zp_tmp + voice1_pw_lo) < zp_tmp);
+            voice1_pw_lo := (zp_tmp + voice1_pw_lo);
+            voice1_pw_hi := ((zp_tmp + voice1_pw_hi) + u8(c_2));
+          } elif ((voice1_flags & 0x20) != 0) {
+            if (voice1_pw_dir != 0) {
+              c_3 := ((voice1_pw_lo + zp_tmp) < voice1_pw_lo);
+              voice1_pw_lo := (voice1_pw_lo + zp_tmp);
+              if c_3 {
+                voice1_pw_hi := (voice1_pw_hi + 1);
+              }
+            } else {
+              b := (voice1_pw_lo < zp_tmp);
+              voice1_pw_lo := (voice1_pw_lo - zp_tmp);
+              if b {
+                voice1_pw_hi := (voice1_pw_hi - 1);
+              }
+            }
+            voice1_pw_substep := (voice1_pw_substep + 1);
+            limit := (zp_tmp & 0xf);
+            if (limit == voice1_pw_substep) {
+              voice1_pw_substep := 0;
+              voice1_pw_dir := (voice1_pw_dir ^ 1);
+            }
+          }
+        }
+      }
+      ret_sid_final := false;
+      out2_v1_ctrl := out_v1_ctrl;
+      let cond_53: bool = ((voice1_note_ctl & 0x20) != 0);
+      let cond_54: bool = false;
+      if ((voice1_note_ctl & 0x20) != 0) {
+        toggled := 0;
+        if ((voice1_vib_lo_step & 1) != 0) {
+          toggled := (voice1_vib_toggle ^ 0xff);
+          voice1_vib_toggle := toggled;
+        }
+        cond_54 := (toggled == 0);
+        if (toggled == 0) {
+          c_4 := ((voice1_vib_freq_lo + voice1_vib_lo_step) < voice1_vib_freq_lo);
+          voice1_vib_freq_lo := (voice1_vib_freq_lo + voice1_vib_lo_step);
+          voice1_vib_freq_hi := (voice1_vib_freq_hi + (voice1_vib_hi_step + u8(c_4)));
+          ret_sid_final := true;
+        }
+      }
+      let cond_55: bool = !ret_sid_final;
+      let cond_56: bool = ((voice2_note_ctl & 0x40) == 0);
+      if ((voice2_note_ctl & 0x40) == 0) {
+        if ite(cond_50, ite(cond_44, false, ite(cond_46, cond_45, false)), ite(cond_51, ite(cond_52, true, ite(cond_44, false, ite(cond_46, cond_45, false))), ite(cond_44, false, ite(cond_46, cond_45, false)))) {
+          sid[FC_HI] := ite(cond_50, ite(cond_44, 0, ite(cond_46, ite(cond_45, cutoff_5, 0), 0)), ite(cond_51, ite(cond_52, cutoff, ite(cond_44, 0, ite(cond_46, ite(cond_45, cutoff_5, 0), 0))), ite(cond_44, 0, ite(cond_46, ite(cond_45, cutoff_5, 0), 0))));
+        }
+        if cond_44 {
+          sid[V0_AD] := out_v0_ad;
+        }
+        if cond_44 {
+          sid[V0_SR] := sr_3;
+        }
+        if cond_44 {
+          sid[V0_CTRL] := out2_v0_ctrl;
+        }
+        sid[V0_CTRL] := voice0_gate_ctrl;
+        if ite(cond_49, true, ite(cond_47, cond_48, false)) {
+          sid[V0_FREQ_LO] := ite(cond_49, voice0_freq_lo_w, ite(cond_47, ite(cond_48, voice0_vib_freq_lo, 0), 0));
+        }
+        if ite(cond_49, true, ite(cond_47, cond_48, false)) {
+          sid[V0_FREQ_HI] := ite(cond_49, voice0_freq_hi_w, ite(cond_47, ite(cond_48, voice0_vib_freq_hi, 0), 0));
+        }
+        sid[V0_PW_LO] := voice0_pw_lo;
+        sid[V0_PW_HI] := voice0_pw_hi;
+        if cond_50 {
+          sid[V1_AD] := m_00fa;
+        }
+        if cond_50 {
+          sid[V1_SR] := sr;
+        }
+        if cond_50 {
+          sid[V1_CTRL] := out2_v1_ctrl;
+        }
+        sid[V1_CTRL] := voice1_gate_ctrl;
+        if ite(cond_55, true, ite(cond_53, cond_54, false)) {
+          sid[V1_FREQ_LO] := ite(cond_55, voice1_freq_lo_w, ite(cond_53, ite(cond_54, voice1_vib_freq_lo, 0), 0));
+        }
+        if ite(cond_55, true, ite(cond_53, cond_54, false)) {
+          sid[V1_FREQ_HI] := ite(cond_55, voice1_freq_hi_w, ite(cond_53, ite(cond_54, voice1_vib_freq_hi, 0), 0));
+        }
+        sid[V1_PW_LO] := voice1_pw_lo;
+        sid[V1_PW_HI] := voice1_pw_hi;
+        voice2_instr_cursor := 0;
+        m_00fa := i_ad[voice2_instr_x8];
+        sr_2 := i_sr[voice2_instr_x8];
+        sid[V2_AD] := m_00fa;
+        sid[V2_SR] := sr_2;
+        out_v2_ctrl := (voice2_gate_ctrl & 0xfe);
+        voice2_gate_ctrl := i_wave[voice2_instr_x8];
+        pulse_2 := i_pulse[voice2_instr_x8];
+        voice2_pw_lo := pulse_2;
+        voice2_pw_hi := pulse_2;
+        if (2 == filter_owner) {
+          fc_acc := fc_acc_reset;
+          fc_ctr := fc_ctr_reset;
+        }
+        voice2_pw_substep := 0;
+        voice2_pw_dir := 0;
+        voice2_porta_ctr := (i_arp_speed[voice2_instr_x8] >> 3);
+        voice2_note_ctl := ((voice2_note_ctl & 0xbf) | 0x40);
+        voice2_flags := i_porta[voice2_instr_x8];
+      } elif ((voice2_note_ctl & 0x40) == 0x40) {
+        let cond_57: bool = ((2 == filter_owner) && (fc_ctr != 0));
+        if ((2 == filter_owner) && (fc_ctr != 0)) {
+          fc_ctr := (fc_ctr - 1);
+          cutoff_3 := (fc_acc + fc_step);
+          fc_acc := cutoff_3;
+        }
+        if ite(cond_57, true, ite(cond_50, ite(cond_44, false, ite(cond_46, cond_45, false)), ite(cond_51, ite(cond_52, true, ite(cond_44, false, ite(cond_46, cond_45, false))), ite(cond_44, false, ite(cond_46, cond_45, false))))) {
+          sid[FC_HI] := ite(cond_57, cutoff_3, ite(cond_50, ite(cond_44, 0, ite(cond_46, ite(cond_45, cutoff_5, 0), 0)), ite(cond_51, ite(cond_52, cutoff, ite(cond_44, 0, ite(cond_46, ite(cond_45, cutoff_5, 0), 0))), ite(cond_44, 0, ite(cond_46, ite(cond_45, cutoff_5, 0), 0)))));
+        }
+        if cond_44 {
+          sid[V0_AD] := out_v0_ad;
+        }
+        if cond_44 {
+          sid[V0_SR] := sr_3;
+        }
+        if cond_44 {
+          sid[V0_CTRL] := out2_v0_ctrl;
+        }
+        sid[V0_CTRL] := voice0_gate_ctrl;
+        if ite(cond_49, true, ite(cond_47, cond_48, false)) {
+          sid[V0_FREQ_LO] := ite(cond_49, voice0_freq_lo_w, ite(cond_47, ite(cond_48, voice0_vib_freq_lo, 0), 0));
+        }
+        if ite(cond_49, true, ite(cond_47, cond_48, false)) {
+          sid[V0_FREQ_HI] := ite(cond_49, voice0_freq_hi_w, ite(cond_47, ite(cond_48, voice0_vib_freq_hi, 0), 0));
+        }
+        sid[V0_PW_LO] := voice0_pw_lo;
+        sid[V0_PW_HI] := voice0_pw_hi;
+        if cond_50 {
+          sid[V1_AD] := m_00fa;
+        }
+        if cond_50 {
+          sid[V1_SR] := sr;
+        }
+        if cond_50 {
+          sid[V1_CTRL] := out2_v1_ctrl;
+        }
+        sid[V1_CTRL] := voice1_gate_ctrl;
+        if ite(cond_55, true, ite(cond_53, cond_54, false)) {
+          sid[V1_FREQ_LO] := ite(cond_55, voice1_freq_lo_w, ite(cond_53, ite(cond_54, voice1_vib_freq_lo, 0), 0));
+        }
+        if ite(cond_55, true, ite(cond_53, cond_54, false)) {
+          sid[V1_FREQ_HI] := ite(cond_55, voice1_freq_hi_w, ite(cond_53, ite(cond_54, voice1_vib_freq_hi, 0), 0));
+        }
+        sid[V1_PW_LO] := voice1_pw_lo;
+        sid[V1_PW_HI] := voice1_pw_hi;
+        if ((voice2_flags & 0xf) != 0) {
+          prog_2 := (voice2_flags & 0xf);
+          w16_2 := word(mem[(0x1498 + u16(prog_2))], mem[(0x14a8 + u16(prog_2))]);
+          m_00fa := lo(w16_2);
+          m_00fb := hi(w16_2);
+          voice2_gate_ctrl := (mem[(word(m_00fa, m_00fb) + u16(voice2_instr_cursor))] & voice2_gate_mask);
+          y_3 := (voice2_instr_cursor + 1);
+          pitch_2 := mem[(word(m_00fa, m_00fb) + u16(y_3))];
+          if (pitch_2 < 0x80) {
+            pitch_2 := (pitch_2 + voice2_note_index);
+          }
+          pitch_op := (pitch_2 & 0x7f);
+          y_3 := (y_3 + 1);
+          cutoff_4 := mem[(word(m_00fa, m_00fb) + u16(y_3))];
+          if (cutoff_4 != 0) {
+            fc_acc := cutoff_4;
+          }
+          y_3 := (y_3 + 1);
+          marker_2 := mem[(word(m_00fa, m_00fb) + u16(y_3))];
+          if (marker_2 == 0xfe) {
+            voice2_flags := (voice2_flags & 0xf0);
+          } elif (marker_2 == 0xff) {
+            y_3 := 0;
+          }
+          voice2_instr_cursor := y_3;
+          voice2_freq_lo_w := freq_lo[pitch_op];
+          voice2_freq_hi_w := freq_hi[pitch_op];
+        } elif (((voice2_note_ctl & 0x20) == 0) && ((voice2_flags & 0x10) != 0)) {
+          voice2_porta_ctr := (voice2_porta_ctr - 1);
+          if ((voice2_porta_ctr & 0x80) != 0) {
+            voice2_porta_ctr := (voice2_porta_ctr + 1);
+            ascend_2 := (arp_dir[(voice2_arp_phase & 3)] != 0);
+            y_4 := 0;
+            if !ascend_2 {
+              y_4 := voice2_instr_x8;
+              step_4 := mem[(0x1973 + u16(voice2_instr_x8))];
+              down_2 := (voice2_freq_lo_w - step_4);
+              c_5 := (step_4 <= voice2_freq_lo_w);
+              voice2_freq_lo_w := down_2;
+              if !c_5 {
+                voice2_freq_hi_w := (voice2_freq_hi_w - 1);
+                ascend_2 := (voice2_freq_hi_w == 0);
+              }
+            }
+            if ascend_2 {
+              y_4 := voice2_instr_x8;
+              step_5 := mem[(0x1973 + u16(voice2_instr_x8))];
+              src_2 := voice2_freq_lo_w;
+              voice2_freq_lo_w := (voice2_freq_lo_w + step_5);
+              if ((src_2 + step_5) < src_2) {
+                voice2_freq_hi_w := (voice2_freq_hi_w + 1);
+              }
+            }
+            voice2_arp_substep := (voice2_arp_substep + 1);
+            if ((i_arp_speed[y_4] & 0xf) == voice2_arp_substep) {
+              voice2_arp_substep := 0;
+              voice2_arp_phase := (voice2_arp_phase + 1);
+            }
+          }
+        }
+        zp_tmp := i_pulse_step[voice2_instr_x8];
+        if ((voice2_flags & 0x40) != 0) {
+          c_6 := ((zp_tmp + voice2_pw_lo) < zp_tmp);
+          voice2_pw_lo := (zp_tmp + voice2_pw_lo);
+          voice2_pw_hi := ((zp_tmp + voice2_pw_hi) + u8(c_6));
+        } elif ((voice2_flags & 0x20) != 0) {
+          if (voice2_pw_dir != 0) {
+            c_7 := ((voice2_pw_lo + zp_tmp) < voice2_pw_lo);
+            voice2_pw_lo := (voice2_pw_lo + zp_tmp);
+            if c_7 {
+              voice2_pw_hi := (voice2_pw_hi + 1);
+            }
+          } else {
+            b_2 := (voice2_pw_lo < zp_tmp);
+            voice2_pw_lo := (voice2_pw_lo - zp_tmp);
+            if b_2 {
+              voice2_pw_hi := (voice2_pw_hi - 1);
+            }
+          }
+          voice2_pw_substep := (voice2_pw_substep + 1);
+          limit_2 := (zp_tmp & 0xf);
+          if (limit_2 == voice2_pw_substep) {
+            voice2_pw_substep := 0;
+            voice2_pw_dir := (voice2_pw_dir ^ 1);
+          }
+        }
+      } else {
+        if ite(cond_50, ite(cond_44, false, ite(cond_46, cond_45, false)), ite(cond_51, ite(cond_52, true, ite(cond_44, false, ite(cond_46, cond_45, false))), ite(cond_44, false, ite(cond_46, cond_45, false)))) {
+          sid[FC_HI] := ite(cond_50, ite(cond_44, 0, ite(cond_46, ite(cond_45, cutoff_5, 0), 0)), ite(cond_51, ite(cond_52, cutoff, ite(cond_44, 0, ite(cond_46, ite(cond_45, cutoff_5, 0), 0))), ite(cond_44, 0, ite(cond_46, ite(cond_45, cutoff_5, 0), 0))));
+        }
+        if cond_44 {
+          sid[V0_AD] := out_v0_ad;
+        }
+        if cond_44 {
+          sid[V0_SR] := sr_3;
+        }
+        if cond_44 {
+          sid[V0_CTRL] := out2_v0_ctrl;
+        }
+        sid[V0_CTRL] := voice0_gate_ctrl;
+        if ite(cond_49, true, ite(cond_47, cond_48, false)) {
+          sid[V0_FREQ_LO] := ite(cond_49, voice0_freq_lo_w, ite(cond_47, ite(cond_48, voice0_vib_freq_lo, 0), 0));
+        }
+        if ite(cond_49, true, ite(cond_47, cond_48, false)) {
+          sid[V0_FREQ_HI] := ite(cond_49, voice0_freq_hi_w, ite(cond_47, ite(cond_48, voice0_vib_freq_hi, 0), 0));
+        }
+        sid[V0_PW_LO] := voice0_pw_lo;
+        sid[V0_PW_HI] := voice0_pw_hi;
+        if cond_50 {
+          sid[V1_AD] := m_00fa;
+        }
+        if cond_50 {
+          sid[V1_SR] := sr;
+        }
+        if cond_50 {
+          sid[V1_CTRL] := out2_v1_ctrl;
+        }
+        sid[V1_CTRL] := voice1_gate_ctrl;
+        if ite(cond_55, true, ite(cond_53, cond_54, false)) {
+          sid[V1_FREQ_LO] := ite(cond_55, voice1_freq_lo_w, ite(cond_53, ite(cond_54, voice1_vib_freq_lo, 0), 0));
+        }
+        if ite(cond_55, true, ite(cond_53, cond_54, false)) {
+          sid[V1_FREQ_HI] := ite(cond_55, voice1_freq_hi_w, ite(cond_53, ite(cond_54, voice1_vib_freq_hi, 0), 0));
+        }
+        sid[V1_PW_LO] := voice1_pw_lo;
+        sid[V1_PW_HI] := voice1_pw_hi;
+      }
+      ret_sid_final_2 := false;
+      out2_v2_ctrl := out_v2_ctrl;
+      if cond_56 {
+        sid[V2_CTRL] := out2_v2_ctrl;
+      }
+      sid[V2_CTRL] := voice2_gate_ctrl;
+      let cond_58: bool = ((voice2_note_ctl & 0x20) != 0);
+      let cond_59: bool = false;
+      if ((voice2_note_ctl & 0x20) != 0) {
+        toggled_2 := 0;
+        if ((voice2_vib_lo_step & 1) != 0) {
+          toggled_2 := (voice2_vib_toggle ^ 0xff);
+          voice2_vib_toggle := toggled_2;
+        }
+        cond_59 := (toggled_2 == 0);
+        if (toggled_2 == 0) {
+          c_8 := ((voice2_vib_freq_lo + voice2_vib_lo_step) < voice2_vib_freq_lo);
+          voice2_vib_freq_lo := (voice2_vib_freq_lo + voice2_vib_lo_step);
+          voice2_vib_freq_hi := (voice2_vib_freq_hi + (voice2_vib_hi_step + u8(c_8)));
+          ret_sid_final_2 := true;
+        }
+      }
+      if !ret_sid_final_2 {
+        sid[V2_FREQ_LO] := voice2_freq_lo_w;
+        sid[V2_FREQ_HI] := voice2_freq_hi_w;
+        sid[V2_PW_LO] := voice2_pw_lo;
+        sid[V2_PW_HI] := voice2_pw_hi;
+      } else {
+        if ite(cond_58, cond_59, false) {
+          sid[V2_FREQ_LO] := ite(cond_58, ite(cond_59, voice2_vib_freq_lo, 0), 0);
+        }
+        if ite(cond_58, cond_59, false) {
+          sid[V2_FREQ_HI] := ite(cond_58, ite(cond_59, voice2_vib_freq_hi, 0), 0);
+        }
+        sid[V2_PW_LO] := voice2_pw_lo;
+        sid[V2_PW_HI] := voice2_pw_hi;
+      }
+    }
+  }
+}
+
+schedule { musicassembler_ordered; }
