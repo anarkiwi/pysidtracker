@@ -397,6 +397,7 @@ def test_spec_player_matches_the_6502(wrapped):
     reference = EmuPlayer(image, 0x1000, labels["init"], play)
     frames = whole_song(40)
     assert player.render_grid(frames) == reference.render_grid(frames)
+    assert player.writes == [(0, player.regs[0]), (4, 0x41)]
     assert player.entry == labels["play"]
     assert player.program().name == "counter"
     assert len(player.view()) == 0x10000
