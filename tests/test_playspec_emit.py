@@ -106,3 +106,8 @@ def test_census_lists_what_is_left():
     found = O.census(result)
     assert found["voices"] == [0, 1, 2] and found["song_registers"] == [21, 22, 23, 24]
     assert found["finish"] and found["promoted_cells"] == 3 and found["counters"] == 4
+
+
+def test_a_spent_budget_leaves_obligations_open():
+    proof = outproof.prove(program(PLAYER), ORDER, budget_s=0)
+    assert not proof.holds and any("unchecked" in item for item in proof.open)

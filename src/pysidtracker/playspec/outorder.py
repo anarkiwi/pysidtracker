@@ -730,9 +730,8 @@ class _Forward:
                 return None if value is None else K(value, 8)
             return None
 
-        e = rebuild(e, leaf)
         while True:
-            folded = rebuild(e, known)
+            folded = rebuild(rebuild(e, leaf), known)
             if folded == e:
                 return e
             e = folded
@@ -1287,7 +1286,12 @@ def census(result: Reordered) -> dict:
 
 
 def survey(
-    path: str, order, frames: int, subtune: Optional[int] = None, prove_ms: int = 0
+    path: str,
+    order,
+    frames: int,
+    subtune: Optional[int] = None,
+    prove_ms: int = 0,
+    budget_s: Optional[float] = None,
 ) -> dict:
     """:func:`compare` on a tune an installed format plays with a spec: the format, the
     verdict, and per program its staged variables, counts inlined and after, emitted
@@ -1321,6 +1325,7 @@ def survey(
                 "holds": proof.holds,
                 "open": proof.open[:5],
                 "obligations": {k: d.total for k, d in proof.passes.items()},
+                "unchecked": sum(d.unchecked for d in proof.passes.values()),
                 "seconds": round(proof.seconds, 1),
                 "peak_mb": proof.peak_mb,
             }

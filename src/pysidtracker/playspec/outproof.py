@@ -55,6 +55,7 @@ class Discharged:
     total: int = 0
     failed: Optional[str] = None
     unknown: List[str] = field(default_factory=list)
+    unchecked: int = 0
 
 
 class _Checker:
@@ -162,9 +163,10 @@ def _changed(post: dict, pre: dict, sets, stores: bool) -> dict:
 
 
 def _relevant(facts: dict, used: set, keys) -> dict:
-    """The facts on ``keys`` and those whose names ``used`` reaches, closed under the
-    names facts use."""
+    """The facts on ``keys``, the known conditions, and the facts whose names ``used``
+    reaches, closed under the names facts use."""
     out: dict = {key: facts[key] for key in keys if key in facts}
+    out.update((key, fact) for key, fact in facts.items() if not isinstance(key, str))
     for fact in out.values():
         used |= fact.uses
     grown = True
@@ -188,13 +190,18 @@ def discharge(
     timeout_ms: int,
     what: str = "obligations",
     progress: bool = False,
+    until: Optional[float] = None,
 ) -> Discharged:
-    """Check every obligation in ``proof`` under the shared premises."""
+    """Check every obligation in ``proof`` under the shared premises, those left when
+    the monotonic clock passes ``until`` counted unchecked."""
     checker = _Checker(widths, ranges, fixed, timeout_ms)
     out = Discharged(len(proof))
     for index, item in enumerate(
         tqdm(proof, desc=what, unit="ob", disable=not progress)
     ):
+        if until is not None and time.monotonic() > until:
+            out.unchecked = len(proof) - index
+            return out
         answer = checker.obligation(item)
         if answer is None:
             out.unknown.append(f"{what} {index}: {item[0]}")
@@ -248,6 +255,9 @@ class Proof:
         out = [f"{k}: {v}" for k, v in self.checks.items() if v is not None]
         for name, d in self.passes.items():
             out += [f"{name}: {d.failed}"] if d.failed else []
+            out += (
+                [f"{name}: {d.unchecked} obligations unchecked"] if d.unchecked else []
+            )
             out += d.unknown
         return out
 
@@ -259,11 +269,14 @@ def prove(
     memory: Optional[bytes] = None,
     observed=(),
     timeout_ms: int = 10_000,
+    budget_s: Optional[float] = None,
     progress: bool = False,
 ) -> Proof:
     """Reorder ``program`` and prove the whole call of the result equal to the original
-    on the kept writes, memory outside the SID and promoted cells, and controls."""
+    on the kept writes, memory outside the SID and promoted cells, and controls, within
+    ``budget_s`` seconds if set (obligations left then stay open)."""
     start = time.monotonic()
+    until = None if budget_s is None else start + budget_s
     stages: dict = {}
     result = O.reorder(program, order, memory=memory, observed=observed, proof=stages)
     end = frozenset(n for n, _w, _d in program.controls)
@@ -290,6 +303,7 @@ def prove(
             timeout_ms=timeout_ms,
             what=name,
             progress=progress,
+            until=until,
         )
         for name, ranges, fixed in (
             ("fix", {}, result.fixed),
@@ -297,7 +311,7 @@ def prove(
         )
     }
     holds = all(v is None for v in checks.values()) and not any(
-        d.failed or d.unknown for d in passes.values()
+        d.failed or d.unknown or d.unchecked for d in passes.values()
     )
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
     return Proof(holds, checks, passes, time.monotonic() - start, peak)

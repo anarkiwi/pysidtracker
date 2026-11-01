@@ -133,7 +133,10 @@ def _tunes(paths) -> list:
 
 def _reorder(args) -> None:
     tunes = _tunes(args.tunes)
-    tasks = [(t, args.order, args.frames, args.subtune, args.prove) for t in tunes]
+    tasks = [
+        (t, args.order, args.frames, args.subtune, args.prove, args.budget)
+        for t in tunes
+    ]
     report, failed = {}, 0
     for index, value, error in tqdm(
         imap(survey, tasks, args.jobs), total=len(tasks), desc="tunes", unit="tune"
@@ -193,6 +196,9 @@ def add_playspec_commands(parser) -> None:
     cmd.add_argument("--emit", help="a .play file (one program) or a directory of them")
     cmd.add_argument(
         "--prove", type=int, default=0, help="prove each call, per-query timeout in ms"
+    )
+    cmd.add_argument(
+        "--budget", type=float, default=300.0, help="seconds per call's proof"
     )
     cmd.set_defaults(func=_reorder)
 
