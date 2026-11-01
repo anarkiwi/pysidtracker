@@ -15,7 +15,7 @@ from typing import Callable, Dict, Iterator, List, Optional, Tuple, Type, Union
 
 from vagrant_moses import memmap as mm
 from vagrant_moses import machine as vagrant_machine
-from vagrant_moses.machine import SOURCES, Machine, NativeSid, boot_cycle
+from vagrant_moses.machine import Machine, NativeSid, boot_cycle
 from vagrant_moses.roms import KERNAL_VECTORS
 
 from . import registers as reg
@@ -270,6 +270,9 @@ def to_rows(raw: List[tuple]) -> List[SidtraceRow]:
         since = [cycle - last[s] if s in last else None for s in SOURCES]
         out.append(SidtraceRow(cycle, *since, chip, register, value))
     return out
+
+
+SOURCES = ("nmi", "video_irq", "cia_irq")
 
 
 class InterruptHost:
