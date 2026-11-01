@@ -160,7 +160,8 @@ class Obj:
         """The width of each operand."""
         loc = 8 * len(self.locs.get("cell", self.locs.get("pos", (0,))))
         if self.kind == "counter":
-            return (loc, loc)
+            gated = any(len(a) > 2 for a in self.reactions.values())
+            return (1 if gated else loc, loc)
         if self.kind == "owner":
             return (loc, loc, 1)
         if self.kind == "cursor":

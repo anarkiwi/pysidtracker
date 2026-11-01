@@ -16,6 +16,7 @@ from ..errors import SidError
 from . import emitobj
 from .ir import K, Obj, Op, Program, Rd, V, width
 from .lower import mk
+from .lowerobj import EVENTS
 
 TYPES = {1: "bool", 8: "u8", 16: "u16"}
 INFIX = {
@@ -247,11 +248,16 @@ class _Writer:
         self.lets: Dict[int, None] = {}
         self.widths: Dict[str, int] = {}
         self.objects = program.objects
+        self.events = program.events
         self.named: Dict[str, str] = {}
 
     def declarations(self) -> List[str]:
         """The cells and declarations of the objects the body reacts."""
-        out: List[str] = []
+        out: List[str] = [
+            f"event {event}: {parent};"
+            for event, parent in self.events.items()
+            if event not in EVENTS
+        ]
         for oid, name in self.named.items():
             obj = self.objects[oid]
             cells = {}

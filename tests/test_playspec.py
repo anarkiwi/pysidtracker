@@ -801,6 +801,9 @@ schedule { m; }
 """
 
 
+@pytest.mark.strain_exempt(
+    reason="asserts the values of a proc lowered once, which coverage cannot see"
+)
 @pytest.mark.parametrize(
     "p, q, expected",
     [(1, 0, 2 + 5), (0, 1, 2 + 5), (1, 1, 2 + 10), (0, 0, 2), (2, 1, 0), (1, 2, 1)],
@@ -1001,6 +1004,9 @@ schedule { m; }
 """
 
 
+@pytest.mark.strain_exempt(
+    reason="asserts the addresses a binding gives per-proc cells"
+)
 def test_per_proc_cell_addresses_follow_the_binding():
     code, _ = assemble("LDA #1\nSTA $1000\nLDA #2\nSTA $1010\nRTS", 0x2000)
     image = bytearray(0x10000)

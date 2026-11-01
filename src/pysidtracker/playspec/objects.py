@@ -43,6 +43,7 @@ def _counter(obj: Obj, action: tuple) -> Step:
     loc = obj.locs["cell"]
     top = (1 << 8 * len(loc)) - 1
     kind, delta = action[0], action[1] if len(action) > 1 else 0
+    gated = len(action) > 2
 
     def step(R, W, ops):
         limit, reload = ops
@@ -50,7 +51,10 @@ def _counter(obj: Obj, action: tuple) -> Step:
         if kind == "reset":
             store(W, loc, reload)
             return 0
-        wrap = value + delta > limit if kind == "up" else value < delta
+        if gated:
+            wrap = limit != 0
+        else:
+            wrap = value + delta > limit if kind == "up" else value < delta
         after = value + delta if kind == "up" else value - delta
         store(W, loc, (reload if wrap else after) & top)
         return int(wrap)
@@ -78,9 +82,16 @@ def _walker(obj: Obj, action: tuple) -> Step:
     values = [obj.locs[f"v{i}"] for i in range(len(obj.locs) - 2)]
     room = (1 << 8 * len(pos)) - 1
 
-    def assign(W, cols, sets):
-        for index, part, spec in sets:
-            if part:
+    def arm(first):
+        return next((r[2] for r in rows if r[0] <= first <= r[1]), ("stop",))
+
+    def assign(W, cols, sets, left):
+        for index, part, spec, guard in sets:
+            if guard and ((cols[guard[0]] & guard[1]) == guard[2]) != guard[3]:
+                continue
+            if index == len(values):
+                left[0] = xf(spec, cols)
+            elif part:
                 W(values[index][part - 1], xf(spec, cols))
             else:
                 store(W, values[index], xf(spec, cols))
@@ -88,13 +99,15 @@ def _walker(obj: Obj, action: tuple) -> Step:
     def sweep(R, W, into, frac, delta):
         loc = values[into]
         if not frac:
+            carry = int(R(loc[0]) + (delta & 0xFF) > 0xFF)
             store(W, loc, load(R, loc) + delta)
-            return
+            return carry
         low = (1 << frac) - 1
         total = ((R(loc[1]) << frac) | (R(loc[0]) & low)) + delta
         total &= (1 << 8 + frac) - 1
         W(loc[1], total >> frac)
         W(loc[0], total & low)
+        return 0
 
     def reset(R, W, ops):
         del R
@@ -103,42 +116,57 @@ def _walker(obj: Obj, action: tuple) -> Step:
         return 0
 
     def walk(R, W, ops):
-        at, count = load(R, pos), R(cnt[0])
+        at, left, carry, via = load(R, pos), [R(cnt[0])], 0, None
+        jumped = False
         for _ in range(JUMPS):
             cols = [R((ops[j] + at) & 0xFFFF) for j in range(columns)]
-            row = next((r[2] for r in rows if r[0] <= cols[0] <= r[1]), ("stop",))
+            row = arm(cols[0] if via is None else via)
             kind = row[0]
             if kind == "jump":
                 target = xf(row[1], cols)
+                carry = int(target >= at)
                 if target == at:
                     break
-                at = target
+                jumped = True
+                at, hold, via = target, row[2], row[3]
+                if hold and hold[0] <= R((ops[0] + at) & 0xFFFF) <= hold[1]:
+                    left[0] = 0
+                    break
                 continue
             if kind in ("sweep", "delay"):
-                if count != xf(row[2] if kind == "sweep" else row[1], cols):
-                    count = (count + 1) & 0xFF
+                limit = xf(row[2] if kind == "sweep" else row[1], cols)
+                if left[0] != limit:
+                    left[0] = (left[0] + 1) & 0xFF
+                    carry = 0
                     if kind == "sweep":
-                        delta = xf(row[3], cols)
-                        sweep(R, W, row[1], row[4], delta - 256 * (delta >> 7))
+                        carry = sweep(R, W, row[1], row[4], to_signed(xf(row[3], cols)))
                     break
-                count = 0
-            if kind == "set":
-                assign(W, cols, row[1])
-            if kind != "stop":
-                at = (at + width) & room
-                assign(W, cols, row[-1])
+                left[0], carry = 0, 1
+            elif kind == "set":
+                assign(W, cols, row[1], left)
+                carry = carry if jumped else 0
+            else:
+                carry = 1
+                break
+            at = (at + width) & room
+            assign(W, cols, row[-1], left)
             break
         else:
             raise SpecRuntimeError("walker jumps forever")
         store(W, pos, at)
-        W(cnt[0], count)
-        return 0
+        W(cnt[0], left[0])
+        return carry
 
     return reset if action[0] == "reset" else walk
 
 
+def to_signed(byte: int) -> int:
+    """The signed value of ``byte``."""
+    return byte - 256 * (byte >> 7)
+
+
 def _cursor(obj: Obj, action: tuple) -> Step:
-    run, fields = obj.spec
+    run, fields, last = obj.spec
     pos, pending = obj.locs["pos"], obj.locs.get("run")
 
     def reset(R, W, ops):
@@ -146,6 +174,12 @@ def _cursor(obj: Obj, action: tuple) -> Step:
         W(pos[0], ops[1] & 0xFF)
         if pending:
             W(pending[0], 0)
+        return 0
+
+    def settle(R, W, ops):
+        del ops
+        if not (pending and R(pending[0])):
+            W(pos[0], (R(pos[0]) + 1) & 0xFF)
         return 0
 
     def read(R, W, ops):
@@ -165,13 +199,16 @@ def _cursor(obj: Obj, action: tuple) -> Step:
                 break
             row.append(R((ops[0] + at + used) & 0xFFFF))
             used += 1
-        for byte, (_cond, out, mask, shl, shr) in zip(row, fields):
-            if out is not None:
-                store(W, obj.locs[f"o{out}"], ((byte & mask) << shl >> shr) & 0xFF)
-        W(pos[0], (at + used) & 0xFF)
+        for k, byte in enumerate(row):
+            for j, (mask, shl, shr, (gmask, gwant, gequal)) in enumerate(fields[k][1]):
+                if ((byte & gmask) == gwant) == gequal:
+                    store(
+                        W, obj.locs[f"o{k}_{j}"], ((byte & mask) << shl >> shr) & 0xFF
+                    )
+        W(pos[0], (at + max(used - last, 0)) & 0xFF)
         return 0
 
-    return reset if action[0] == "reset" else read
+    return {"reset": reset, "settle": settle}.get(action[0], read)
 
 
 _KINDS: Dict[str, Callable[[Obj, tuple], Step]] = {

@@ -90,7 +90,7 @@ class Lowerer(ObjectLowering):
         self.proc = ""
         self.decls: Dict[int, tuple] = {}
         self.variants: Dict[Tuple[int, str], Cell] = {}
-        self.place_of: Optional[Tuple[str, str]] = None
+        self.place_of: Optional[str] = None
         self.inst: Instance = Instance("", None, None)
         self.ret: Optional[Tuple[str, Optional[str], int]] = None
         self.allow_old = False
@@ -101,6 +101,7 @@ class Lowerer(ObjectLowering):
         self.asts: Dict[str, dict] = {}
         self.owner_exprs: Dict[str, tuple] = {}
         self.bind_events()
+        self.views = {view[2]: view for view in spec.views}
         for kind in set(spec.layout.values()) - LKINDS:
             self.error(0, f"unknown layout kind {kind!r}")
         for _tag, line, name, expr in spec.consts:
@@ -155,8 +156,8 @@ class Lowerer(ObjectLowering):
                 UNKNOWN_LIST if kind == "list" else K(None, 1 if kind == "flag" else 0)
             )
         key = name
-        if self.place_of is not None and name == self.place_of[0]:
-            key = self.place_of[1]
+        if self.place_of is not None and f"{name}@{self.place_of}" in self.binding:
+            key = f"{name}@{self.place_of}"
         if key not in self.binding:
             self.error(line, f"binding has no layout field {name!r}")
             return UNKNOWN_LIST if kind == "list" else K(None, 0)
@@ -196,19 +197,20 @@ class Lowerer(ObjectLowering):
             self.bind_notes(name, typ, length, attrs, notes, scope, line),
         )
         if "per_proc" in attrs:
-            self.decls[id(cell)] = (decl, owner, scope)
+            self.decls[id(cell)] = (decl, owner, scope, layout_names(place))
         return cell
 
     def in_proc(self, cell: Cell) -> Cell:
         """``cell`` as the current proc addresses it: a ``per_proc`` cell whose binding
         has ``<cell>@<proc>`` is rebound there (``L.<cell>`` read as that field)."""
         known = self.decls.get(id(cell))
-        key = f"{cell.name}@{self.proc}"
-        if known is None or self.binding is None or key not in self.binding:
+        if known is None or self.binding is None:
+            return cell
+        decl, owner, scope, names = known
+        if not any(f"{n}@{self.proc}" in self.binding for n in names):
             return cell
         if (id(cell), self.proc) not in self.variants:
-            decl, owner, scope = known
-            self.place_of = (cell.name, key)
+            self.place_of = self.proc
             try:
                 self.variants[(id(cell), self.proc)] = self.bind_cell(
                     decl, owner, scope
@@ -601,6 +603,17 @@ class Lowerer(ObjectLowering):
         )
         return K(None, 8)
 
+    def view_value(self, name: str, attr: str, scope: Scope, line: int):
+        """``view.field``: the byte at the field's offset from the view's base address."""
+        _tag, _line, _name, base, fields = self.views[name]
+        offsets = {f[2]: f[3] for f in fields}
+        if attr not in offsets:
+            self.error(line, f"view {name} has no field {attr!r}")
+            return K(None, 8)
+        start = self.coerce(self.expr(base, scope), 16, line)
+        offset = self.coerce(self.expr(offsets[attr], scope), 16, line)
+        return self.rd(mk("add", 16, start, offset))
+
     def attr_value(self, left: str, attr: str, scope: Scope, line: int):
         """``left.attr``: a layout field, stream cursor or instance member."""
         if left == "cpu":
@@ -626,7 +639,11 @@ class Lowerer(ObjectLowering):
             return V(
                 found[1] if attr == "base" else found[2], 16 if attr == "base" else 8
             )
-        owner = self.owner_value(left, attr, scope, line)
+        if left in self.views:
+            return self.view_value(left, attr, scope, line)
+        owner = self.owner_value(left, attr, scope, line) or self.cursor_value(
+            left, attr, scope, line
+        )
         if owner is not None:
             return owner
         inst = self.machine_instance(left, None, line)
@@ -1477,9 +1494,32 @@ def elaborate(
     )
 
 
+def _argument(text: str):
+    """The syntax of the routine argument ``text``, an expression over the instance."""
+    from .syntax import parse  # pylint: disable=import-outside-toplevel
+
+    spec = parse(f"spec arg; proc p() {{ let v = {text}; }}")
+    return spec.procs["p"][5][0][4]
+
+
+def layout_names(node) -> frozenset:
+    """The layout fields ``L.name`` the syntax ``node`` reads."""
+    if isinstance(node, tuple):
+        if len(node) > 3 and node[0] == "attr" and node[2] == "L":
+            return frozenset((node[3],))
+        return frozenset().union(*(layout_names(n) for n in node[2:]))
+    if isinstance(node, list):
+        return frozenset().union(*(layout_names(n) for n in node))
+    return frozenset()
+
+
 def _routine(low: Lowerer, routine: str) -> list:
-    """One instance proc, inlined (its signals start at their defaults)."""
-    target, _, proc = routine.rpartition(".")
+    """One instance proc, inlined (its signals start at their defaults). ``proc(a, c)``
+    passes each argument: an entry register or flag named (``a``, ``c``) as ``cpu.a``, or an
+    expression over the instance (``curfx2 >> 4``)."""
+    head, _, rest = routine.partition("(")
+    target, _, proc = head.rpartition(".")
+    arguments = [r.strip() for r in rest.rstrip(")").split(",") if r.strip()]
     name, _, index = target.partition("[")
     inst = low.machine_instance(
         name, K(int(index.rstrip("]")), 0) if index else None, 0
@@ -1489,7 +1529,10 @@ def _routine(low: Lowerer, routine: str) -> list:
         low.raise_errors()
     low.ran = set(low.instances) | {inst.ident}
     low.inst = inst
-    body = low.inline(inst.procs[proc], [], Scope(), 0, None)
+    args = [
+        ("attr", 0, "cpu", r) if r in CPU_INPUTS else _argument(r) for r in arguments
+    ]
+    body = low.inline(inst.procs[proc], args, Scope(), 0, None)
     low.inst = low.global_inst
     return [("set", ir, K(default, w)) for ir, w, default in low.signals] + body
 

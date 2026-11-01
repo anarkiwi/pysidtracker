@@ -1139,10 +1139,10 @@ mod tests {
             r.extend(a);
             r.extend(b);
             r.extend(sets);
-            r.push(0);
+            r.extend([0, 1, 0, -1]);
             r
         };
-        let set = vec![1, 0, 0, 1, 0xFF, 0, 0];
+        let set = vec![1, 0, 0, 1, 0xFF, 0, 0, -1, 0, 0, 1];
         let mut d = vec![2, -1, 3, 2, 2, 0x30, -1, 0x32, -1, 1, 0x34, -1, 4];
         d.extend(row(0, 0x7F, 2, x(0), x(1), vec![0]));
         d.extend(row(0x80, 0x80, 4, none, none, set));
@@ -1207,8 +1207,8 @@ mod tests {
         }
         // run 0xF0..=0xF7 from 0xF0 into 0x41; field 0 -> 0x42 (& 0x7f), field 1 when bit 7 -> 0x43
         let d = vec![
-            3, -1, 2, 0x40, -1, 0, 0xF0, 0xF7, 0xF0, 0x41, -1, 2, 0, 0, 1, 1, 0x42, -1, 0x7F, 0, 0,
-            0x80, 0, 0, 1, 0x43, -1, 0xFF, 0, 0, 0,
+            3, -1, 2, 0x40, -1, 0, 0xF0, 0xF7, 0xF0, 0x41, -1, 0, 2, 0, 0, 1, 1, 0x42, -1, 0x7F, 0,
+            0, 0, 0, 1, 0x80, 0, 0, 1, 0x43, -1, 0xFF, 0, 0, 0, 0, 1, 0,
         ];
         let step = operands(&[0x2000, 0], 0);
         react(&step, &d, 0, &mem);

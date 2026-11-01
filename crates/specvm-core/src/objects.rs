@@ -33,12 +33,18 @@ struct Assign {
     index: usize,
     part: i64,
     xf: Xf,
+    /// `(column, mask, value, equal)`: the row byte test the assignment waits for.
+    guard: Option<(usize, i64, i64, bool)>,
 }
 
 #[derive(Clone, Debug)]
 enum Action {
     Stop,
-    Jump(Xf),
+    Jump {
+        target: Xf,
+        hold: (i64, i64),
+        via: Option<i64>,
+    },
     Sweep {
         into: usize,
         count: Xf,
@@ -58,14 +64,22 @@ struct Row {
 }
 
 #[derive(Clone, Debug)]
+struct Store {
+    out: Loc,
+    keep: i64,
+    shl: i64,
+    shr: i64,
+    mask: i64,
+    value: i64,
+    equal: bool,
+}
+
+#[derive(Clone, Debug)]
 struct Field {
     mask: i64,
     value: i64,
     equal: bool,
-    out: Option<Loc>,
-    keep: i64,
-    shl: i64,
-    shr: i64,
+    stores: Vec<Store>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,7 +106,8 @@ enum Kind {
         pos: i64,
         run: Option<(i64, i64, i64, i64)>,
         fields: Vec<Field>,
-        reset: bool,
+        last: bool,
+        mode: i64,
     },
 }
 
@@ -153,10 +168,14 @@ impl Reader<'_> {
         let n = self.count()?;
         (0..n)
             .map(|_| {
+                let (index, part, xf) = (self.count()?, self.next()?, self.xf()?);
+                let (col, mask, value, equal) =
+                    (self.next()?, self.next()?, self.next()?, self.next()? != 0);
                 Ok(Assign {
-                    index: self.count()?,
-                    part: self.next()?,
-                    xf: self.xf()?,
+                    index,
+                    part,
+                    xf,
+                    guard: usize::try_from(col).ok().map(|c| (c, mask, value, equal)),
                 })
             })
             .collect()
@@ -212,9 +231,14 @@ impl Step {
                 let (a, b) = (r.xf()?, r.xf()?);
                 let sets = r.assigns()?;
                 let then = r.assigns()?;
+                let (hold, via) = ((r.next()?, r.next()?), r.next()?);
                 let action = match kind {
                     0 => Action::Stop,
-                    1 => Action::Jump(a),
+                    1 => Action::Jump {
+                        target: a,
+                        hold,
+                        via: (via >= 0).then_some(via),
+                    },
                     2 => Action::Sweep {
                         into,
                         count: a,
@@ -234,8 +258,11 @@ impl Step {
             })
             .collect::<Result<Vec<_>, String>>()?;
         let reset = r.next()? != 0;
-        let bad =
-            |a: &Assign| a.index >= values.len() || (a.part == 2 && values[a.index].hi.is_none());
+        let bad = |a: &Assign| {
+            a.index > values.len()
+                || a.guard.is_some_and(|g| g.0 >= columns)
+                || (a.index < values.len() && a.part == 2 && values[a.index].hi.is_none())
+        };
         let broken = rows.iter().any(|row| {
             row.then.iter().any(bad)
                 || match &row.action {
@@ -269,27 +296,39 @@ impl Step {
         } else {
             None
         };
+        let last = r.next()? != 0;
         let fields = (0..r.count()?)
             .map(|_| {
                 let (mask, value, equal) = (r.next()?, r.next()?, r.next()? != 0);
-                let has = r.next()? != 0;
-                let out = r.loc()?;
+                let stores = (0..r.count()?)
+                    .map(|_| {
+                        Ok(Store {
+                            out: r.loc()?,
+                            keep: r.next()?,
+                            shl: r.next()?,
+                            shr: r.next()?,
+                            mask: r.next()?,
+                            value: r.next()?,
+                            equal: r.next()? != 0,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
                 Ok(Field {
                     mask,
                     value,
                     equal,
-                    out: has.then_some(out),
-                    keep: r.next()?,
-                    shl: r.next()?,
-                    shr: r.next()?,
+                    stores,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let reset = r.next()? != 0;
+        let mode = r.next()?;
         if fields.is_empty()
-            || fields
-                .iter()
-                .any(|f| !(0..64).contains(&f.shl) || !(0..64).contains(&f.shr))
+            || !(0..3).contains(&mode)
+            || fields.iter().any(|f| {
+                f.stores
+                    .iter()
+                    .any(|s| !(0..64).contains(&s.shl) || !(0..64).contains(&s.shr))
+            })
         {
             return Err("a cursor needs fields with shifts below 64".into());
         }
@@ -297,7 +336,8 @@ impl Step {
             pos,
             run,
             fields,
-            reset,
+            last,
+            mode,
         })
     }
 
@@ -363,10 +403,12 @@ fn counter(m: &mut Mem, cell: Loc, action: i64, delta: i64, ops: &[i64]) -> Resu
         m.save(cell, reload)?;
         return Ok(0);
     }
-    let (wrap, after) = if action == 1 {
-        (value + delta > limit, value + delta)
-    } else {
-        (value < delta, value - delta)
+    let up = action == 1 || action == 3;
+    let after = if up { value + delta } else { value - delta };
+    let wrap = match action {
+        1 => value + delta > limit,
+        2 => value < delta,
+        _ => limit != 0,
     };
     m.save(cell, if wrap { reload } else { after })?;
     Ok(wrap as i64)
@@ -388,10 +430,25 @@ fn xf(x: Xf, cols: &[i64]) -> i64 {
     }
 }
 
-fn assign(m: &mut Mem, values: &[Loc], sets: &[Assign], cols: &[i64]) -> Result<(), Bail> {
+fn assign(
+    m: &mut Mem,
+    values: &[Loc],
+    sets: &[Assign],
+    cols: &[i64],
+    count: &mut i64,
+) -> Result<(), Bail> {
     for a in sets {
-        let loc = values[a.index];
+        if let Some((col, mask, value, equal)) = a.guard {
+            if ((cols[col] & mask) == value) != equal {
+                continue;
+            }
+        }
         let v = xf(a.xf, cols);
+        if a.index == values.len() {
+            *count = v & 0xFF;
+            continue;
+        }
+        let loc = values[a.index];
         match a.part {
             0 => m.save(loc, v)?,
             1 => m.put(loc.lo, v)?,
@@ -401,17 +458,20 @@ fn assign(m: &mut Mem, values: &[Loc], sets: &[Assign], cols: &[i64]) -> Result<
     Ok(())
 }
 
-fn sweep(m: &mut Mem, loc: Loc, frac: u32, delta: i64) -> Result<(), Bail> {
+fn sweep(m: &mut Mem, loc: Loc, frac: u32, delta: i64) -> Result<i64, Bail> {
     if frac == 0 {
+        let carry = (m.get(loc.lo)? + (delta & 0xFF) > 0xFF) as i64;
         let v = m.load(loc)?;
-        return m.save(loc, v + delta);
+        m.save(loc, v + delta)?;
+        return Ok(carry);
     }
     let hi = loc.hi.ok_or(Bail::Range)?;
     let low = (1i64 << frac) - 1;
     let total = ((m.get(hi)? << frac) | (m.get(loc.lo)? & low)) + delta;
     let total = total & ((1i64 << (8 + frac)) - 1);
     m.put(hi, total >> frac)?;
-    m.put(loc.lo, total & low)
+    m.put(loc.lo, total & low)?;
+    Ok(0)
 }
 
 fn walker(m: &mut Mem, kind: &Kind, ops: &[i64]) -> Result<i64, Bail> {
@@ -434,29 +494,47 @@ fn walker(m: &mut Mem, kind: &Kind, ops: &[i64]) -> Result<i64, Bail> {
         return Ok(0);
     }
     let (mut at, mut count) = (m.load(*pos)?, m.get(*cnt)?);
+    let (mut carry, mut via, mut jumped) = (0, None, false);
     let mut cols = [0i64; 16];
     let mut done = false;
     for _ in 0..JUMPS {
         for (j, col) in cols.iter_mut().enumerate().take(*columns) {
             *col = m.get((ops[j] + at) & 0xFFFF)?;
         }
-        let row = rows.iter().find(|r| r.lo <= cols[0] && cols[0] <= r.hi);
+        let first = via.unwrap_or(cols[0]);
+        let row = rows.iter().find(|r| r.lo <= first && first <= r.hi);
         let Some(row) = row else {
+            carry = 1;
             done = true;
             break;
         };
         match &row.action {
             Action::Stop => {
+                carry = 1;
                 done = true;
                 break;
             }
-            Action::Jump(target) => {
+            Action::Jump {
+                target,
+                hold,
+                via: next,
+            } => {
                 let target = xf(*target, &cols);
+                carry = (target >= at) as i64;
                 done = true;
                 if target == at {
                     break;
                 }
+                jumped = true;
                 at = target;
+                via = *next;
+                if hold.0 <= hold.1 {
+                    let c0 = m.get((ops[0] + at) & 0xFFFF)?;
+                    if hold.0 <= c0 && c0 <= hold.1 {
+                        count = 0;
+                        break;
+                    }
+                }
                 done = false;
                 continue;
             }
@@ -469,24 +547,30 @@ fn walker(m: &mut Mem, kind: &Kind, ops: &[i64]) -> Result<i64, Bail> {
                 if count != xf(*limit, &cols) {
                     count = (count + 1) & 0xFF;
                     let d = xf(*step, &cols);
-                    sweep(m, values[*into], *frac, d - 256 * (d >> 7))?;
+                    carry = sweep(m, values[*into], *frac, d - 256 * (d >> 7))?;
                     done = true;
                     break;
                 }
                 count = 0;
+                carry = 1;
             }
             Action::Delay(limit) => {
                 if count != xf(*limit, &cols) {
                     count = (count + 1) & 0xFF;
+                    carry = 0;
                     done = true;
                     break;
                 }
                 count = 0;
+                carry = 1;
             }
-            Action::Set(sets) => assign(m, values, sets, &cols)?,
+            Action::Set(sets) => {
+                assign(m, values, sets, &cols, &mut count)?;
+                carry = if jumped { carry } else { 0 };
+            }
         }
         at = (at + width) & room;
-        assign(m, values, &row.then, &cols)?;
+        assign(m, values, &row.then, &cols, &mut count)?;
         done = true;
         break;
     }
@@ -495,7 +579,7 @@ fn walker(m: &mut Mem, kind: &Kind, ops: &[i64]) -> Result<i64, Bail> {
     }
     m.save(*pos, at)?;
     m.put(*cnt, count)?;
-    Ok(0)
+    Ok(carry)
 }
 
 fn cursor(m: &mut Mem, kind: &Kind, ops: &[i64]) -> Result<i64, Bail> {
@@ -503,15 +587,27 @@ fn cursor(m: &mut Mem, kind: &Kind, ops: &[i64]) -> Result<i64, Bail> {
         pos,
         run,
         fields,
-        reset,
+        last,
+        mode,
     } = kind
     else {
         unreachable!()
     };
-    if *reset {
+    if *mode == 1 {
         m.put(*pos, ops[1])?;
         if let Some((_, _, _, pending)) = run {
             m.put(*pending, 0)?;
+        }
+        return Ok(0);
+    }
+    if *mode == 2 {
+        let held = match run {
+            Some((_, _, _, pending)) => m.get(*pending)? != 0,
+            None => false,
+        };
+        if !held {
+            let at = m.get(*pos)?;
+            m.put(*pos, at + 1)?;
         }
         return Ok(0);
     }
@@ -548,10 +644,13 @@ fn cursor(m: &mut Mem, kind: &Kind, ops: &[i64]) -> Result<i64, Bail> {
         n += 1;
     }
     for (byte, f) in row.iter().zip(fields).take(n) {
-        if let Some(out) = f.out {
-            m.save(out, (((byte & f.keep) << f.shl) >> f.shr) & 0xFF)?;
+        for s in &f.stores {
+            if ((byte & s.mask) == s.value) == s.equal {
+                m.save(s.out, (((byte & s.keep) << s.shl) >> s.shr) & 0xFF)?;
+            }
         }
     }
+    let used = if *last { (used - 1).max(0) } else { used };
     m.put(*pos, at + used)?;
     Ok(0)
 }

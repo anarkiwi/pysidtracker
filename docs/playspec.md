@@ -162,9 +162,13 @@ counter name: cell {
   on frame -= 1;          // or += k; the step k is a positive constant
   on note reset;          // loads the reload value
   reload e;               // the value a wrap and a reset load (default 0)
-  wrap [at e] [-> event]; // up: wraps when the new value exceeds e; down: when it borrows
+  wrap [at e | when c] [-> event]; // up: wraps when the new value exceeds e; down: when it borrows
 }
 ```
+
+`wrap when c` tests the condition `c` against the value before the step (it reads the counter's
+cell as it stands) instead of a limit: `wrap when spdcnt == tempo || spdcnt == 0` wraps whatever
+the compare of the player decides, and the reload is stored in place of the stepped value.
 
 `cell` is a `u8` or `u16`. `+= k` stores `v + k` and wraps when that exceeds the limit (default:
 the cell's maximum); `-= k` stores `v - k` and wraps when `v < k`. A wrap loads the reload value
@@ -190,11 +194,11 @@ walker name {
   pos cell; count cell; values v0, v1;  // position, sweep counter, the values it exposes
   start e;                              // the position `reset` loads (default 0)
   on frame step; on note reset;
-  row lo[..hi]: sweep(into=v, count=op, step=op [, frac=n]) [then v = op, ...];
-  row lo[..hi]: delay(count=op) [then ...];
-  row lo[..hi]: set(v = op, v.hi = op, v.lo = op) [then ...];
-  row lo[..hi]: jump(op);
-  row lo[..hi]: stop;
+  row lo[..hi] [if static]: sweep(into=v, count=op, step=op [, frac=n]) [then v = op, ...];
+  row lo[..hi] [if static]: delay(count=op) [then ...];
+  row lo[..hi] [if static]: set(v = op, v.hi = op, v.lo = op) [then ...];
+  row lo[..hi] [if static]: jump(op) [hold lo..hi] [as c0];
+  row lo[..hi] [if static]: stop;
 }
 ```
 
@@ -210,6 +214,16 @@ walker name {
   - `delay` is a `sweep` that adds nothing; `set` assigns and advances.
   - `jump` loads `pos` and decodes the row there in the same step, and a jump to the current
     row holds. A walker that jumps 256 times in a step raises `SpecRuntimeError`.
+    `hold lo..hi` stops the step at a target whose first byte is in the range, with `pos` at the
+    target and the count cleared: the row is decoded on the next step. `as c0` decodes any other
+    target as the arm that handles the first byte `c0`, whatever the row says.
+  - **Static and runtime conditions.** `if e` on a row or a `then` item is a static test of the
+    binding (`L.flag`): a false one drops the row or item. `item when test` guards a `then` or
+    `set` assignment by a test of a row byte, `(c2 & 0xf0) == 0x80`, `!=`, `neg(c2)`, `bit(c2, n)`.
+    The walker's count cell can be assigned in `then`: `then count = 0`.
+  - **Carry.** A reaction's `-> flag` receives the carry the 6502 leaves: a sweep step the carry
+    out of the low byte of the addition (0 with `frac`), the end of a sweep or delay and a stop 1,
+    a set 0 (the jump's carry when a jump led to it) and a jump `target >= pos`.
 - **Values.** `values` are cells the rest of the spec reads; `v.hi` and `v.lo` assign one byte
   of a word.
 
@@ -234,10 +248,10 @@ the low byte, carries into the high byte by hand, follows jumps and writes the p
 ### cursor
 
 ```
-cursor name @ base pos cell [grammar "module:attr:rule"] {
-  on row next; on pattern_end reset;
+cursor name @ base pos cell [last] [grammar "module:attr:rule"] {
+  on row next; on pattern_end reset; on tick settle;
   run lo..hi base b -> cell;                // a byte in lo..hi starts a run of (byte - b) empty rows
-  field name [when cond] [-> cell = operand];
+  field name [when cond] [-> cell = operand [when test], ...];
 }
 ```
 
@@ -248,6 +262,13 @@ else the row is a first field and each following field whose `when` holds of the
 byte: `neg(prev)`, `bit(prev, n)`, `(prev & m) == v`, `!=`, `!`. An empty row reads its first
 field as 0. Each field with `->` stores its byte, through the operand, in the cell; `pos`
 advances over the bytes read. `reset` loads `pos` from `start` (default 0) and clears the run.
+
+With `last`, `pos` stays on the last byte read, as a player that adds one on a later tick keeps
+it: `next` reads at `pos`, leaves it on the row's last byte, and `settle` moves it to the next
+row unless a run is pending. `cursor.ahead` is the byte the next row starts with (at `pos + 1`
+in `last` mode, else at `pos`) and `cursor.idle` that no run is pending, so a format can look
+for its end marker before it settles. A field's stores each take their own `when` test of the
+field's byte.
 
 The orderlist and pattern of `examples/events/pattern-cursor.play` replace a proc of `stream`s,
 `next`s and position write-backs:
@@ -278,6 +299,12 @@ the same test on two values.
 cells `f`, `g` at `base + x * s + offset` (fields follow one another unless `@` places them). It
 replaces cells declared as `L.base + 7 * x + k` and is checked for overlaps and the stride.
 
+### view
+
+`view name @ pointer { field @ offset; ... }` names the bytes at fixed offsets from an address
+held in a cell: `view instrument @ zp { ad @ 3; sr @ 4; }` makes `instrument.ad` the byte at
+`zp + 3`, read through the pointer as it stands in the proc that reads it.
+
 ### u16 cells
 
 A `u16` cell is a word at adjacent bytes or at `(lo, hi)` addresses; reads and stores combine the
@@ -307,9 +334,13 @@ same cells.
   application each, the same for every call. `outproof.prove` therefore proves the code around
   objects; what an object does is not examined, and `bmc` properties over bytes an object writes
   can fail on counterexamples the object's real behaviour excludes.
+- **Per-proc cells.** An object's cells and operands resolve as `per_proc` cells of a proc
+  named like the object, and a handler's as those of a proc named like the handler; a `per_proc`
+  cell placed at several layout fields (`(L.lo, L.hi)`) moves when any of them has a `<field>@<proc>`
+  binding. `routine` of `elaborate` takes arguments, `voice[0].seq_fx(a)`: registers and flags
+  by name, anything else as an expression over the instance (`smallfx(curfx2 >> 4, a)`).
 - **Limits.** Rows carry at most 16 bytes, and operands are the forms above. An object cannot write the SID (state those stores);
-  a walker's step does not return the carry the 6502 leaves, and a cursor's position is the offset
-  of the next byte, not of the last one read.
+  the carry a walker returns is the one its row kind leaves.
 
 ## Variants
 
@@ -637,6 +668,9 @@ and fixed bytes once per pass. Obligations are independent, so `--proof-jobs N` 
 `prove(jobs=N)`) discharges contiguous blocks of them in `N` worker processes, each with
 its own z3 context; `tools/proofprofile.py` splits a proof's time between term
 construction and `check`, and `tools/proofbench.py` times whole tunes.
+
+`tools/spec_compare.py` plays tunes with two specs (and the tune's own 6502 with `--oracle`) call by call
+and reports the first difference in writes, registers or memory, or with `--bench` the time per call.
 
 ## Proof tooling
 
