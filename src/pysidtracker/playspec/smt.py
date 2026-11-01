@@ -230,12 +230,40 @@ class Executor:
                 self.loop(s, st, guard)
             elif tag == "call":
                 self.run(self.procs[s[1]], st, guard)
+            elif tag == "fire":
+                self.run(s[2], st, guard)
+            elif tag == "obj":
+                self.react(s, st, guard)
             elif tag == "native":
                 raise SidError("native 6502 code is opaque to the solver")
             elif tag == "assert":
                 cond = self.expr(s[1], st)
                 st.obligations.append((_and(guard, z3.Not(cond)), s[2]))
         return st
+
+    def react(self, s, st: State, guard) -> None:
+        """An object reaction: every byte it writes and its wrap flag are uninterpreted
+        functions of its operands and the bytes it may read, the same for every call."""
+        _tag, name, event, out, ops, reads, writes = s
+        if (0, 0xFFFF) in reads:
+            raise SidError(f"object {name} reads an unbounded table")
+        args = [self.expr(o, st) for o in ops]
+        for lo, hi in sorted(reads):
+            args += [z3.Select(st.mem, z3.BitVecVal(a, 16)) for a in range(lo, hi + 1)]
+        sorts = [a.sort() for a in args]
+        key = f"{name}:{event}"
+        for addr in writes:
+            value = z3.Function(f"{key}:{addr}", *sorts, BV8)(*args)
+            at = z3.BitVecVal(addr, 16)
+            if guard is not None:
+                value = z3.If(guard, value, z3.Select(st.mem, at))
+            st.mem = z3.Store(st.mem, at, value)
+            st.writes.append(at)
+        if out:
+            flag = z3.Function(f"{key}:wrap", *sorts, z3.BoolSort())(*args)
+            if guard is not None and out in st.env:
+                flag = z3.If(guard, flag, st.env[out])
+            st.env[out] = flag
 
     def branch(self, s, st: State, guard) -> None:
         """An ``if``: a static condition picks one arm, else both run guarded."""
@@ -285,6 +313,7 @@ _BINARY = {
     "ule": z3.ULE,
     "slt": lambda a, b: a < b,
     "sle": lambda a, b: a <= b,
+    "own": lambda a, b: a == b,
 }
 
 

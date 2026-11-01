@@ -66,6 +66,9 @@ class Spec:
     cells: List[Tuple] = field(default_factory=list)
     procs: Dict[str, Tuple] = field(default_factory=dict)
     machines: Dict[str, Tuple] = field(default_factory=dict)
+    events: List[Tuple] = field(default_factory=list)
+    objects: List[Tuple] = field(default_factory=list)
+    records: List[Tuple] = field(default_factory=list)
     schedule: Tuple = ()
     invariants: List[Tuple] = field(default_factory=list)
     assumes: List[Tuple] = field(default_factory=list)
@@ -91,6 +94,9 @@ def _line(meta, origin: str = "") -> Loc:
         getattr(meta, "start_pos", 0),
         getattr(meta, "end_pos", 0),
     )
+
+
+OBJECTS = ("counter", "owner", "walker", "cursor")
 
 
 def _int(text: str) -> int:
@@ -127,6 +133,12 @@ class _ToAst(Transformer):
                 spec.machines[item[2]] = item
             elif tag == "schedule":
                 spec.schedule = item
+            elif tag == "event":
+                spec.events.append(item)
+            elif tag in OBJECTS:
+                spec.objects.append(item)
+            elif tag == "record":
+                spec.records.append(item)
             elif tag == "invariant":
                 spec.invariants.append(item)
             elif tag == "assume":
@@ -152,6 +164,121 @@ class _ToAst(Transformer):
 
     def drop(self, meta, c):
         return self._n("drop", meta, [str(n) for n in c])
+
+    def event(self, meta, c):
+        return self._n("event", meta, str(c[0]), str(c[1]))
+
+    def counter(self, meta, c):
+        return self._n("counter", meta, str(c[0]), str(c[1]), list(c[2:]))
+
+    def events(self, meta, c):
+        del meta
+        return [str(n) for n in c]
+
+    def c_on(self, meta, c):
+        if len(c) == 2:
+            return self._n("c_on", meta, c[0], "reset", None)
+        return self._n("c_on", meta, c[0], str(c[1]), c[2])
+
+    def c_wrap(self, meta, c):
+        return self._n("c_wrap", meta, c[0], c[1] and str(c[1]))
+
+    def c_reload(self, meta, c):
+        return self._n("c_reload", meta, c[0])
+
+    def owner(self, meta, c):
+        return self._n("owner", meta, str(c[0]), str(c[1]), list(c[2:]))
+
+    def o_id(self, meta, c):
+        return self._n("o_id", meta, c[0])
+
+    def o_none(self, meta, c):
+        return self._n("o_none", meta, c[0])
+
+    def o_on(self, meta, c):
+        return self._n("o_on", meta, c[0], str(c[1]), c[2])
+
+    def walker(self, meta, c):
+        return self._n("walker", meta, str(c[0]), list(c[1:]))
+
+    def w_table(self, meta, c):
+        width = c[-1] and c[-1][2]
+        return self._n("w_table", meta, list(c[:-1]), width)
+
+    def w_width(self, meta, c):
+        return self._n("w_width", meta, c[0])
+
+    def w_pos(self, meta, c):
+        return self._n("w_pos", meta, str(c[0]))
+
+    def w_count(self, meta, c):
+        return self._n("w_count", meta, str(c[0]))
+
+    def w_values(self, meta, c):
+        return self._n("w_values", meta, [str(n) for n in c])
+
+    def w_on(self, meta, c):
+        return self._n("w_on", meta, c[0], str(c[1]))
+
+    def w_start(self, meta, c):
+        return self._n("w_start", meta, c[0])
+
+    def w_row(self, meta, c):
+        then = c[3][2] if c[3] else []
+        return self._n("w_row", meta, c[0], c[1], c[2], then)
+
+    def w_then(self, meta, c):
+        return self._n("w_then", meta, list(c))
+
+    def wset(self, meta, c):
+        del meta
+        return str(c[0]), c[1] and str(c[1]), c[2]
+
+    def a_sweep(self, meta, c):
+        return self._n("sweep", meta, list(c))
+
+    def a_delay(self, meta, c):
+        return self._n("delay", meta, list(c))
+
+    def a_set(self, meta, c):
+        return self._n("set", meta, list(c))
+
+    def a_jump(self, meta, c):
+        return self._n("jump", meta, c[0])
+
+    def a_stop(self, meta, c):
+        del c
+        return self._n("stop", meta)
+
+    def cursor(self, meta, c):
+        grammar = [g for g in c[3:] if not isinstance(g[1], Loc)]
+        clauses = [g for g in c[3:] if isinstance(g[1], Loc)]
+        return self._n("cursor", meta, str(c[0]), c[1], str(c[2]), grammar, clauses)
+
+    def k_on(self, meta, c):
+        return self._n("k_on", meta, c[0], str(c[1]))
+
+    def k_run(self, meta, c):
+        return self._n("k_run", meta, c[0], c[1], c[2], str(c[3]))
+
+    def k_field(self, meta, c):
+        return self._n("k_field", meta, str(c[0]), c[1], c[2] and str(c[2]), c[3])
+
+    def record(self, meta, c):
+        return self._n("record", meta, str(c[0]), c[1], c[2], list(c[3:]))
+
+    def rfield(self, meta, c):
+        return self._n("rfield", meta, str(c[0]), str(c[1]), c[2])
+
+    def fire(self, meta, c):
+        return self._n("fire", meta, str(c[0]), None)
+
+    def fire_block(self, meta, c):
+        return self._n("fire", meta, str(c[0]), c[1])
+
+    def react(self, meta, c):
+        args = [a for a in c[2:-1] if a is not None]
+        return self._n("react", meta, str(c[0]), str(c[1]), args, c[-1] and str(c[-1]))
 
     def labeled(self, meta, c):
         return self._n("label", meta, str(c[0]), c[1])
@@ -592,6 +719,16 @@ class _Deriver:
             *own.invariants,
         ]:
             self.put(self.top[item[0]], item, False, f"base {base.name}")
+        declared = {
+            "event": [*base.events, *own.events],
+            "object": [*base.objects, *own.objects],
+            "record": [*base.records, *own.records],
+        }
+        for kind, items in declared.items():
+            seen: Dict[str, Tuple] = {}
+            for item in items:
+                if seen.setdefault(item[2], item) is not item:
+                    self.error(item[1], f"{item[0]} {item[2]} is already in base")
         schedule = base.schedule
         if own.schedule:
             if schedule:
@@ -623,6 +760,9 @@ class _Deriver:
             cells=list(self.top["cell"].values()),
             procs=self.top["proc"],
             machines=self.top["machine"],
+            events=declared["event"],
+            objects=declared["object"],
+            records=declared["record"],
             schedule=schedule,
             invariants=list(self.top["invariant"].values()),
             assumes=[*base.assumes, *own.assumes],

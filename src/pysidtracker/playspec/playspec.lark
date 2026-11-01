@@ -5,6 +5,7 @@ start: _item*
 
 _item: spec_decl | layout | const | cell | machine | proc | schedule
      | invariant | assume | override | extend | patch | drop
+     | event | _object | record
 
 spec_decl: "spec" NAME ("extends" NAME)? ";"
 layout: "layout" "{" lfield* "}"
@@ -21,7 +22,7 @@ place: expr                    -> at
 ATTR: "ro" | "out" | "operand" | "scratch" | "latched" | "volatile" | "per_proc"
 
 machine: "machine" NAME ("[" NAME "in" expr ".." expr "]")? "{" _mitem* "}"
-_mitem: cell | signal | control | proc | step
+_mitem: cell | signal | control | proc | step | _object | record
 signal: "signal" NAME ":" TYPE "=" expr ";"
 control: "control" NAME ("on" NAME "mask" expr)? "{" state ("," state)* "}"
 state: NAME ("=" expr)?
@@ -36,6 +37,53 @@ edit: EDITOP NAME eblock
 eblock: "{" _stmt* "}"
 EDITOP: "replace" | "before" | "after"
 drop: "drop" NAME ("," NAME)* ";"
+
+event: "event" NAME ":" NAME ";"
+
+_object: counter | owner | walker | cursor
+counter: "counter" NAME ":" NAME "{" _cclause* "}"
+_cclause: c_on | c_wrap | c_reload
+c_on: "on" events (ASSIGNOP expr | RESET) ";"
+events: NAME ("," NAME)*
+c_wrap: "wrap" ["at" expr] ["->" NAME] ";"
+c_reload: "reload" expr ";"
+RESET.2: "reset"
+
+owner: "owner" NAME ":" NAME "{" _oclause* "}"
+_oclause: o_id | o_none | o_on
+o_id: "id" expr ";"
+o_none: "none" expr ";"
+o_on: "on" events CLAIM ["when" expr] ";"
+CLAIM.2: "claim" | "release"
+
+walker: "walker" NAME "{" _wclause* "}"
+_wclause: w_table | w_pos | w_count | w_values | w_on | w_start | w_row
+w_table: "table" "@" expr ("," expr)* [w_width] ";"
+w_width: "width" expr
+w_pos: "pos" NAME ";"
+w_count: "count" NAME ";"
+w_values: "values" NAME ("," NAME)* ";"
+w_on: "on" events (STEP | RESET) ";"
+w_start: "start" expr ";"
+w_row: "row" expr [".." expr] ":" w_act [w_then] ";"
+w_then: "then" wset ("," wset)*
+STEP.2: "step"
+w_act: "sweep" "(" wset ("," wset)* ")"  -> a_sweep
+     | "delay" "(" wset ")"              -> a_delay
+     | "set" "(" wset ("," wset)* ")"    -> a_set
+     | "jump" "(" expr ")"               -> a_jump
+     | "stop"                            -> a_stop
+wset: NAME ["." NAME] "=" expr
+
+cursor: "cursor" NAME "@" expr "pos" NAME ("grammar" gsel ("," gsel)*)? "{" _kclause* "}"
+_kclause: k_on | k_run | k_field
+k_on: "on" events (NEXT | RESET) ";"
+NEXT.2: "next"
+k_run: "run" expr ".." expr "base" expr "->" NAME ";"
+k_field: "field" NAME ["when" expr] ["->" NAME "=" expr] ";"
+
+record: "record" NAME "@" expr "stride" expr "{" rfield* "}"
+rfield: NAME ":" TYPE ["@" expr] ";"
 
 proc: "proc" NAME "(" [param ("," param)*] ")" ("->" TYPE)? block
 param: NAME ":" (TYPE | STREAM)
@@ -56,7 +104,10 @@ assume: "assume" expr ";"
 block: "{" _stmt* "}"
 _stmt: assign | let | next_let | next_set | if_ | while_ | for_ | call
      | return_ | finish | goto | in_ | stream | assert_ | native
-     | labeled | group
+     | labeled | group | fire | fire_block | react
+fire: "fire" NAME ";"
+fire_block: "fire" NAME block
+react: "react" NAME "on" NAME "(" [expr ("," expr)*] ")" ["->" NAME] ";"
 labeled: NAME ":" _stmt
 group: "{" _stmt* "}"
 assign: lval ASSIGNOP expr ";"

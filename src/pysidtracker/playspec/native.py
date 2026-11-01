@@ -13,7 +13,7 @@ from array import array
 from typing import Dict, List, Tuple
 
 from ..notes import table
-from .ir import K, Op, Program, Rd, V, width
+from .ir import K, Obj, Op, Program, Rd, V, width
 
 try:
     _core = importlib.import_module("pysidtracker._specvm")
@@ -44,6 +44,7 @@ _PLAIN = {
     "ult": "Ult",
     "ule": "Ule",
     "word": "Word",
+    "own": "Eq",
     "lo": "Lo",
     "hi": "Hi",
     "lnot": "Lnot",
@@ -83,6 +84,97 @@ class Unsupported(Exception):
     """A program the native machine does not run."""
 
 
+def _loc(loc) -> List[int]:
+    """The flat form of byte addresses ``loc``."""
+    return [loc[0], loc[1] if len(loc) > 1 else -1]
+
+
+def _xf(spec) -> List[int]:
+    return list(spec)
+
+
+def _assigns(sets) -> List[int]:
+    out = [len(sets)]
+    for index, part, spec in sets:
+        out += [index, part, *_xf(spec)]
+    return out
+
+
+def _row(row) -> List[int]:
+    """The flat form of a walker row ``(lo, hi, action)``."""
+    lo, hi, action = row
+    kind = action[0]
+    blank = (0, 0, 0, 0)
+    code = {"stop": 0, "jump": 1, "sweep": 2, "delay": 3, "set": 4}[kind]
+    into = frac = 0
+    first = second = blank
+    sets: tuple = ()
+    then: tuple = ()
+    if kind == "jump":
+        first = action[1]
+    elif kind == "sweep":
+        into, first, second, frac, then = action[1:]
+    elif kind == "delay":
+        first, then = action[1:]
+    elif kind == "set":
+        sets, then = action[1:]
+    return [
+        lo,
+        hi,
+        code,
+        into,
+        frac,
+        *_xf(first),
+        *_xf(second),
+        *_assigns(sets),
+        *_assigns(then),
+    ]
+
+
+def describe(obj: Obj, event: str, out: int) -> List[int]:
+    """The flat description of ``obj``'s reaction to ``event`` for the native core."""
+    action = obj.reactions[event]
+    head = [
+        {"counter": 0, "owner": 1, "walker": 2, "cursor": 3}[obj.kind],
+        out,
+        obj.arity(),
+    ]
+    if obj.kind == "counter":
+        code = {"reset": 0, "up": 1, "down": 2}[action[0]]
+        return head + [
+            *_loc(obj.locs["cell"]),
+            code,
+            action[1] if len(action) > 1 else 0,
+        ]
+    if obj.kind == "owner":
+        return head + [*_loc(obj.locs["cell"]), int(action[0] == "release")]
+    reset = int(action[0] == "reset")
+    if obj.kind == "walker":
+        width, columns, rows = obj.spec
+        values = [obj.locs[f"v{i}"] for i in range(len(obj.locs) - 2)]
+        out_ = head + [width, columns, *_loc(obj.locs["pos"]), *_loc(obj.locs["cnt"])]
+        out_ += [len(values)] + [x for v in values for x in _loc(v)]
+        out_ += [len(rows)] + [x for r in rows for x in _row(r)]
+        return out_ + [reset]
+    run, fields = obj.spec
+    out_ = head + _loc(obj.locs["pos"])
+    out_ += [-1] if run is None else [0, run[0], run[1], run[2], *_loc(obj.locs["run"])]
+    out_ += [len(fields)]
+    for k, (cond, index, keep, shl, shr) in enumerate(fields):
+        loc = _loc(obj.locs[f"o{k}"]) if index is not None else [0, -1]
+        out_ += [
+            cond[0],
+            cond[1],
+            int(cond[2]),
+            int(index is not None),
+            *loc,
+            keep,
+            shl,
+            shr,
+        ]
+    return out_ + [reset]
+
+
 def available() -> bool:
     """Whether the native core is built and not disabled by ``PYSIDTRACKER_SPEC_NATIVE=0``."""
     return _core is not None and os.environ.get(ENV, "1") != "0"
@@ -99,6 +191,7 @@ class _Encoder:
         }
         self.tables: Dict[tuple, int] = {}
         self.calls: List[Tuple[int, str]] = []
+        self.objects: List[List[int]] = []
 
     def emit(self, op: str, arg: int = 0) -> int:
         """Append an instruction; its index."""
@@ -254,8 +347,23 @@ class _Encoder:
             self.emit("Halt")
         elif tag == "call":
             self.calls.append((self.emit("Call"), s[1]))
+        elif tag == "fire":
+            self.block(s[2])
+        elif tag == "obj":
+            self.react(s)
         elif tag != "hook":
             raise Unsupported(f"no native form for {tag}")
+
+    def react(self, s) -> None:
+        """Code that evaluates the operands of the object reaction ``s`` and steps it."""
+        for operand in s[4]:
+            self.expr(operand)
+        out = -1 if s[3] is None else self.var(s[3])
+        obj = self.program.objects.get(s[1])
+        if obj is None:
+            raise Unsupported(f"no object {s[1]!r}")
+        self.objects.append(describe(obj, s[2], out))
+        self.emit("Obj", len(self.objects) - 1 | len(s[4]) << 24)
 
     def native(self, s) -> None:
         """Code that runs the tune's 6502 code at ``s[1]`` with the registers ``s[2]`` until it
@@ -311,7 +419,7 @@ class _Encoder:
         self.patch(out, self.here())
 
     def encode(self):
-        """``(code, tables, inputs, variables, controls)`` of the program."""
+        """``(code, tables, inputs, variables, controls, objects)`` of the program."""
         program = self.program
         inputs = [(self.var(n), REGISTER[n[4:]]) for n in program.inputs]
         self.block(program.body)
@@ -331,11 +439,12 @@ class _Encoder:
             inputs,
             len(self.vars),
             len(program.controls),
+            self.objects,
         )
 
 
 def encode(program: Program):
-    """``(code, tables, inputs, variables, controls)`` for ``Core.add``.
+    """``(code, tables, inputs, variables, controls, objects)`` for ``Core.add``.
 
     Raises:
       Unsupported: ``program`` uses a form the machine does not run.

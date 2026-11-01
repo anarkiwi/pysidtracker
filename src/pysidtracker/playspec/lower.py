@@ -10,8 +10,10 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
 from ..notes import PARTS
-from .ir import Cell, K, Op, Program, Rd, V, evaluate, width
-from .syntax import Spec, SpecError
+from .ir import Cell, K, Obj, Op, Program, Rd, V, width
+from .lowerobj import ObjectLowering
+from .lowerops import add16, mk, word, zext
+from .syntax import OBJECTS, Spec, SpecError
 
 WIDTHS = {"u8": 8, "u16": 16, "bool": 1, "ptr": 16}
 ARITH = {"+": "add", "-": "sub", "*": "mul", "&": "and", "|": "or", "^": "xor"}
@@ -29,42 +31,6 @@ COMPOUND = {
 LKINDS = {"addr", "byte", "flag", "list"}
 CPU_INPUTS = {"a": 8, "x": 8, "y": 8, **dict.fromkeys("czvndi", 1)}
 UNKNOWN_LIST = ("?",)
-
-
-def mk(op: str, w: int, *args):
-    """``Op(op, w, args)``, folded when every argument is a known constant."""
-    if all(isinstance(a, K) and a.v is not None for a in args):
-        return K(evaluate(op, w, [a.v for a in args], max(width(a) for a in args)), w)
-    if op == "land":
-        for a, b in (args, args[::-1]):
-            if isinstance(a, K) and a.v is not None:
-                return b if a.v else K(0, 1)
-    if op == "lor":
-        for a, b in (args, args[::-1]):
-            if isinstance(a, K) and a.v is not None:
-                return K(1, 1) if a.v else b
-    if op == "lnot" and isinstance(args[0], Op) and args[0].op == "lnot":
-        return args[0].a[0]
-    return Op(op, w, tuple(args))
-
-
-def add16(base, index):
-    """The 16-bit address ``base + index`` (``index`` zero-extended)."""
-    return mk("add", 16, base, zext(index, 16))
-
-
-def zext(expr, w: int):
-    """``expr`` widened to ``w`` bits."""
-    if width(expr) == w:
-        return expr
-    if isinstance(expr, K) and expr.w == 0:
-        return K(None if expr.v is None else expr.v & ((1 << w) - 1), w)
-    return mk("zext", w, expr)
-
-
-def word(lo, hi):
-    """The little-endian word of bytes ``lo``, ``hi``."""
-    return mk("word", 16, lo, hi)
 
 
 class Scope:
@@ -90,9 +56,10 @@ class Instance:
         self.signals: Dict[str, Tuple[str, int]] = {}
         self.controls: Dict[str, tuple] = {}
         self.procs: Dict[str, tuple] = {}
+        self.objects: Dict[str, Obj] = {}
 
 
-class Lowerer:
+class Lowerer(ObjectLowering):
     """One elaboration of a :class:`Spec` (see :func:`elaborate`)."""
 
     # pylint: disable=too-many-public-methods,too-many-instance-attributes
@@ -129,6 +96,12 @@ class Lowerer:
         self.allow_old = False
         self.old = False
         self.global_inst = self.inst
+        self.events: Dict[str, Optional[str]] = {}
+        self.shared_objs: Dict[str, Obj] = {}
+        self.asts: Dict[str, dict] = {}
+        self.owner_exprs: Dict[str, tuple] = {}
+        self.firing: List[str] = []
+        self.bind_events()
         for kind in set(spec.layout.values()) - LKINDS:
             self.error(0, f"unknown layout kind {kind!r}")
         for _tag, line, name, expr in spec.consts:
@@ -139,6 +112,10 @@ class Lowerer:
             self.consts[name] = value
         for decl in spec.cells:
             self.shared[decl[2]] = self.bind_cell(decl, "", Scope())
+        for record in spec.records:
+            self.bind_record(record, self.shared, Scope())
+        for item in spec.objects:
+            self.shared_objs[item[2]] = self.bind_object(item, Scope())
         for name, machine in spec.machines.items():
             if machine[3] is None:
                 self.instance(name, None)
@@ -280,6 +257,11 @@ class Lowerer:
                 self.bind_control(inst, item, scope)
             elif tag == "proc":
                 inst.procs[item[2]] = item
+            elif tag == "record":
+                self.bind_record(item, inst.cells, scope)
+        for item in machine[6]:
+            if item[0] in OBJECTS:
+                inst.objects[item[2]] = self.bind_object(item, scope)
         self.inst = saved
         return inst
 
@@ -645,6 +627,9 @@ class Lowerer:
             return V(
                 found[1] if attr == "base" else found[2], 16 if attr == "base" else 8
             )
+        owner = self.owner_value(left, attr, scope, line)
+        if owner is not None:
+            return owner
         inst = self.machine_instance(left, None, line)
         return K(None, 8) if inst is None else self.member(inst, attr, line)
 
@@ -723,6 +708,7 @@ class Lowerer:
             "rol": 2,
             "ror": 2,
             "ite": 3,
+            "owns": 2,
             "carry": (2, 3),
             "borrow": (2, 3),
         }
@@ -846,6 +832,13 @@ class Lowerer:
     def fn_ror(self, vals, line):
         """Rotate right through a carry-in."""
         return self._rotate(vals, line, False)
+
+    def fn_owns(self, vals, line):
+        """Whether the owner cell value ``a`` is the id ``b``."""
+        a, b, w = self.unify(vals[0], vals[1], line)
+        if w in (0, 1):
+            a, b = self.coerce(a, 8, line), self.coerce(b, 8, line)
+        return mk("own", 1, a, b)
 
     def fn_ite(self, vals, line):
         """``c ? a : b``."""
@@ -1433,7 +1426,7 @@ def returns(node) -> bool:
         return any(any(returns(s) for s in body) for _c, body in node[2]) or any(
             returns(s) for s in node[3]
         )
-    if tag in ("while", "for"):
+    if tag in ("while", "for") or tag == "fire" and node[3] is not None:
         return any(returns(s) for s in node[-1])
     if tag == "in":
         return any(any(returns(s) for s in body) for _n, body in node[3])
@@ -1480,6 +1473,8 @@ def elaborate(
         natives=low.natives,
         standard=standard,
         procs=low.procs,
+        objects=low.all_objects(),
+        events=low.events,
     )
 
 

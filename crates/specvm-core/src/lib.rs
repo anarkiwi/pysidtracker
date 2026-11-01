@@ -3,6 +3,7 @@
 //! each modelled entry played as its program ([`machine`]).
 
 pub mod machine;
+pub mod objects;
 pub mod vm;
 
 pub use machine::Machine;

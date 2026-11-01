@@ -46,6 +46,8 @@ def var_widths(*bodies) -> Dict[str, int]:
         for s in O.statements(body):
             if s[0] == "set":
                 out.setdefault(s[1], width(s[2]))
+            if s[0] == "obj" and s[3]:
+                out.setdefault(s[3], 1)
             for e in O.stmt_exprs(s):
                 for n in O.walk(e):
                     if isinstance(n, V):
@@ -187,7 +189,8 @@ class _Checker:
         else:
             _k, pre, old, new, post = item
             sets = {t[1] for t in (old, new) if t[0] == "set"}
-            post = _changed(post, pre, sets, "wr" in (old[0], new[0]))
+            sets |= {t[3] for t in (old, new) if t[0] == "obj" and t[3]}
+            post = _changed(post, pre, sets, bool({"wr", "obj"} & {old[0], new[0]}))
             used = _names(*O.stmt_exprs(old), *O.stmt_exprs(new)) | sets
             for name in used:
                 _ = st.env[name]

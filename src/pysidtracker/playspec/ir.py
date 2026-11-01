@@ -9,6 +9,14 @@ reaches ``resume``; opaque to the solver), ``("call", id)`` (run ``Program.procs
 its variables are global, so arguments and results pass by name) and ``("finish",)``
 (the whole call ends).
 
+Event-driven objects stay typed through every stage. ``("fire", event, body)`` runs ``body``,
+the reactions of the objects to ``event`` (a transparent block). ``("obj", name, event, out,
+operands, reads, writes)`` is one reaction of ``Program.objects[name]``: it evaluates
+``operands``, steps the object on memory, and assigns the boolean ``out`` (None: no variable)
+whether the step wrapped; ``reads`` (address intervals) and ``writes`` (addresses) bound its
+memory accesses, so a pass that has not seen the object's kind can still treat it as one
+opaque, deterministic step.
+
 ``Op("note", w, (K(clock), K(part), K(offset), index))`` (standard note mode only) is
 the :func:`~pysidtracker.notes.table` entry at ``index``, which the solver rejects.
 """
@@ -80,6 +88,7 @@ _FOLD = {
     "land": lambda m, a, b: a & b,
     "lor": lambda m, a, b: a | b,
     "lnot": lambda m, a: a ^ 1,
+    "own": lambda m, a, b: int(a == b),
 }
 
 
@@ -107,6 +116,7 @@ class Cell:
     attrs: frozenset
     line: int
     notes: Optional[Tuple[str, int]] = None
+    record: Optional[str] = None
 
     def extent(self) -> List[int]:
         """Every byte address the declaration spans (empty while unbound)."""
@@ -117,6 +127,44 @@ class Cell:
             return [(p + i) & 0xFFFF for p in self.place for i in range(count)]
         size = 1 if self.typ == "u8" else 2
         return [(self.place[0] + i) & 0xFFFF for i in range(count * size)]
+
+
+@dataclass
+class Obj:
+    """An event-driven object bound to byte addresses (see :mod:`.objects`).
+
+    ``kind`` is ``counter``, ``owner``, ``walker`` or ``cursor``; ``locs`` maps each role to
+    its byte addresses ``(lo,)`` or ``(lo, hi)``; ``spec`` is the kind's static structure;
+    ``reactions`` maps an event to the action it triggers; ``fires`` is the event a wrap
+    fires; ``grammar`` indexes :attr:`Program.grammars` for a cursor's stream.
+    """
+
+    name: str
+    kind: str
+    owner: str
+    locs: Dict[str, Tuple[Optional[int], ...]]
+    spec: tuple
+    reactions: Dict[str, tuple]
+    fires: Optional[str] = None
+    grammar: Optional[int] = None
+    line: int = 0
+
+    def arity(self) -> int:
+        """The operands a reaction takes."""
+        return {"counter": 2, "owner": 3, "cursor": 2}.get(self.kind) or (
+            self.spec[1] + 1
+        )
+
+    def widths(self) -> Tuple[int, ...]:
+        """The width of each operand."""
+        loc = 8 * len(self.locs.get("cell", self.locs.get("pos", (0,))))
+        if self.kind == "counter":
+            return (loc, loc)
+        if self.kind == "owner":
+            return (loc, loc, 1)
+        if self.kind == "cursor":
+            return (16, 8)
+        return (16,) * self.spec[1] + (loc,)
 
 
 @dataclass
@@ -141,6 +189,8 @@ class Program:
     natives: list = field(default_factory=list)
     procs: Dict[str, list] = field(default_factory=dict)
     standard: Optional[int] = None
+    objects: Dict[str, Obj] = field(default_factory=dict)
+    events: Dict[str, Optional[str]] = field(default_factory=dict)
 
 
-__all__ = ["Cell", "K", "Op", "Program", "Rd", "V", "evaluate", "width"]
+__all__ = ["Cell", "K", "Obj", "Op", "Program", "Rd", "V", "evaluate", "width"]

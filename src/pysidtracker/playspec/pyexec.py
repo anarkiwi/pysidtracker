@@ -14,11 +14,7 @@ from typing import Callable, Dict, List, Tuple
 from ..errors import SidError
 from ..notes import table
 from .ir import K, Program, Rd, V, width
-
-
-class SpecRuntimeError(SidError):
-    """A spec assertion failed or a bounded loop ran past its bound."""
-
+from .objects import SpecRuntimeError, steps
 
 _BIN = {
     "add": "(({0} + {1}) & {m})",
@@ -36,6 +32,7 @@ _BIN = {
     "land": "({0} and {1})",
     "lor": "({0} or {1})",
     "word": "({0} | {1} << 8)",
+    "own": "({0} == {1})",
 }
 _UN = {
     "not": "({0} ^ {m})",
@@ -60,6 +57,7 @@ class _Gen:
     def __init__(self, program: Program):
         self.helpers: List[List[str]] = []
         self.tables: Dict[tuple, str] = {}
+        self.reactions: Dict[tuple, str] = {}
         self.procs = program.procs
         self.names = {
             pid: f"_p{i}_" + re.sub(r"\W", "_", pid.rpartition("#")[0])
@@ -134,7 +132,7 @@ class _Gen:
                 return True
             if tag == "if" and (self.finishes(s[2]) or self.finishes(s[3])):
                 return True
-            if tag == "loop" and self.finishes(s[2]):
+            if tag in ("loop", "fire") and self.finishes(s[2]):
                 return True
         return False
 
@@ -186,6 +184,12 @@ class _Gen:
             return [f"if {call}:", f"    {_FINISH}"] if self.ends(s[1]) else [call]
         if tag == "hook":
             return ["if G is not None:", f"    G({s[1]}, {self.ex(s[2])})"]
+        if tag == "fire":
+            return self.block(s[2])
+        if tag == "obj":
+            name = self.reactions.setdefault(s[1:3], f"OB{len(self.reactions)}")
+            call = f"{name}(R, W, ({''.join(self.ex(o) + ', ' for o in s[4])}))"
+            return [f"{self.name(s[3])} = {call}" if s[3] else call]
         return []
 
     def branch(self, s) -> List[str]:
@@ -210,9 +214,10 @@ def indent(lines: List[str]) -> List[str]:
     return ["    " + line for line in lines]
 
 
-def _generate(program: Program) -> Tuple[str, Dict[str, tuple]]:
-    """``(source, tables)``: the frame function and the ``table`` arguments of the
-    note tables (``T0``, ...) it reads.
+def _generate(program: Program) -> Tuple[str, Dict[str, tuple], Dict[tuple, str]]:
+    """``(source, tables, reactions)``: the frame function, the ``table`` arguments of the
+    note tables (``T0``, ...) it reads and the ``(object, event)`` of each reaction
+    function (``OB0``, ...) it calls.
 
     Each proc is a function (``_p0_...``), and long blocks become helper functions
     (``_f0`` ...) so no code object is large; a
@@ -242,7 +247,7 @@ def _generate(program: Program) -> Tuple[str, Dict[str, tuple]]:
     text = text.replace("N=None):\n", f"N=None):\n    V = [0] * {len(shared)}\n")
     last = text.rindex("def frame(")
     text = text[:last] + text[last:].replace(_FINISH, "return")
-    return text, {n: k for k, n in gen.tables.items()}
+    return text, {n: k for k, n in gen.tables.items()}, gen.reactions
 
 
 def source(program: Program) -> str:
@@ -252,9 +257,11 @@ def source(program: Program) -> str:
 
 def compile_program(program: Program) -> Callable:
     """``frame(R, W, C, G=None, P=None, N=None)`` running one call of ``program``."""
-    text, tables = _generate(program)
+    text, tables, reactions = _generate(program)
     namespace = {"SpecRuntimeError": SpecRuntimeError}
     namespace.update((name, table(*key)) for name, key in tables.items())
+    bound = steps(program)
+    namespace.update((name, bound[key]) for key, name in reactions.items())
     exec(
         compile(text, f"<playspec {program.name}>", "exec"), namespace
     )  # pylint: disable=exec-used
