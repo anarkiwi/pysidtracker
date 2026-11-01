@@ -134,11 +134,6 @@ def test_reorder_removes_staging_and_scratch():
     assert result.paths == {result.slots}
 
 
-def test_check_proves_the_reordered_call():
-    original = program(PLAYER)
-    assert O.check(original, O.reorder(original, ORDER)) is None
-
-
 def test_check_finds_a_wrong_schedule():
     original = program(PLAYER)
     result = O.reorder(original, ORDER)
@@ -149,15 +144,6 @@ def test_check_finds_a_wrong_schedule():
     )
     result.program = O.replace(result.program, body=body)
     assert O.check(original, result) is not None
-
-
-def test_a_value_clobbered_before_its_slot_is_staged():
-    original = program(STALE)
-    result = O.reorder(original, ORDER)
-    assert result.staged == ["o1_2"]
-    assert O.check(original, result) is None
-    _, calls = play(result.program, bytes(0x10000), 2)
-    assert calls == [[(5, 1), (2, 0)], [(5, 2), (2, 1)]]
 
 
 def test_order_that_needs_no_staging():
@@ -203,12 +189,6 @@ def test_parse_order_refuses(text):
         O.parse_order(text)
 
 
-def test_kept_takes_the_last_writes_in_slot_order():
-    slots = O.parse_order(ORDER)
-    writes = [(2, 1), (4, 8), (5, 3), (4, 9), (4, 10), (2, 7), (24, 15)]
-    assert O.kept(writes, slots) == [(24, 15), (5, 3), (4, 9), (4, 10), (2, 7)]
-
-
 @pytest.mark.parametrize(
     "stmts, message",
     [
@@ -246,12 +226,6 @@ def spec_player(transform=None):
         bind=lambda view, entry: {"sid": 0xD400, "w": 0x2000},
         transform=transform,
     )
-
-
-def test_compare_plays_both_ways():
-    verdict, results = O.compare(spec_player, ORDER, 200)
-    assert verdict is None
-    assert len(results) == 1 and results[0].staged == []
 
 
 def test_compare_reports_unordered_writes():

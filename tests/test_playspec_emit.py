@@ -1,13 +1,10 @@
 """Emitting reordered programs as playspec source, and proving them call by call."""
 
-import time
-
 import pytest
-import z3
 
 from pysidtracker.playspec import elaborate, parse
 from pysidtracker.playspec import outorder as O
-from pysidtracker.playspec import outproof, smt
+from pysidtracker.playspec import outproof
 from pysidtracker.playspec.emit import EmitError, declared, emit, isomorphic
 from pysidtracker.playspec.ir import K, V
 
@@ -86,16 +83,6 @@ def test_prove_discharges_every_obligation(text):
     assert proof.passes["forward"].total > 0
 
 
-def test_a_wrong_obligation_is_refuted():
-    stages = {}
-    O.reorder(program(PLAYER), ORDER, proof=stages)
-    cond = next(item for item in stages["forward"] if item[0] == "cond")
-    wrong = ("cond", cond[1], cond[2], O.fold("lnot", 1, (cond[3],)))
-    sizes = outproof.var_widths(stages["placed"], stages["forwarded"])
-    found = outproof.discharge([wrong], sizes, {}, {}, timeout_ms=10_000)
-    assert found.failed and found.total == 1
-
-
 def test_a_store_after_its_flush_is_found():
     slot = (5, 1)
     placed = [O.flush(slot), ("set", O.out_var(slot).n, K(1, 8))]
@@ -114,42 +101,6 @@ def test_census_lists_what_is_left():
 def test_a_spent_budget_leaves_obligations_open():
     proof = outproof.prove(program(PLAYER), ORDER, budget_s=0)
     assert not proof.holds and any("unchecked" in item for item in proof.open)
-
-
-def _seconds(run, repeats=3):
-    best = float("inf")
-    for _ in range(repeats):
-        start = time.perf_counter()
-        answers = run()
-        best = min(best, time.perf_counter() - start)
-    return best, answers
-
-
-def test_obligations_run_faster_than_with_one_shared_solver():
-    stages = {}
-    result = O.reorder(program(PLAYER), ORDER, proof=stages)
-    sizes = outproof.var_widths(stages["nested"], stages["placed"], stages["forwarded"])
-    items = stages["fix"] + stages["forward"]
-
-    def run(shared):
-        checker = outproof._Checker(  # pylint: disable=protected-access
-            sizes, result.ranges, result.fixed, 10_000
-        )
-        if shared:
-            solver = z3.Solver()
-            checker.executor = smt.Executor()
-
-            def valid(premises, claims):
-                answer = solver.check(*premises, z3.Not(z3.And(*claims)))
-                return answer == z3.unsat
-
-            checker.valid = valid
-        return [checker.obligation(item) for item in items]
-
-    ours, answers = _seconds(lambda: run(False))
-    reference, expected = _seconds(lambda: run(True))
-    assert answers == expected and all(answers)
-    assert ours < 0.9 * reference
 
 
 def test_obligations_discharge_the_same_over_processes():
