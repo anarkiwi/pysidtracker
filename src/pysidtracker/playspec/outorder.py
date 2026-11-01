@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 from ..errors import SidError
 from . import smt
-from .emit import declared, emit, isomorphic, normal
+from .emit import declared, emit, isomorphic
 from .ir import K, Op, Program, Rd, V, width
 from .lower import elaborate, mk
 from .syntax import parse
@@ -211,6 +211,17 @@ def fold(op: str, w: int, args: tuple):
     if op in ("land", "lor") and args[0] == args[1]:
         return args[0]
     return mk(op, w, *args)
+
+
+def tidy(e):
+    """``e`` folded bottom-up (:func:`fold`), every node built as lowering builds it."""
+    if isinstance(e, (K, V)):
+        return e
+    if isinstance(e, Rd):
+        return Rd(tidy(e.a))
+    if e.op == "vol":
+        return Op("vol", 8, (tidy(e.a[0]),))
+    return fold(e.op, e.w, tuple(tidy(a) for a in e.a))
 
 
 def stmt_exprs(s) -> tuple:
@@ -1006,7 +1017,7 @@ def _reorder(program, body, slots, base, observed, known, proof) -> Reordered:
     proof["forwarded"] = forward(placed, proof=proof["forward"])
     out = eliminate(proof["forwarded"], end, end)[0]
     out = declared(
-        rewrite(out, normal, lambda s: [] if s[0] == "hook" else None),
+        rewrite(out, tidy, lambda s: [] if s[0] == "hook" else None),
         [*end, *program.inputs],
     )
     staged = sorted({s[1] for s in statements(out) if s[0] == "set" and staging(s[1])})

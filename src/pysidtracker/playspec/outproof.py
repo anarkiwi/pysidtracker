@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from . import outorder as O
 from . import smt
-from .emit import declared, normal
+from .emit import declared
 from .ir import Program, V, width
 
 
@@ -120,6 +120,8 @@ class _Checker:
             sets = {t[1] for t in (old, new) if t[0] == "set"}
             post = _changed(post, pre, sets, "wr" in (old[0], new[0]))
             used = _names(*O.stmt_exprs(old), *O.stmt_exprs(new)) | sets
+            for name in used:
+                _ = st.env[name]
             a, b = self.copy(st), self.copy(st)
             self.executor.run([old], a)
             self.executor.run([new], b)
@@ -283,7 +285,7 @@ def prove(
     final = declared(
         O.rewrite(
             O.eliminate(stages["forwarded"], end, end)[0],
-            normal,
+            O.tidy,
             lambda s: [] if s[0] == "hook" else None,
         ),
         [*end, *program.inputs],

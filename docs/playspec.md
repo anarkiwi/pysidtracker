@@ -12,7 +12,7 @@ cells, plus its toolchain:
 | SMT transition relation, bounded checking | `smt.transition`, `smt.bmc` | `bmc SPEC --binding JSON --frames N` |
 | Translation validation against 6502 code | `tv.validate`, `tv.replay` | `tv TUNE --binder ... --routine ... --pc ...` |
 | Replace `native` hooks with spec statements | `unnative`, `equivalent` | `unnative SPEC TUNE --binder ... -o OUT` |
-| Reschedule SID writes into a canonical order | `outorder.reorder`, `outorder.check` | `reorder TUNES... [--order ORDER]` |
+| Reschedule SID writes into a canonical order, emit and prove | `outorder.reorder`, `emit.emit`, `outproof.prove` | `reorder TUNES... [--order ORDER] [--prove MS] [--emit OUT]` |
 
 pysidtracker ships the language and tooling only. Specs of particular players
 belong to their format packages, which bind a spec to a build's layout and run it
@@ -401,8 +401,11 @@ The passes compose by transitivity; each is justified as follows.
 
 `prove` recomputes the passes, checks that they reproduce the result, runs the
 structural checks and discharges every obligation, reporting what stays open (a refuted
-or unknown obligation, with its kind and program point), the time and peak memory. Each
-query is small, so a whole call needs no more memory than its program.
+or unknown obligation, with its kind and program point, or those left when its time
+budget ran out), the time and peak memory. A fact carried unchanged past a statement
+that assigns none of its names and, if it reads memory, stores nothing, needs no query
+(the frame rule); a query's premises are the facts its names reach and the known
+conditions. Each query is small, so a whole call needs no more memory than its program.
 
 ## Proof tooling
 

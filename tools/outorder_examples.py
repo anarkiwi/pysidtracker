@@ -1,13 +1,15 @@
 """Write the emitted specs of a ``pysidtracker playspec reorder --out`` report as examples.
 
 ``python tools/outorder_examples.py REPORT.json TUNES.csv OUTDIR DOC.md``: one
-``OUTDIR/<format>/<build>.play`` per format and build (the ``build`` column of the CSV),
+``OUTDIR/<format>/<spec>[-<build>].play`` per format, spec and build (the CSV's
+``build`` column),
 ``OUTDIR/census.json`` and the census table ``DOC.md``.
 """
 
 import argparse
 import csv
 import json
+import re
 from pathlib import Path
 
 COLUMNS = (
@@ -58,10 +60,12 @@ def main() -> None:
     for tune, entry in sorted(report.items()):
         if entry.get("verdict", "error") is not None or not entry.get("programs"):
             continue
-        key = (entry["format"], builds.get(tune, entry["format"]))
+        first = entry["programs"][0]
+        spec = re.match(r"spec (\w+?)(?:_ordered)?;", first["text"]).group(1)
+        build = builds.get(tune)
+        key = (entry["format"], f"{spec}-{build}" if build and build != spec else spec)
         row = rows.get(key)
         if row is None:
-            first = entry["programs"][0]
             path = out / key[0] / f"{key[1]}.play"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(first["text"])
