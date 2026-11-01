@@ -120,8 +120,54 @@ pub struct Vm {
     calls: Vec<usize>,
 }
 
+/// Where the stores of a build go: `slot` maps an address to `entries` (target or none, mask,
+/// forced bits), and a store into the SID's registers then moves to the `ghost` copy.
+#[derive(Default)]
+pub struct Routes {
+    pub ghost: Option<u16>,
+    slot: Vec<u32>,
+    entries: Vec<(Option<u16>, u8, u8)>,
+}
+
+impl Routes {
+    pub fn new(ghost: Option<u16>, routes: &[(u16, Option<u16>, u8, u8)]) -> Routes {
+        let mut slot = vec![0; if routes.is_empty() { 0 } else { 0x10000 }];
+        let mut entries = Vec::new();
+        for &(from, to, keep, force) in routes {
+            entries.push((to, keep, force));
+            slot[from as usize] = entries.len() as u32;
+        }
+        Routes {
+            ghost,
+            slot,
+            entries,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ghost.is_none() && self.entries.is_empty()
+    }
+
+    /// Where a store of `byte` to `addr` lands, if anywhere.
+    fn apply(&self, mut addr: u16, mut byte: u8) -> Result<Option<(u16, u8)>, Bail> {
+        if let Some(&n) = self.slot.get(addr as usize).filter(|&&n| n != 0) {
+            let (to, keep, force) = self.entries[n as usize - 1];
+            let Some(to) = to else { return Ok(None) };
+            (addr, byte) = (to, byte & keep | force);
+        }
+        if let Some(ghost) = self.ghost {
+            let offset = addr.wrapping_sub(SID_BASE as u16);
+            if (offset as i64) < SID_REGS {
+                addr = ghost.checked_add(offset).ok_or(Bail::Range)?;
+            }
+        }
+        Ok(Some((addr, byte)))
+    }
+}
+
 /// Where a program reads and stores.
 pub struct Env<'a> {
+    pub routes: &'a Routes,
     pub mem: &'a FlatMemory,
     pub io: bool,
     pub overlay: u16,
@@ -603,7 +649,10 @@ fn store(env: &mut Env, addr: i64, value: i64) -> Result<(), Bail> {
     if addr as u64 > 0xFFFF || value as u64 > 0xFF {
         return Err(Bail::Range);
     }
-    let (addr, byte) = (addr as u16, value as u8);
+    let (addr, byte) = match env.routes.apply(addr as u16, value as u8)? {
+        Some(landed) => landed,
+        None => return Ok(()),
+    };
     if addr <= 1 {
         return Err(Bail::Port);
     }
@@ -649,6 +698,7 @@ mod tests {
         let mut hook = Hook::default();
         let r = vm.exec(
             &mut Env {
+                routes: &Routes::default(),
                 mem: &mem,
                 io,
                 overlay: 0,
@@ -674,6 +724,7 @@ mod tests {
         let (mut log, mut sid) = (Vec::new(), Vec::new());
         let mut hook = Hook::default();
         let mut env = Env {
+            routes: &Routes::default(),
             mem: &mem,
             io: false,
             overlay: 0,
@@ -895,6 +946,7 @@ mod tests {
             let flow = vm
                 .exec(
                     &mut Env {
+                        routes: &Routes::default(),
                         mem: &mem,
                         io: false,
                         overlay: 0,
@@ -913,6 +965,51 @@ mod tests {
         assert_eq!(wrote, 1);
         let (flow, _, wrote) = ins(true);
         assert_eq!((flow, wrote), (Flow::Escape, 0));
+    }
+
+    #[test]
+    fn routed_stores_land_where_the_build_plays_them() {
+        let routes = Routes::new(
+            Some(0x3000),
+            &[(0xD401, Some(0xD405), 0x0F, 0x80), (0xD402, None, 0, 0)],
+        );
+        let store = |addr, v| {
+            vec![(Op::Konst, 0), (Op::Konst, v), (Op::Wr, 0), (Op::Halt, 0)]
+                .into_iter()
+                .map(|(op, arg)| Ins {
+                    op,
+                    arg: if op == Op::Konst && arg == 0 {
+                        addr
+                    } else {
+                        arg
+                    },
+                })
+                .collect::<Vec<_>>()
+        };
+        let mem = FlatMemory::new();
+        for (addr, v) in [(0xD401, 0xFF), (0xD402, 5), (0xD404, 7), (0x2000, 9)] {
+            let mut vm = Vm::new(store(addr, v), vec![], vec![], 0, 0).unwrap();
+            let (mut log, mut sid) = (Vec::new(), Vec::new());
+            let mut hook = Hook::default();
+            vm.exec(
+                &mut Env {
+                    routes: &routes,
+                    mem: &mem,
+                    io: false,
+                    overlay: 0,
+                    log: &mut log,
+                    sid: &mut sid,
+                    native: &mut hook,
+                },
+                &[0; REGISTERS],
+            )
+            .unwrap();
+        }
+        assert_eq!(mem.ram(0x3005), 0x8F);
+        assert_eq!((mem.ram(0xD402), mem.ram(0x3002)), (0, 0));
+        assert_eq!(mem.ram(0x3004), 7);
+        assert_eq!(mem.ram(0x2000), 9);
+        assert!(!routes.is_empty() && Routes::default().is_empty());
     }
 
     #[test]
@@ -935,6 +1032,7 @@ mod tests {
         for _ in 0..3 {
             let mut hook = Hook::default();
             let mut env = Env {
+                routes: &Routes::default(),
                 mem: &mem,
                 io: false,
                 overlay: 0,

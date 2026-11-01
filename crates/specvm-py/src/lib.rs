@@ -101,6 +101,17 @@ impl Core {
         self.machine.add(bits, entry, vm).map_err(invalid)
     }
 
+    /// Sets where the stores of a build land: `(from, to or None, mask, forced bits)` and the
+    /// address of the copy of the SID registers a call is given and its stores go to.
+    fn set_routes(&mut self, ghost: Option<u16>, routes: Vec<(u16, Option<u16>, u8, u8)>) {
+        self.machine.set_routes(ghost, &routes);
+    }
+
+    /// The modelled entries the calls of the last frame entered, in order.
+    fn entered(&self) -> Vec<u16> {
+        self.machine.entered.clone()
+    }
+
     /// Sets the CPU: `(pc, sp, a, x, y, p, cycles)`.
     fn set_cpu(&mut self, state: (u16, u8, u8, u8, u8, u8, u64)) {
         let cpu = &mut self.machine.cpu;

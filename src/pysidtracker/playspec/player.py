@@ -43,7 +43,6 @@ HOOKS = (
     "_frame_of",
     "_native",
     "_call",
-    "_instance",
     "_entries",
     "_frame",
     "_frame_python",
@@ -119,6 +118,15 @@ class SpecPlayer(EmuPlayer):
     write of the value it holds included); a write by a ``native`` block or the tune's own code
     is not among them.
 
+    ``entered`` lists the modelled entries the calls of the last frame entered, in order.
+
+    A build that plays the spec's stores elsewhere sets ``routes`` (``{address: (address, and,
+    or)}`` or None to drop the store, from where the spec stores), ``muted`` (``{address: True}``
+    stores $08 there, False drops them) and ``ghost`` (the copy of the SID registers a call is
+    given and its stores to them go to); ``play_after`` is ``(frames, address)``: the play
+    address once that many frames have been played. Set ``routes``/``muted``/``ghost`` through
+    :meth:`reroute`.
+
     A spec call advances no cycles, so with ``cycles_per_frame`` scheduling the
     player plays a call the real routine would have overrun and had dropped, and runs
     one call ahead from there.
@@ -167,6 +175,13 @@ class SpecPlayer(EmuPlayer):
         self._fast = native_module.available() if native is None else native
         self._core = None
         self._core_at = None
+        self.routes: Dict[int, Optional[Tuple[int, int, int]]] = {}
+        self.muted: Dict[int, bool] = {}
+        self.ghost: Optional[int] = None
+        self.play_after: Optional[Tuple[int, int]] = None
+        self.entered: List[int] = []
+        self._frames = 0
+        self._routed = None
         self._registered: set = set()
         self._bails = 0
         self._played = 0
@@ -321,6 +336,11 @@ class SpecPlayer(EmuPlayer):
     def _run(self, entry: int) -> bool:
         """Run the spec at ``entry``; True if native code left it and the CPU finished the call."""
         mpu = self._mpu
+        self.entered.append(entry)
+        if self.ghost is not None:
+            self._mem[SID_BASE : SID_BASE + SID_REGS] = self._mem[
+                self.ghost : self.ghost + SID_REGS
+            ]
         self._native_state = {"base": mpu.sp if self._in_call else None, "saved": None}
         try:
             self._frame_of(entry)
@@ -356,6 +376,18 @@ class SpecPlayer(EmuPlayer):
 
     def _store(self, addr: int, value: int) -> None:
         """A spec store: RAM (the SID band included), and the bank port on the bus."""
+        if self._routing:
+            if addr in self.muted:
+                if not self.muted[addr]:
+                    return
+                value = 0x08
+            route = self.routes.get(addr, (addr, 0xFF, 0))
+            if route is None:
+                return
+            addr, keep, force = route
+            value = value & keep | force
+            if self.ghost is not None and 0 <= addr - SID_BASE < SID_REGS:
+                addr += self.ghost - SID_BASE
         if SID_BASE <= addr < SID_BASE + SID_REGS:
             self.writes.append((addr - SID_BASE, value & 0xFF))
         if self._hosted is not None:
@@ -368,6 +400,33 @@ class SpecPlayer(EmuPlayer):
         self._mem[addr] = value
         if addr <= 1:
             self._bus[addr] = value
+
+    @property
+    def _routing(self) -> bool:
+        return bool(self.routes or self.muted or self.ghost is not None)
+
+    def reroute(self, routes=None, muted=None, ghost=None) -> None:
+        """Set where the spec's stores land (see the class); the native core is told at the
+        next frame."""
+        self.routes, self.muted, self.ghost = (
+            dict(routes or {}),
+            dict(muted or {}),
+            ghost,
+        )
+        self._routed = None
+
+    def _route_table(self) -> list:
+        """``(from, to or None, and, or)`` for each address ``routes`` and ``muted`` name."""
+        table = []
+        for addr in {*self.routes, *self.muted}:
+            if addr in self.muted and not self.muted[addr]:
+                table.append((addr, None, 0, 0))
+                continue
+            to, keep, force = self.routes.get(addr, (addr, 0xFF, 0)) or (None, 0, 0)
+            if to is not None and addr in self.muted:
+                keep, force = 0, 0x08 & keep | force
+            table.append((addr, to, keep, force))
+        return table
 
     def snapshot(self) -> List[int]:
         if self._hosted is None:
@@ -394,7 +453,7 @@ class SpecPlayer(EmuPlayer):
         self._frame_python()
 
     def _frame_python(self) -> None:
-        self.writes = []
+        self.writes, self.entered = [], []
         if self._hosted is not None:
             self._hosted.play_frame()
             self._require_entry()
@@ -403,6 +462,13 @@ class SpecPlayer(EmuPlayer):
             self._run(self.entry)
         else:
             self._call(self._play_addr)
+        self._tick(1)
+
+    def _tick(self, frames: int) -> None:
+        """Count ``frames`` played, and switch the play address when ``play_after`` says."""
+        self._frames += frames
+        if self.play_after and self._frames >= self.play_after[0]:
+            self._play_addr, self.play_after = self.play_after[1], None
 
     def _bank_pages(self, bits: int) -> tuple:
         """``(io, ROM pages)`` of the memory map under CPU port setting ``bits``."""
@@ -431,8 +497,11 @@ class SpecPlayer(EmuPlayer):
             self._core = native_module.Core(
                 self._mem, self._play_addr, self.entry, self._max_cycles
             )
-            self._registered = set()
+            self._registered, self._routed = set(), None
         core = self._core
+        if self._routed is None:
+            core.set_routes(self.ghost, self._route_table())
+            self._routed = True
         try:
             for bits, entries in list(self._entry_sets.items()):
                 if bits not in self._registered:
@@ -474,6 +543,7 @@ class SpecPlayer(EmuPlayer):
             and not self._record
             and self.entry is not None
             and getattr(self._mpu, "native", False)
+            and self._bus is getattr(self._obs, "_subject", None)
             and self._unhooked()
         )
 
@@ -495,9 +565,12 @@ class SpecPlayer(EmuPlayer):
             for (bits, entry), (_p, _f, state) in self._compiled.items():
                 if state:
                     core.set_controls(bits, entry, state)
+            limit = frames - done
+            if self.play_after:
+                limit = min(limit, max(self.play_after[0] - self._frames, 1))
             played, status, _why = core.run(
-                frames - done,
-                out if out is not None else bytearray(25 * (frames - done)),
+                limit,
+                out if out is not None else bytearray(25 * limit),
                 done if out is not None else 0,
             )
             mpu.pc, mpu.sp, mpu.a, mpu.x, mpu.y, mpu.p, mpu.processorCycles = core.cpu()
@@ -507,10 +580,13 @@ class SpecPlayer(EmuPlayer):
             self._remap()
             done += played
             self._played += played
+            self._tick(played)
+            if played:
+                self.writes, self.entered = core.writes(), core.entered()
             if status == 0:
-                if played:
-                    self.writes = core.writes()
-                break
+                if done == frames:
+                    break
+                continue
             if status == 2:
                 self._bails += 1
                 self._fast = (

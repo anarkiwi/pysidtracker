@@ -625,3 +625,70 @@ def test_the_play_address_may_change_between_frames():
         rows.append(grid + each.render_grid(whole_song(10)))
     assert rows[0] == rows[1]
     assert cpu_state(fast) == cpu_state(python)
+
+
+def test_the_entries_of_the_last_frames_calls_are_recorded():
+    image, labels = tune("wrapped")
+    python, fast = player("wrapped", False), player("wrapped", True)
+    fast.render_grid(whole_song(5))
+    python.render_grid(whole_song(5))
+    assert fast.entered == python.entered == [labels["play"]]
+    fast.play_frame()
+    assert (
+        fast.entered == [labels["play"]] and fast._played == 6
+    )  # pylint: disable=protected-access
+
+
+ROUTINGS = {
+    "routes": dict(
+        routes={0xD400: (0xD410, 0x7F, 0x80), 0xD401: None}, muted={0xD404: True}
+    ),
+    "unmuted": dict(routes={0xD400: (0xD402, 0xFF, 0)}, muted={0xD404: False}),
+    "ghost": dict(ghost=0x3000, routes={0xD401: (0xD400, 0x0F, 0x20)}),
+}
+
+
+@pytest.mark.parametrize("routing", sorted(ROUTINGS))
+def test_stores_routed_to_another_register_land_there_natively(routing):
+    python, fast = player("wrapped", False), player("wrapped", True)
+    for each in (python, fast):
+        each.reroute(**ROUTINGS[routing])
+    assert fast.render_grid(whole_song(40)) == python.render_grid(whole_song(40))
+    assert fast.memory == python.memory and fast.writes == python.writes
+    assert fast._played >= 39  # pylint: disable=protected-access
+    fast.reroute()
+    python.reroute()
+    assert fast.render_grid(whole_song(5)) == python.render_grid(whole_song(5))
+
+
+def test_the_play_address_switches_after_the_frames_it_names():
+    python, fast = player("wrapped", False), player("wrapped", True)
+    play = tune("wrapped")[1]["play"]
+    for each in (python, fast):
+        each.play_after = (7, play)
+    assert fast.render_grid(whole_song(20)) == python.render_grid(whole_song(20))
+    assert (
+        fast.play_after is None and fast._play_addr == play
+    )  # pylint: disable=protected-access
+    assert cpu_state(fast) == cpu_state(python)
+    assert fast._played >= 19  # pylint: disable=protected-access
+
+
+def test_a_bus_that_is_not_the_machines_is_played_in_python():
+    fast = player("wrapped", True)
+
+    class Proxy:
+        """The bus, seen through another object."""
+
+        def __init__(self, bus):
+            self._bus = bus
+
+        def __getitem__(self, addr):
+            return self._bus[addr]
+
+        def __getattr__(self, name):
+            return getattr(self._bus, name)
+
+    fast._bus = Proxy(fast._bus)  # pylint: disable=protected-access
+    fast.render_grid(whole_song(5))
+    assert fast._played == 0  # pylint: disable=protected-access
