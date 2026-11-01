@@ -407,6 +407,14 @@ that assigns none of its names and, if it reads memory, stores nothing, needs no
 (the frame rule); a query's premises are the facts its names reach and the known
 conditions. Each query is small, so a whole call needs no more memory than its program.
 
+Each query runs on a fresh solver through a simplifying tactic: a solver kept across
+queries slows with every query it answers. The z3 term of a pure expression is built
+once per memory and the values of the variables it reads, and the free symbols, ranges
+and fixed bytes once per pass. Obligations are independent, so `--proof-jobs N` (or
+`prove(jobs=N)`) discharges contiguous blocks of them in `N` worker processes, each with
+its own z3 context; `tools/proofprofile.py` splits a proof's time between term
+construction and `check`, and `tools/proofbench.py` times whole tunes.
+
 ## Proof tooling
 
 - **Transition relation (`smt.transition`).** The IR executes over z3: memory is
