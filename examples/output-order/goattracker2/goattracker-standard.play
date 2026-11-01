@@ -146,12 +146,6 @@ cell wave1: u8[256] @ 0x1490 ro;
 
 machine goattracker_ordered {
   step {
-    let out_v0_ad: u8 = 0;
-    let out_v0_sr: u8 = 0;
-    let out_v1_ad: u8 = 0;
-    let out_v1_sr: u8 = 0;
-    let out_v2_ad: u8 = 0;
-    let out_v2_sr: u8 = 0;
     let start: bool = false;
     let ka: u8 = 0;
     let ky: u8 = 0;
@@ -211,19 +205,25 @@ machine goattracker_ordered {
       filter0_fstep := 0;
       initsongnum := 0xff;
     }
+    let t: u8 = 0;
+    let t_2: u8 = 0;
+    let t_3: u8 = 0;
     if start {
       mem[0x1397] := 0xb;
       chan0_counter := 1;
       chan0_instr := 1;
-      sid[V0_CTRL] := (chan0_wave & chan0_gate);
+      t_3 := (chan0_wave & chan0_gate);
+      sid[V0_CTRL] := t_3;
       mem[0x139e] := 0xb;
       chan1_counter := 1;
       chan1_instr := 1;
-      sid[V1_CTRL] := (chan1_wave & chan1_gate);
+      t := (chan1_wave & chan1_gate);
+      sid[V1_CTRL] := t;
       mem[0x13a5] := 0xb;
       chan2_counter := 1;
       chan2_instr := 1;
-      sid[V2_CTRL] := (chan2_wave & chan2_gate);
+      t_2 := (chan2_wave & chan2_gate);
+      sid[V2_CTRL] := t_2;
     } else {
       let y: u8 = filter0_fstep;
       if (filter0_fstep != 0) {
@@ -262,6 +262,8 @@ machine goattracker_ordered {
       let cond_2: bool = false;
       let cond_3: bool = false;
       let k: u8 = 0;
+      let t_4: u8 = 0;
+      let t_5: u8 = 0;
       if (chan0_counter == 0) {
         let j: u8 = tick0tbl[chan0_newfx];
         tick0jump1 := j;
@@ -307,8 +309,8 @@ machine goattracker_ordered {
               filter0_ftime := 0;
             }
             chan0_waveptr := i_wave[chan0_instr];
-            out_v0_sr := i_sr[chan0_instr];
-            out_v0_ad := i_ad[chan0_instr];
+            t_5 := i_sr[chan0_instr];
+            t_4 := i_ad[chan0_instr];
             k := 1;
             kn := 9;
           }
@@ -603,6 +605,13 @@ machine goattracker_ordered {
         }
         k := ite(fetch, 8, 9);
       }
+      let cond_13: bool = (k == 8);
+      let cond_14: bool = false;
+      let cond_15: bool = false;
+      let cond_16: bool = false;
+      let cond_17: bool = false;
+      let cond_18: bool = false;
+      let cond_19: bool = false;
       if (k == 8) {
         let ret_getnewnote: bool = false;
         k := 9;
@@ -617,14 +626,15 @@ machine goattracker_ordered {
           row_pos := (chan0_pattptr + 1);
           a_6 := mem[(row_base + u16((row_pos + 0)))];
         } elif (0xc0 <= a_6) {
-          let cond_13: bool = (chan0_packedrest == 0);
-          chan0_packedrest := (ite(cond_13, a_6, chan0_packedrest) + 1);
+          let cond_20: bool = (chan0_packedrest == 0);
+          chan0_packedrest := (ite(cond_20, a_6, chan0_packedrest) + 1);
           if (chan0_packedrest == 0) {
             row_pos := (chan0_pattptr + 1);
             chan0_pattptr := ite((mem[(row_base + u16((row_pos + 0)))] == 0), 0, row_pos);
           }
           ret_getnewnote := true;
         }
+        cond_19 := !ret_getnewnote;
         if !ret_getnewnote {
           if (a_6 < 0x60) {
             chan0_newfx := (a_6 & 0xf);
@@ -641,102 +651,80 @@ machine goattracker_ordered {
               a_6 := mem[(row_base + u16((row_pos + 0)))];
             }
           }
+          cond_18 := !ret_getnewnote;
           if !ret_getnewnote {
+            cond_17 := (a_6 == 0xbd);
             if (a_6 == 0xbd) {
-              if ite(cond, ite(cond_3, false, !cond_2), false) {
-                sid[V0_AD] := out_v0_ad;
-              }
-              if ite(cond, ite(cond_3, false, !cond_2), false) {
-                sid[V0_SR] := out_v0_sr;
-              }
-              row_pos := (row_pos + 1);
-              chan0_pattptr := ite((mem[(row_base + u16((row_pos + 0)))] == 0), 0, row_pos);
-            } elif (0xbd < a_6) {
-              if ite(cond, ite(cond_3, false, !cond_2), false) {
-                sid[V0_AD] := out_v0_ad;
-              }
-              if ite(cond, ite(cond_3, false, !cond_2), false) {
-                sid[V0_SR] := out_v0_sr;
-              }
-              chan0_gate := (a_6 | 0xf0);
               row_pos := (row_pos + 1);
               chan0_pattptr := ite((mem[(row_base + u16((row_pos + 0)))] == 0), 0, row_pos);
             } else {
-              chan0_newnote := a_6;
-              if (chan0_newfx == 3) {
-                if ite(cond, ite(cond_3, false, !cond_2), false) {
-                  sid[V0_AD] := out_v0_ad;
-                }
-                if ite(cond, ite(cond_3, false, !cond_2), false) {
-                  sid[V0_SR] := out_v0_sr;
-                }
+              cond_16 := (0xbd < a_6);
+              if (0xbd < a_6) {
+                chan0_gate := (a_6 | 0xf0);
                 row_pos := (row_pos + 1);
                 chan0_pattptr := ite((mem[(row_base + u16((row_pos + 0)))] == 0), 0, row_pos);
               } else {
-                if (5 <= chan0_instr) {
-                  if (6 <= chan0_instr) {
-                    row_pos := (row_pos + 1);
-                    chan0_pattptr := ite((mem[(row_base + u16((row_pos + 0)))] == 0), 0, row_pos);
-                    ret_getnewnote := true;
-                  } else {
-                    chan0_gate := 0xfe;
-                    row_pos := (row_pos + 1);
-                    chan0_pattptr := ite((mem[(row_base + u16((row_pos + 0)))] == 0), 0, row_pos);
-                    ret_getnewnote := true;
-                  }
-                }
-                if !ret_getnewnote {
-                  sid[V0_AD] := 0xf;
-                  sid[V0_SR] := 0;
-                  chan0_gate := 0xfe;
+                chan0_newnote := a_6;
+                cond_15 := (chan0_newfx == 3);
+                if (chan0_newfx == 3) {
                   row_pos := (row_pos + 1);
                   chan0_pattptr := ite((mem[(row_base + u16((row_pos + 0)))] == 0), 0, row_pos);
                 } else {
-                  if ite(cond, ite(cond_3, false, !cond_2), false) {
-                    sid[V0_AD] := out_v0_ad;
+                  if (5 <= chan0_instr) {
+                    if (6 <= chan0_instr) {
+                      row_pos := (row_pos + 1);
+                      chan0_pattptr := ite((mem[(row_base + u16((row_pos + 0)))] == 0), 0, row_pos);
+                      ret_getnewnote := true;
+                    } else {
+                      chan0_gate := 0xfe;
+                      row_pos := (row_pos + 1);
+                      chan0_pattptr := ite((mem[(row_base + u16((row_pos + 0)))] == 0), 0, row_pos);
+                      ret_getnewnote := true;
+                    }
                   }
-                  if ite(cond, ite(cond_3, false, !cond_2), false) {
-                    sid[V0_SR] := out_v0_sr;
+                  cond_14 := !ret_getnewnote;
+                  if !ret_getnewnote {
+                    t_5 := 0;
+                    t_4 := 0xf;
+                    chan0_gate := 0xfe;
+                    row_pos := (row_pos + 1);
+                    chan0_pattptr := ite((mem[(row_base + u16((row_pos + 0)))] == 0), 0, row_pos);
                   }
                 }
               }
             }
-          } else {
-            if ite(cond, ite(cond_3, false, !cond_2), false) {
-              sid[V0_AD] := out_v0_ad;
-            }
-            if ite(cond, ite(cond_3, false, !cond_2), false) {
-              sid[V0_SR] := out_v0_sr;
-            }
-          }
-        } else {
-          if ite(cond, ite(cond_3, false, !cond_2), false) {
-            sid[V0_AD] := out_v0_ad;
-          }
-          if ite(cond, ite(cond_3, false, !cond_2), false) {
-            sid[V0_SR] := out_v0_sr;
           }
         }
+      }
+      let cond_21: bool = (k == 9);
+      let cond_22: bool = false;
+      if (k == 9) {
+        t_3 := (chan0_wave & chan0_gate);
       } else {
-        if ite(cond, ite(cond_3, false, !cond_2), false) {
-          sid[V0_AD] := ite(cond, ite(cond_3, 0, ite(cond_2, 0, i_ad[chan0_instr])), 0);
-        }
-        if ite(cond, ite(cond_3, false, !cond_2), false) {
-          sid[V0_SR] := ite(cond, ite(cond_3, 0, ite(cond_2, 0, i_sr[chan0_instr])), 0);
+        cond_22 := (k == 0xa);
+        if (k == 0xa) {
+          t_3 := (chan0_wave & chan0_gate);
         }
       }
-      let cond_14: bool = (k == 9);
-      let cond_15: bool = false;
-      if !(k == 9) {
-        cond_15 := (k == 0xa);
+      if ite(cond_21, ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_16, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_15, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_14, true, ite(cond, ite(cond_3, false, !cond_2), false))))), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond_22, ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_16, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_15, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_14, true, ite(cond, ite(cond_3, false, !cond_2), false))))), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)), false)) {
+        sid[V0_SR] := ite(cond_21, ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0), ite(cond_16, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0), ite(cond_15, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0), ite(cond_14, 0, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0))))), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0)), ite(cond_22, ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0), ite(cond_16, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0), ite(cond_15, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0), ite(cond_14, 0, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0))))), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0)), 0));
       }
-      if ite(cond_14, true, cond_15) {
-        sid[V0_CTRL] := ite(cond_14, (chan0_wave & chan0_gate), ite(cond_15, (chan0_wave & chan0_gate), 0));
+      if ite(cond_21, ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_16, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_15, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_14, true, ite(cond, ite(cond_3, false, !cond_2), false))))), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond_22, ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_16, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_15, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_14, true, ite(cond, ite(cond_3, false, !cond_2), false))))), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)), false)) {
+        sid[V0_AD] := ite(cond_21, ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0), ite(cond_16, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0), ite(cond_15, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0), ite(cond_14, 0xf, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0))))), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0)), ite(cond_22, ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0), ite(cond_16, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0), ite(cond_15, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0), ite(cond_14, 0xf, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0))))), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0)), 0));
       }
-      if cond_14 {
+      if ite(cond_21, true, cond_22) {
+        sid[V0_CTRL] := ite(cond_21, t_3, ite(cond_22, t_3, 0));
+      }
+      if ite(cond_21, false, ite(cond_22, false, ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_16, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_15, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_14, true, ite(cond, ite(cond_3, false, !cond_2), false))))), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)))) {
+        sid[V0_SR] := ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0), ite(cond_16, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0), ite(cond_15, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0), ite(cond_14, 0, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0))))), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_5)), 0));
+      }
+      if ite(cond_21, false, ite(cond_22, false, ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_16, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_15, ite(cond, ite(cond_3, false, !cond_2), false), ite(cond_14, true, ite(cond, ite(cond_3, false, !cond_2), false))))), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)), ite(cond, ite(cond_3, false, !cond_2), false)))) {
+        sid[V0_AD] := ite(cond_13, ite(cond_19, ite(cond_18, ite(cond_17, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0), ite(cond_16, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0), ite(cond_15, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0), ite(cond_14, 0xf, ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0))))), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0)), ite(cond, ite(cond_3, 0, ite(cond_2, 0, t_4)), 0));
+      }
+      if cond_21 {
         sid[V0_FREQ_LO] := chan0_freqlo;
       }
-      if cond_14 {
+      if cond_21 {
         sid[V0_FREQ_HI] := chan0_freqhi;
       }
       if ite(cond_7, ite(cond_12, ite(cond_11, false, ite(cond_10, true, ite(cond_9, cond_8, false))), false), false) {
@@ -746,10 +734,12 @@ machine goattracker_ordered {
         sid[V0_PW_HI] := ite(cond_7, ite(cond_12, ite(cond_11, 0, ite(cond_10, chan0_pulsehi, ite(cond_9, ite(cond_8, chan0_pulsehi, 0), 0))), 0), 0);
       }
       chan1_counter := (chan1_counter - 1);
-      let cond_16: bool = (chan1_counter == 0);
-      let cond_17: bool = false;
-      let cond_18: bool = false;
+      let cond_23: bool = (chan1_counter == 0);
+      let cond_24: bool = false;
+      let cond_25: bool = false;
       let k_2: u8 = 0;
+      let t_6: u8 = 0;
+      let t_7: u8 = 0;
       if (chan1_counter == 0) {
         let j_3: u8 = tick0tbl[chan1_newfx];
         tick0jump1 := j_3;
@@ -771,7 +761,7 @@ machine goattracker_ordered {
         }
         ky_2 := chan1_instr;
         chan1_gatetimer := i_gate[chan1_instr];
-        cond_18 := (chan1_newnote == 0);
+        cond_25 := (chan1_newnote == 0);
         if (chan1_newnote == 0) {
           k_2 := 1;
           kn_2 := 2;
@@ -779,7 +769,7 @@ machine goattracker_ordered {
           chan1_note := (chan1_newnote - 0x60);
           chan1_fx := 0;
           chan1_newnote := 0;
-          cond_17 := (chan1_newfx == 3);
+          cond_24 := (chan1_newfx == 3);
           if (chan1_newfx == 3) {
             k_2 := 1;
             kn_2 := 2;
@@ -795,8 +785,8 @@ machine goattracker_ordered {
               filter0_ftime := 0;
             }
             chan1_waveptr := i_wave[chan1_instr];
-            out_v1_sr := i_sr[chan1_instr];
-            out_v1_ad := i_ad[chan1_instr];
+            t_7 := i_sr[chan1_instr];
+            t_6 := i_ad[chan1_instr];
             k_2 := 1;
             kn_2 := 9;
           }
@@ -834,16 +824,16 @@ machine goattracker_ordered {
         k_2 := 4;
         if !(chan1_waveptr == 0) {
           let a_8: u8 = wave1[chan1_waveptr];
-          let cond_19: bool = (a_8 < 0x10);
+          let cond_26: bool = (a_8 < 0x10);
           let a_9: u8 = 0;
-          let cond_20: bool = false;
-          let cond_21: bool = false;
+          let cond_27: bool = false;
+          let cond_28: bool = false;
           if (a_8 < 0x10) {
-            cond_21 := (a_8 != chan1_wavetime);
+            cond_28 := (a_8 != chan1_wavetime);
             if (a_8 != chan1_wavetime) {
               let c_5: bool = (chan1_wavetime <= a_8);
               chan1_wavetime := (chan1_wavetime + 1);
-              cond_20 := (chan1_wavetime != 0);
+              cond_27 := (chan1_wavetime != 0);
               if !(chan1_wavetime != 0) {
                 a_9 := ((a_8 - 0x10) - ite(c_5, 0, 1));
                 chan1_wave := a_9;
@@ -853,7 +843,7 @@ machine goattracker_ordered {
             a_9 := (a_8 - 0x10);
             chan1_wave := a_9;
           }
-          if !ite(cond_19, ite(cond_21, cond_20, false), false) {
+          if !ite(cond_26, ite(cond_28, cond_27, false), false) {
             let y_5: u8 = (chan1_waveptr + 1);
             chan1_waveptr := ite((wave0[chan1_waveptr] == 0xff), note1[y_5], y_5);
             chan1_wavetime := 0;
@@ -1040,25 +1030,25 @@ machine goattracker_ordered {
         chan1_freqhi := fhi[kn_2];
         k_2 := 7;
       }
-      let cond_22: bool = (k_2 == 7);
-      let cond_23: bool = false;
-      let cond_24: bool = false;
-      let cond_25: bool = false;
-      let cond_26: bool = false;
-      let cond_27: bool = false;
+      let cond_29: bool = (k_2 == 7);
+      let cond_30: bool = false;
+      let cond_31: bool = false;
+      let cond_32: bool = false;
+      let cond_33: bool = false;
+      let cond_34: bool = false;
       if (k_2 == 7) {
         let fetch_2: bool = (chan1_counter == chan1_gatetimer);
-        cond_27 := !fetch_2;
+        cond_34 := !fetch_2;
         if !fetch_2 {
           let y_6: u8 = chan1_pulseptr;
-          cond_26 := ((chan1_pulseptr == 0) || ((chan1_counter == 0) && (chan1_pattptr == 0)));
+          cond_33 := ((chan1_pulseptr == 0) || ((chan1_counter == 0) && (chan1_pattptr == 0)));
           if !((chan1_pulseptr == 0) || ((chan1_counter == 0) && (chan1_pattptr == 0))) {
-            cond_24 := (chan1_pulsetime == 0);
+            cond_31 := (chan1_pulsetime == 0);
             let y_7: u8 = 0;
             let jump_3: bool = false;
             if (chan1_pulsetime == 0) {
               let a_11: u8 = ptime1[chan1_pulseptr];
-              cond_23 := ((a_11 & 0x80) != 0);
+              cond_30 := ((a_11 & 0x80) != 0);
               if ((a_11 & 0x80) != 0) {
                 chan1_pulsehi := a_11;
                 chan1_pulselo := pspd1[chan1_pulseptr];
@@ -1069,8 +1059,8 @@ machine goattracker_ordered {
                 chan1_pulsetime := a_11;
               }
             }
-            cond_25 := !ite(cond_24, cond_23, false);
-            if !ite(cond_24, cond_23, false) {
+            cond_32 := !ite(cond_31, cond_30, false);
+            if !ite(cond_31, cond_30, false) {
               let s_2: u8 = pspd1[y_6];
               let lo_9: u8 = chan1_pulselo;
               if ((s_2 & 0x80) != 0) {
@@ -1091,6 +1081,13 @@ machine goattracker_ordered {
         }
         k_2 := ite(fetch_2, 8, 9);
       }
+      let cond_35: bool = (k_2 == 8);
+      let cond_36: bool = false;
+      let cond_37: bool = false;
+      let cond_38: bool = false;
+      let cond_39: bool = false;
+      let cond_40: bool = false;
+      let cond_41: bool = false;
       if (k_2 == 8) {
         let ret_getnewnote_2: bool = false;
         k_2 := 9;
@@ -1105,14 +1102,15 @@ machine goattracker_ordered {
           row_pos_2 := (chan1_pattptr + 1);
           a_12 := mem[(row_base_2 + u16((row_pos_2 + 0)))];
         } elif (0xc0 <= a_12) {
-          let cond_28: bool = (chan1_packedrest == 0);
-          chan1_packedrest := (ite(cond_28, a_12, chan1_packedrest) + 1);
+          let cond_42: bool = (chan1_packedrest == 0);
+          chan1_packedrest := (ite(cond_42, a_12, chan1_packedrest) + 1);
           if (chan1_packedrest == 0) {
             row_pos_2 := (chan1_pattptr + 1);
             chan1_pattptr := ite((mem[(row_base_2 + u16((row_pos_2 + 0)))] == 0), 0, row_pos_2);
           }
           ret_getnewnote_2 := true;
         }
+        cond_41 := !ret_getnewnote_2;
         if !ret_getnewnote_2 {
           if (a_12 < 0x60) {
             chan1_newfx := (a_12 & 0xf);
@@ -1129,115 +1127,95 @@ machine goattracker_ordered {
               a_12 := mem[(row_base_2 + u16((row_pos_2 + 0)))];
             }
           }
+          cond_40 := !ret_getnewnote_2;
           if !ret_getnewnote_2 {
+            cond_39 := (a_12 == 0xbd);
             if (a_12 == 0xbd) {
-              if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-                sid[V1_AD] := out_v1_ad;
-              }
-              if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-                sid[V1_SR] := out_v1_sr;
-              }
-              row_pos_2 := (row_pos_2 + 1);
-              chan1_pattptr := ite((mem[(row_base_2 + u16((row_pos_2 + 0)))] == 0), 0, row_pos_2);
-            } elif (0xbd < a_12) {
-              if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-                sid[V1_AD] := out_v1_ad;
-              }
-              if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-                sid[V1_SR] := out_v1_sr;
-              }
-              chan1_gate := (a_12 | 0xf0);
               row_pos_2 := (row_pos_2 + 1);
               chan1_pattptr := ite((mem[(row_base_2 + u16((row_pos_2 + 0)))] == 0), 0, row_pos_2);
             } else {
-              chan1_newnote := a_12;
-              if (chan1_newfx == 3) {
-                if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-                  sid[V1_AD] := out_v1_ad;
-                }
-                if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-                  sid[V1_SR] := out_v1_sr;
-                }
+              cond_38 := (0xbd < a_12);
+              if (0xbd < a_12) {
+                chan1_gate := (a_12 | 0xf0);
                 row_pos_2 := (row_pos_2 + 1);
                 chan1_pattptr := ite((mem[(row_base_2 + u16((row_pos_2 + 0)))] == 0), 0, row_pos_2);
               } else {
-                if (5 <= chan1_instr) {
-                  if (6 <= chan1_instr) {
-                    row_pos_2 := (row_pos_2 + 1);
-                    chan1_pattptr := ite((mem[(row_base_2 + u16((row_pos_2 + 0)))] == 0), 0, row_pos_2);
-                    ret_getnewnote_2 := true;
-                  } else {
-                    chan1_gate := 0xfe;
-                    row_pos_2 := (row_pos_2 + 1);
-                    chan1_pattptr := ite((mem[(row_base_2 + u16((row_pos_2 + 0)))] == 0), 0, row_pos_2);
-                    ret_getnewnote_2 := true;
-                  }
-                }
-                if !ret_getnewnote_2 {
-                  sid[V1_AD] := 0xf;
-                  sid[V1_SR] := 0;
-                  chan1_gate := 0xfe;
+                chan1_newnote := a_12;
+                cond_37 := (chan1_newfx == 3);
+                if (chan1_newfx == 3) {
                   row_pos_2 := (row_pos_2 + 1);
                   chan1_pattptr := ite((mem[(row_base_2 + u16((row_pos_2 + 0)))] == 0), 0, row_pos_2);
                 } else {
-                  if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-                    sid[V1_AD] := out_v1_ad;
+                  if (5 <= chan1_instr) {
+                    if (6 <= chan1_instr) {
+                      row_pos_2 := (row_pos_2 + 1);
+                      chan1_pattptr := ite((mem[(row_base_2 + u16((row_pos_2 + 0)))] == 0), 0, row_pos_2);
+                      ret_getnewnote_2 := true;
+                    } else {
+                      chan1_gate := 0xfe;
+                      row_pos_2 := (row_pos_2 + 1);
+                      chan1_pattptr := ite((mem[(row_base_2 + u16((row_pos_2 + 0)))] == 0), 0, row_pos_2);
+                      ret_getnewnote_2 := true;
+                    }
                   }
-                  if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-                    sid[V1_SR] := out_v1_sr;
+                  cond_36 := !ret_getnewnote_2;
+                  if !ret_getnewnote_2 {
+                    t_7 := 0;
+                    t_6 := 0xf;
+                    chan1_gate := 0xfe;
+                    row_pos_2 := (row_pos_2 + 1);
+                    chan1_pattptr := ite((mem[(row_base_2 + u16((row_pos_2 + 0)))] == 0), 0, row_pos_2);
                   }
                 }
               }
             }
-          } else {
-            if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-              sid[V1_AD] := out_v1_ad;
-            }
-            if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-              sid[V1_SR] := out_v1_sr;
-            }
-          }
-        } else {
-          if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-            sid[V1_AD] := out_v1_ad;
-          }
-          if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-            sid[V1_SR] := out_v1_sr;
           }
         }
+      }
+      let cond_43: bool = (k_2 == 9);
+      let cond_44: bool = false;
+      if (k_2 == 9) {
+        t := (chan1_wave & chan1_gate);
       } else {
-        if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-          sid[V1_AD] := ite(cond_16, ite(cond_18, 0, ite(cond_17, 0, i_ad[chan1_instr])), 0);
-        }
-        if ite(cond_16, ite(cond_18, false, !cond_17), false) {
-          sid[V1_SR] := ite(cond_16, ite(cond_18, 0, ite(cond_17, 0, i_sr[chan1_instr])), 0);
+        cond_44 := (k_2 == 0xa);
+        if (k_2 == 0xa) {
+          t := (chan1_wave & chan1_gate);
         }
       }
-      let cond_29: bool = (k_2 == 9);
-      let cond_30: bool = false;
-      if !(k_2 == 9) {
-        cond_30 := (k_2 == 0xa);
+      if ite(cond_43, ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_38, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_37, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_36, true, ite(cond_23, ite(cond_25, false, !cond_24), false))))), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_44, ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_38, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_37, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_36, true, ite(cond_23, ite(cond_25, false, !cond_24), false))))), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)), false)) {
+        sid[V1_SR] := ite(cond_43, ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0), ite(cond_38, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0), ite(cond_37, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0), ite(cond_36, 0, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0))))), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0)), ite(cond_44, ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0), ite(cond_38, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0), ite(cond_37, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0), ite(cond_36, 0, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0))))), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0)), 0));
       }
-      if ite(cond_29, true, cond_30) {
-        sid[V1_CTRL] := ite(cond_29, (chan1_wave & chan1_gate), ite(cond_30, (chan1_wave & chan1_gate), 0));
+      if ite(cond_43, ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_38, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_37, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_36, true, ite(cond_23, ite(cond_25, false, !cond_24), false))))), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_44, ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_38, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_37, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_36, true, ite(cond_23, ite(cond_25, false, !cond_24), false))))), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)), false)) {
+        sid[V1_AD] := ite(cond_43, ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0), ite(cond_38, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0), ite(cond_37, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0), ite(cond_36, 0xf, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0))))), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0)), ite(cond_44, ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0), ite(cond_38, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0), ite(cond_37, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0), ite(cond_36, 0xf, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0))))), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0)), 0));
       }
-      if cond_29 {
+      if ite(cond_43, true, cond_44) {
+        sid[V1_CTRL] := ite(cond_43, t, ite(cond_44, t, 0));
+      }
+      if ite(cond_43, false, ite(cond_44, false, ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_38, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_37, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_36, true, ite(cond_23, ite(cond_25, false, !cond_24), false))))), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)))) {
+        sid[V1_SR] := ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0), ite(cond_38, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0), ite(cond_37, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0), ite(cond_36, 0, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0))))), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_7)), 0));
+      }
+      if ite(cond_43, false, ite(cond_44, false, ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_38, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_37, ite(cond_23, ite(cond_25, false, !cond_24), false), ite(cond_36, true, ite(cond_23, ite(cond_25, false, !cond_24), false))))), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)), ite(cond_23, ite(cond_25, false, !cond_24), false)))) {
+        sid[V1_AD] := ite(cond_35, ite(cond_41, ite(cond_40, ite(cond_39, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0), ite(cond_38, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0), ite(cond_37, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0), ite(cond_36, 0xf, ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0))))), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0)), ite(cond_23, ite(cond_25, 0, ite(cond_24, 0, t_6)), 0));
+      }
+      if cond_43 {
         sid[V1_FREQ_LO] := chan1_freqlo;
       }
-      if cond_29 {
+      if cond_43 {
         sid[V1_FREQ_HI] := chan1_freqhi;
       }
-      if ite(cond_22, ite(cond_27, ite(cond_26, false, ite(cond_25, true, ite(cond_24, cond_23, false))), false), false) {
-        sid[V1_PW_LO] := ite(cond_22, ite(cond_27, ite(cond_26, 0, ite(cond_25, chan1_pulselo, ite(cond_24, ite(cond_23, chan1_pulselo, 0), 0))), 0), 0);
+      if ite(cond_29, ite(cond_34, ite(cond_33, false, ite(cond_32, true, ite(cond_31, cond_30, false))), false), false) {
+        sid[V1_PW_LO] := ite(cond_29, ite(cond_34, ite(cond_33, 0, ite(cond_32, chan1_pulselo, ite(cond_31, ite(cond_30, chan1_pulselo, 0), 0))), 0), 0);
       }
-      if ite(cond_22, ite(cond_27, ite(cond_26, false, ite(cond_25, true, ite(cond_24, cond_23, false))), false), false) {
-        sid[V1_PW_HI] := ite(cond_22, ite(cond_27, ite(cond_26, 0, ite(cond_25, chan1_pulsehi, ite(cond_24, ite(cond_23, chan1_pulsehi, 0), 0))), 0), 0);
+      if ite(cond_29, ite(cond_34, ite(cond_33, false, ite(cond_32, true, ite(cond_31, cond_30, false))), false), false) {
+        sid[V1_PW_HI] := ite(cond_29, ite(cond_34, ite(cond_33, 0, ite(cond_32, chan1_pulsehi, ite(cond_31, ite(cond_30, chan1_pulsehi, 0), 0))), 0), 0);
       }
       chan2_counter := (chan2_counter - 1);
-      let cond_31: bool = (chan2_counter == 0);
-      let cond_32: bool = false;
-      let cond_33: bool = false;
+      let cond_45: bool = (chan2_counter == 0);
+      let cond_46: bool = false;
+      let cond_47: bool = false;
       let k_3: u8 = 0;
+      let t_8: u8 = 0;
+      let t_9: u8 = 0;
       if (chan2_counter == 0) {
         let j_5: u8 = tick0tbl[chan2_newfx];
         tick0jump1 := j_5;
@@ -1259,7 +1237,7 @@ machine goattracker_ordered {
         }
         ky_3 := chan2_instr;
         chan2_gatetimer := i_gate[chan2_instr];
-        cond_33 := (chan2_newnote == 0);
+        cond_47 := (chan2_newnote == 0);
         if (chan2_newnote == 0) {
           k_3 := 1;
           kn_3 := 2;
@@ -1267,7 +1245,7 @@ machine goattracker_ordered {
           chan2_note := (chan2_newnote - 0x60);
           chan2_fx := 0;
           chan2_newnote := 0;
-          cond_32 := (chan2_newfx == 3);
+          cond_46 := (chan2_newfx == 3);
           if (chan2_newfx == 3) {
             k_3 := 1;
             kn_3 := 2;
@@ -1283,8 +1261,8 @@ machine goattracker_ordered {
               filter0_ftime := 0;
             }
             chan2_waveptr := i_wave[chan2_instr];
-            out_v2_sr := i_sr[chan2_instr];
-            out_v2_ad := i_ad[chan2_instr];
+            t_9 := i_sr[chan2_instr];
+            t_8 := i_ad[chan2_instr];
             k_3 := 1;
             kn_3 := 9;
           }
@@ -1322,16 +1300,16 @@ machine goattracker_ordered {
         k_3 := 4;
         if !(chan2_waveptr == 0) {
           let a_14: u8 = wave1[chan2_waveptr];
-          let cond_34: bool = (a_14 < 0x10);
+          let cond_48: bool = (a_14 < 0x10);
           let a_15: u8 = 0;
-          let cond_35: bool = false;
-          let cond_36: bool = false;
+          let cond_49: bool = false;
+          let cond_50: bool = false;
           if (a_14 < 0x10) {
-            cond_36 := (a_14 != chan2_wavetime);
+            cond_50 := (a_14 != chan2_wavetime);
             if (a_14 != chan2_wavetime) {
               let c_9: bool = (chan2_wavetime <= a_14);
               chan2_wavetime := (chan2_wavetime + 1);
-              cond_35 := (chan2_wavetime != 0);
+              cond_49 := (chan2_wavetime != 0);
               if !(chan2_wavetime != 0) {
                 a_15 := ((a_14 - 0x10) - ite(c_9, 0, 1));
                 chan2_wave := a_15;
@@ -1341,7 +1319,7 @@ machine goattracker_ordered {
             a_15 := (a_14 - 0x10);
             chan2_wave := a_15;
           }
-          if !ite(cond_34, ite(cond_36, cond_35, false), false) {
+          if !ite(cond_48, ite(cond_50, cond_49, false), false) {
             let y_8: u8 = (chan2_waveptr + 1);
             chan2_waveptr := ite((wave0[chan2_waveptr] == 0xff), note1[y_8], y_8);
             chan2_wavetime := 0;
@@ -1528,25 +1506,25 @@ machine goattracker_ordered {
         chan2_freqhi := fhi[kn_3];
         k_3 := 7;
       }
-      let cond_37: bool = (k_3 == 7);
-      let cond_38: bool = false;
-      let cond_39: bool = false;
-      let cond_40: bool = false;
-      let cond_41: bool = false;
-      let cond_42: bool = false;
+      let cond_51: bool = (k_3 == 7);
+      let cond_52: bool = false;
+      let cond_53: bool = false;
+      let cond_54: bool = false;
+      let cond_55: bool = false;
+      let cond_56: bool = false;
       if (k_3 == 7) {
         let fetch_3: bool = (chan2_counter == chan2_gatetimer);
-        cond_42 := !fetch_3;
+        cond_56 := !fetch_3;
         if !fetch_3 {
           let y_9: u8 = chan2_pulseptr;
-          cond_41 := ((chan2_pulseptr == 0) || ((chan2_counter == 0) && (chan2_pattptr == 0)));
+          cond_55 := ((chan2_pulseptr == 0) || ((chan2_counter == 0) && (chan2_pattptr == 0)));
           if !((chan2_pulseptr == 0) || ((chan2_counter == 0) && (chan2_pattptr == 0))) {
-            cond_39 := (chan2_pulsetime == 0);
+            cond_53 := (chan2_pulsetime == 0);
             let y_10: u8 = 0;
             let jump_4: bool = false;
             if (chan2_pulsetime == 0) {
               let a_17: u8 = ptime1[chan2_pulseptr];
-              cond_38 := ((a_17 & 0x80) != 0);
+              cond_52 := ((a_17 & 0x80) != 0);
               if ((a_17 & 0x80) != 0) {
                 chan2_pulsehi := a_17;
                 chan2_pulselo := pspd1[chan2_pulseptr];
@@ -1557,8 +1535,8 @@ machine goattracker_ordered {
                 chan2_pulsetime := a_17;
               }
             }
-            cond_40 := !ite(cond_39, cond_38, false);
-            if !ite(cond_39, cond_38, false) {
+            cond_54 := !ite(cond_53, cond_52, false);
+            if !ite(cond_53, cond_52, false) {
               let s_3: u8 = pspd1[y_9];
               let lo_13: u8 = chan2_pulselo;
               if ((s_3 & 0x80) != 0) {
@@ -1579,6 +1557,13 @@ machine goattracker_ordered {
         }
         k_3 := ite(fetch_3, 8, 9);
       }
+      let cond_57: bool = (k_3 == 8);
+      let cond_58: bool = false;
+      let cond_59: bool = false;
+      let cond_60: bool = false;
+      let cond_61: bool = false;
+      let cond_62: bool = false;
+      let cond_63: bool = false;
       if (k_3 == 8) {
         let ret_getnewnote_3: bool = false;
         k_3 := 9;
@@ -1593,14 +1578,15 @@ machine goattracker_ordered {
           row_pos_3 := (chan2_pattptr + 1);
           a_18 := mem[(row_base_3 + u16((row_pos_3 + 0)))];
         } elif (0xc0 <= a_18) {
-          let cond_43: bool = (chan2_packedrest == 0);
-          chan2_packedrest := (ite(cond_43, a_18, chan2_packedrest) + 1);
+          let cond_64: bool = (chan2_packedrest == 0);
+          chan2_packedrest := (ite(cond_64, a_18, chan2_packedrest) + 1);
           if (chan2_packedrest == 0) {
             row_pos_3 := (chan2_pattptr + 1);
             chan2_pattptr := ite((mem[(row_base_3 + u16((row_pos_3 + 0)))] == 0), 0, row_pos_3);
           }
           ret_getnewnote_3 := true;
         }
+        cond_63 := !ret_getnewnote_3;
         if !ret_getnewnote_3 {
           if (a_18 < 0x60) {
             chan2_newfx := (a_18 & 0xf);
@@ -1617,109 +1603,87 @@ machine goattracker_ordered {
               a_18 := mem[(row_base_3 + u16((row_pos_3 + 0)))];
             }
           }
+          cond_62 := !ret_getnewnote_3;
           if !ret_getnewnote_3 {
+            cond_61 := (a_18 == 0xbd);
             if (a_18 == 0xbd) {
-              if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-                sid[V2_AD] := out_v2_ad;
-              }
-              if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-                sid[V2_SR] := out_v2_sr;
-              }
-              row_pos_3 := (row_pos_3 + 1);
-              chan2_pattptr := ite((mem[(row_base_3 + u16((row_pos_3 + 0)))] == 0), 0, row_pos_3);
-            } elif (0xbd < a_18) {
-              if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-                sid[V2_AD] := out_v2_ad;
-              }
-              if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-                sid[V2_SR] := out_v2_sr;
-              }
-              chan2_gate := (a_18 | 0xf0);
               row_pos_3 := (row_pos_3 + 1);
               chan2_pattptr := ite((mem[(row_base_3 + u16((row_pos_3 + 0)))] == 0), 0, row_pos_3);
             } else {
-              chan2_newnote := a_18;
-              if (chan2_newfx == 3) {
-                if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-                  sid[V2_AD] := out_v2_ad;
-                }
-                if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-                  sid[V2_SR] := out_v2_sr;
-                }
+              cond_60 := (0xbd < a_18);
+              if (0xbd < a_18) {
+                chan2_gate := (a_18 | 0xf0);
                 row_pos_3 := (row_pos_3 + 1);
                 chan2_pattptr := ite((mem[(row_base_3 + u16((row_pos_3 + 0)))] == 0), 0, row_pos_3);
               } else {
-                if (5 <= chan2_instr) {
-                  if (6 <= chan2_instr) {
-                    row_pos_3 := (row_pos_3 + 1);
-                    chan2_pattptr := ite((mem[(row_base_3 + u16((row_pos_3 + 0)))] == 0), 0, row_pos_3);
-                    ret_getnewnote_3 := true;
-                  } else {
-                    chan2_gate := 0xfe;
-                    row_pos_3 := (row_pos_3 + 1);
-                    chan2_pattptr := ite((mem[(row_base_3 + u16((row_pos_3 + 0)))] == 0), 0, row_pos_3);
-                    ret_getnewnote_3 := true;
-                  }
-                }
-                if !ret_getnewnote_3 {
-                  sid[V2_AD] := 0xf;
-                  sid[V2_SR] := 0;
-                  chan2_gate := 0xfe;
+                chan2_newnote := a_18;
+                cond_59 := (chan2_newfx == 3);
+                if (chan2_newfx == 3) {
                   row_pos_3 := (row_pos_3 + 1);
                   chan2_pattptr := ite((mem[(row_base_3 + u16((row_pos_3 + 0)))] == 0), 0, row_pos_3);
                 } else {
-                  if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-                    sid[V2_AD] := out_v2_ad;
+                  if (5 <= chan2_instr) {
+                    if (6 <= chan2_instr) {
+                      row_pos_3 := (row_pos_3 + 1);
+                      chan2_pattptr := ite((mem[(row_base_3 + u16((row_pos_3 + 0)))] == 0), 0, row_pos_3);
+                      ret_getnewnote_3 := true;
+                    } else {
+                      chan2_gate := 0xfe;
+                      row_pos_3 := (row_pos_3 + 1);
+                      chan2_pattptr := ite((mem[(row_base_3 + u16((row_pos_3 + 0)))] == 0), 0, row_pos_3);
+                      ret_getnewnote_3 := true;
+                    }
                   }
-                  if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-                    sid[V2_SR] := out_v2_sr;
+                  cond_58 := !ret_getnewnote_3;
+                  if !ret_getnewnote_3 {
+                    t_9 := 0;
+                    t_8 := 0xf;
+                    chan2_gate := 0xfe;
+                    row_pos_3 := (row_pos_3 + 1);
+                    chan2_pattptr := ite((mem[(row_base_3 + u16((row_pos_3 + 0)))] == 0), 0, row_pos_3);
                   }
                 }
               }
             }
-          } else {
-            if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-              sid[V2_AD] := out_v2_ad;
-            }
-            if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-              sid[V2_SR] := out_v2_sr;
-            }
-          }
-        } else {
-          if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-            sid[V2_AD] := out_v2_ad;
-          }
-          if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-            sid[V2_SR] := out_v2_sr;
           }
         }
+      }
+      let cond_65: bool = (k_3 == 9);
+      let cond_66: bool = false;
+      if (k_3 == 9) {
+        t_2 := (chan2_wave & chan2_gate);
       } else {
-        if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-          sid[V2_AD] := ite(cond_31, ite(cond_33, 0, ite(cond_32, 0, i_ad[chan2_instr])), 0);
-        }
-        if ite(cond_31, ite(cond_33, false, !cond_32), false) {
-          sid[V2_SR] := ite(cond_31, ite(cond_33, 0, ite(cond_32, 0, i_sr[chan2_instr])), 0);
+        cond_66 := (k_3 == 0xa);
+        if (k_3 == 0xa) {
+          t_2 := (chan2_wave & chan2_gate);
         }
       }
-      let cond_44: bool = (k_3 == 9);
-      let cond_45: bool = false;
-      if !(k_3 == 9) {
-        cond_45 := (k_3 == 0xa);
+      if ite(cond_65, ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_60, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_59, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_58, true, ite(cond_45, ite(cond_47, false, !cond_46), false))))), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_66, ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_60, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_59, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_58, true, ite(cond_45, ite(cond_47, false, !cond_46), false))))), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)), false)) {
+        sid[V2_SR] := ite(cond_65, ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0), ite(cond_60, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0), ite(cond_59, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0), ite(cond_58, 0, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0))))), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0)), ite(cond_66, ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0), ite(cond_60, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0), ite(cond_59, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0), ite(cond_58, 0, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0))))), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0)), 0));
       }
-      if ite(cond_44, true, cond_45) {
-        sid[V2_CTRL] := ite(cond_44, (chan2_wave & chan2_gate), ite(cond_45, (chan2_wave & chan2_gate), 0));
+      if ite(cond_65, ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_60, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_59, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_58, true, ite(cond_45, ite(cond_47, false, !cond_46), false))))), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_66, ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_60, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_59, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_58, true, ite(cond_45, ite(cond_47, false, !cond_46), false))))), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)), false)) {
+        sid[V2_AD] := ite(cond_65, ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0), ite(cond_60, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0), ite(cond_59, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0), ite(cond_58, 0xf, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0))))), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0)), ite(cond_66, ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0), ite(cond_60, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0), ite(cond_59, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0), ite(cond_58, 0xf, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0))))), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0)), 0));
       }
-      if cond_44 {
+      if ite(cond_65, true, cond_66) {
+        sid[V2_CTRL] := ite(cond_65, t_2, ite(cond_66, t_2, 0));
+      }
+      if ite(cond_65, false, ite(cond_66, false, ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_60, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_59, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_58, true, ite(cond_45, ite(cond_47, false, !cond_46), false))))), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)))) {
+        sid[V2_SR] := ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0), ite(cond_60, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0), ite(cond_59, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0), ite(cond_58, 0, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0))))), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_9)), 0));
+      }
+      if ite(cond_65, false, ite(cond_66, false, ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_60, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_59, ite(cond_45, ite(cond_47, false, !cond_46), false), ite(cond_58, true, ite(cond_45, ite(cond_47, false, !cond_46), false))))), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)), ite(cond_45, ite(cond_47, false, !cond_46), false)))) {
+        sid[V2_AD] := ite(cond_57, ite(cond_63, ite(cond_62, ite(cond_61, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0), ite(cond_60, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0), ite(cond_59, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0), ite(cond_58, 0xf, ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0))))), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0)), ite(cond_45, ite(cond_47, 0, ite(cond_46, 0, t_8)), 0));
+      }
+      if cond_65 {
         sid[V2_FREQ_LO] := chan2_freqlo;
       }
-      if cond_44 {
+      if cond_65 {
         sid[V2_FREQ_HI] := chan2_freqhi;
       }
-      if ite(cond_37, ite(cond_42, ite(cond_41, false, ite(cond_40, true, ite(cond_39, cond_38, false))), false), false) {
-        sid[V2_PW_LO] := ite(cond_37, ite(cond_42, ite(cond_41, 0, ite(cond_40, chan2_pulselo, ite(cond_39, ite(cond_38, chan2_pulselo, 0), 0))), 0), 0);
+      if ite(cond_51, ite(cond_56, ite(cond_55, false, ite(cond_54, true, ite(cond_53, cond_52, false))), false), false) {
+        sid[V2_PW_LO] := ite(cond_51, ite(cond_56, ite(cond_55, 0, ite(cond_54, chan2_pulselo, ite(cond_53, ite(cond_52, chan2_pulselo, 0), 0))), 0), 0);
       }
-      if ite(cond_37, ite(cond_42, ite(cond_41, false, ite(cond_40, true, ite(cond_39, cond_38, false))), false), false) {
-        sid[V2_PW_HI] := ite(cond_37, ite(cond_42, ite(cond_41, 0, ite(cond_40, chan2_pulsehi, ite(cond_39, ite(cond_38, chan2_pulsehi, 0), 0))), 0), 0);
+      if ite(cond_51, ite(cond_56, ite(cond_55, false, ite(cond_54, true, ite(cond_53, cond_52, false))), false), false) {
+        sid[V2_PW_HI] := ite(cond_51, ite(cond_56, ite(cond_55, 0, ite(cond_54, chan2_pulsehi, ite(cond_53, ite(cond_52, chan2_pulsehi, 0), 0))), 0), 0);
       }
     }
   }

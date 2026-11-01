@@ -274,12 +274,36 @@ beside `SPEC` so `load` finds the base.
 ## Output order
 
 `outorder.reorder(program, order, memory=...)` rewrites a bound program so each call
-writes only the SID writes an order keeps, in that order, with the values the original
-call would have left. An order lists slots: `name` is a register's last write in the
-call, `name:2` the one before it, `voice(...)` repeats a list per voice and
-`interleave(...)` runs it register by register, e.g. the default
-`fc_lo,fc_hi,res_filt,mode_vol,voice(ad,sr,ctrl:2,ctrl,freq_lo,freq_hi,pw_lo,pw_hi)`.
-`outorder.kept(writes, slots)` projects a call's writes the same way.
+writes only the SID writes an order keeps, in that order. An order lists slots: `name` is
+a register's last write in the call, `voice(...)` repeats a list per voice and
+`interleave(...)` runs it register by register. A voice's `sr`, `ad` and `ctrl` also
+have per-segment slots `name:k`, the one of the `k`-th last gate segment, and
+`segments(sr,ad,ctrl):N` lists `N` segments of the three, oldest first. The default is
+`fc_lo,fc_hi,res_filt,mode_vol,voice(segments(sr,ad,ctrl):4,freq_lo,freq_hi,pw_lo,pw_hi)`:
+per voice, `sr,ad,ctrl` once per gate segment, then the rest.
+
+A gate segment ends at a ctrl write that changes the gate or test bit from the call's
+previous ctrl write (the call's first ctrl write always ends one). Its group is the
+`sr` and `ad` written since the previous segment ended, then that ctrl write; a register
+not written since is left out. What follows the last segment is the final group: the
+`sr` and `ad` written since, then the last ctrl write if one followed the last segment.
+The oldest segment is flushed first; the segment slots of `name:k` hold the last `N - 1`
+segments and `name` the final group. A voice whose order has no segments writes each
+register's last value.
+
+The SID envelope generator stores the AD and SR nibbles on a write and reads them at a
+rate-counter match or a state change, so the order of a frame's ctrl, AD and SR writes
+changes neither the envelope nor the generator state (an exhaustive emulator test over
+every state, level, AD and SR value, gate and test change and ordering of the three
+writes found no difference). A frame commands of a voice's envelope its gate edges and the
+AD and SR in force at each edge and at the frame's end; the writes between do not matter.
+The test bit does not reach the envelope but resets the oscillator, so it ends a
+segment as the gate does.
+
+`outorder.kept(writes, slots, native)` is the definition above on the writes of one call.
+A voice whose ctrl a path may store as many times as the order has segments (a loop,
+sample playback by test-bit toggling) cannot be bounded: its `sr`, `ad` and `ctrl` stay
+in place in the program's order (`Reordered.native`), before every other flush.
 
 The transform:
 1. **Inline** the procs and **nest** each lowered `return` guard into the arm of the
@@ -298,12 +322,19 @@ The transform:
    one constant-address access per register it may reach, and the access as before
    where it may reach none.
 5. **Instrument** every SID store as an assignment of the register's output variable and
-   written flag (shifting into the `:2` pair first) and every SID read as the output
-   variable where written.
+   written flag, and every SID read as the output variable where written. A store to a
+   segmented voice's `sr` or `ad` assigns the final group's variable. A store to its
+   `ctrl` whose gate or test bit differs from the last ctrl value (or the first) closes
+   the segment: the closed groups shift back one, the final group's `sr` and `ad` become
+   the newest closed group with that ctrl value, and the final group is cleared; otherwise
+   it assigns the final group's ctrl. The last value stored and a stored flag serve reads.
+   The `native` voices' stores are kept in place and set a flag.
 6. **Place** each slot's flush, `if written: store(register, output)`, at the earliest
-   statement boundary after which no store to its register follows and the slots before
-   it are flushed, inside an arm of a branch where that falls before the arm's end, and
-   before each `finish`. Every path flushes every slot once, in order (`flush_order`).
+   statement boundary after which no store follows that assigns its variables (a ctrl
+   store assigns every segment's) and the slots before it are flushed, inside an arm of
+   a branch where that falls before the arm's end, and before each `finish`. The native
+   stores come first: no slot flushes before the last one. Every path flushes every slot
+   once, in order (`flush_order`).
 7. **Forward** values: constants, copies and single-use expressions propagate to their
    uses under the conditions known to hold in each arm; at a join, a variable assigned in
    either arm becomes an `ite` on a snapshot of the condition.
@@ -339,7 +370,7 @@ call (`--prove`, a per-query timeout) and writes the emitted specs.
 
 `outorder.check(original, result)` states the claim as one solver query: from any
 memory and control state, the reordered call writes the original's kept writes in order
-(both logged into variables) and leaves the same memory and controls outside the SID and
+(both logged into variables, native stores included, which a path bounds by its loops) and leaves the same memory and controls outside the SID and
 the promoted cells. It closes for small programs only; `outproof.prove` proves the same
 claim compositionally.
 
@@ -350,7 +381,13 @@ instrumented (step 5) with every slot flushed at its end and before each `finish
 defines the kept writes in canonical order. The theorem: from any memory and control
 state satisfying the premises below, `P8` writes exactly `R`'s logged writes in order
 and ends with the same memory outside the SID and the promoted cells, and the same
-controls. Premises: the fixed bytes hold their bound values, and no read through an
+controls. `R`'s writes are `kept` of `P0`'s: for each voice, in order, the gate or test
+edges of `P0`'s ctrl writes (a segment per edge, the last `N - 1` kept, at most that
+many by the native rule) with the `sr` and `ad` in force at each and at the call's end,
+and every other register's last value; so `P8` and `P0` command the same sequence of
+gate edges with the same AD and SR at each edge and at the call's end, and leave the
+same final value in every other register. A voice with native stores writes them as
+`P0` does, in order. Premises: the fixed bytes hold their bound values, and no read through an
 unbounded pointer reads a promoted cell or the SID.
 
 The passes compose by transitivity; each is justified as follows.

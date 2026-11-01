@@ -50,18 +50,6 @@ cell zp_lo: u8 @ 0x00fb scratch;
 
 machine v0x_ordered {
   step {
-    let out2_v0_ctrl: u8 = 0;
-    let out_v0_ctrl: u8 = 0;
-    let out2_v1_ctrl: u8 = 0;
-    let out_v1_ctrl: u8 = 0;
-    let out2_v2_ctrl: u8 = 0;
-    let out_v2_ctrl: u8 = 0;
-    let wrote2_v0_ctrl: bool = false;
-    let wrote_v0_ctrl: bool = false;
-    let wrote2_v1_ctrl: bool = false;
-    let wrote_v1_ctrl: bool = false;
-    let wrote2_v2_ctrl: bool = false;
-    let wrote_v2_ctrl: bool = false;
     let lo_2: u8 = zp_lo;
     let hi_2: u8 = zp_hi;
     zp_lo := voice2_cur_lo;
@@ -131,10 +119,7 @@ machine v0x_ordered {
             }
           }
         } elif (st == 6) {
-          out2_v2_ctrl := out_v2_ctrl;
-          wrote2_v2_ctrl := wrote_v2_ctrl;
-          out_v2_ctrl := 0x10;
-          wrote_v2_ctrl := true;
+          sid[V2_CTRL] := 0x10;
           st := 7;
         } elif (st == 7) {
           voice2_gate_flag := 1;
@@ -170,10 +155,7 @@ machine v0x_ordered {
       voice2_gate_flag := 1;
     }
     if (voice2_gate_flag == 0) {
-      out2_v2_ctrl := out_v2_ctrl;
-      wrote2_v2_ctrl := wrote_v2_ctrl;
-      out_v2_ctrl := 0x21;
-      wrote_v2_ctrl := true;
+      sid[V2_CTRL] := 0x21;
     }
     voice2_cur_lo := zp_lo;
     voice2_cur_hi := zp_hi;
@@ -244,10 +226,7 @@ machine v0x_ordered {
             }
           }
         } elif (st_2 == 6) {
-          out2_v1_ctrl := out_v1_ctrl;
-          wrote2_v1_ctrl := wrote_v1_ctrl;
-          out_v1_ctrl := 0x10;
-          wrote_v1_ctrl := true;
+          sid[V1_CTRL] := 0x10;
           st_2 := 7;
         } elif (st_2 == 7) {
           voice1_gate_flag := 1;
@@ -283,10 +262,7 @@ machine v0x_ordered {
       voice1_gate_flag := 1;
     }
     if (voice1_gate_flag == 0) {
-      out2_v1_ctrl := out_v1_ctrl;
-      wrote2_v1_ctrl := wrote_v1_ctrl;
-      out_v1_ctrl := 0x21;
-      wrote_v1_ctrl := true;
+      sid[V1_CTRL] := 0x21;
     }
     voice1_cur_lo := zp_lo;
     voice1_cur_hi := zp_hi;
@@ -357,10 +333,7 @@ machine v0x_ordered {
             }
           }
         } elif (st_3 == 6) {
-          out2_v0_ctrl := out_v0_ctrl;
-          wrote2_v0_ctrl := wrote_v0_ctrl;
-          out_v0_ctrl := 0x10;
-          wrote_v0_ctrl := true;
+          sid[V0_CTRL] := 0x10;
           st_3 := 7;
         } elif (st_3 == 7) {
           voice0_gate_flag := 1;
@@ -396,33 +369,12 @@ machine v0x_ordered {
       voice0_gate_flag := 1;
     }
     if (voice0_gate_flag == 0) {
-      out2_v0_ctrl := out_v0_ctrl;
-      wrote2_v0_ctrl := wrote_v0_ctrl;
-      out_v0_ctrl := 0x21;
-      wrote_v0_ctrl := true;
-    }
-    if wrote2_v0_ctrl {
-      sid[V0_CTRL] := out2_v0_ctrl;
-    }
-    if wrote_v0_ctrl {
-      sid[V0_CTRL] := out_v0_ctrl;
+      sid[V0_CTRL] := 0x21;
     }
     sid[V0_FREQ_LO] := voice0_freq_lo;
     sid[V0_FREQ_HI] := voice0_freq_hi;
-    if wrote2_v1_ctrl {
-      sid[V1_CTRL] := out2_v1_ctrl;
-    }
-    if wrote_v1_ctrl {
-      sid[V1_CTRL] := out_v1_ctrl;
-    }
     sid[V1_FREQ_LO] := voice1_freq_lo;
     sid[V1_FREQ_HI] := voice1_freq_hi;
-    if wrote2_v2_ctrl {
-      sid[V2_CTRL] := out2_v2_ctrl;
-    }
-    if wrote_v2_ctrl {
-      sid[V2_CTRL] := out_v2_ctrl;
-    }
     sid[V2_FREQ_LO] := voice2_freq_lo;
     sid[V2_FREQ_HI] := voice2_freq_hi;
     voice0_cur_lo := zp_lo;

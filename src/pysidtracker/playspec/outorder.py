@@ -36,9 +36,9 @@ VOICE_REG = {
     "ad": 5,
     "sr": 6,
 }
-ORDER = (
-    "fc_lo,fc_hi,res_filt,mode_vol,voice(ad,sr,ctrl:2,ctrl,freq_lo,freq_hi,pw_lo,pw_hi)"
-)
+ORDER = "fc_lo,fc_hi,res_filt,mode_vol,voice(segments(sr,ad,ctrl):4,freq_lo,freq_hi,pw_lo,pw_hi)"
+EDGE_BITS = 0x09
+NATIVE = REGS
 SONG_REG = {"fc_lo": 21, "fc_hi": 22, "res_filt": 23, "mode_vol": 24}
 FULL = (0, 0xFFFF)
 TRUE, FALSE = K(1, 1), K(0, 1)
@@ -64,22 +64,33 @@ def _split(text: str) -> List[str]:
 def _token(token: str, voice: Optional[int]) -> Slot:
     name, _, k = token.partition(":")
     table = SONG_REG if voice is None else VOICE_REG
-    if name not in table or k not in ("", "1", "2"):
+    if name not in table or not (k == "" or k.isdigit() and int(k) > 0):
         raise OrderError(f"no register {token!r}")
     return (table[name] if voice is None else 7 * voice + table[name], int(k or 1))
 
 
+def _rounds(token: str) -> List[str]:
+    """The tokens of ``segments(a,b,c):N``, oldest segment first, else ``token``."""
+    found = re.fullmatch(r"segments\((.*)\):(\d+)", token)
+    if found is None:
+        return [token]
+    names = found.group(1).split(",")
+    return [f"{n}:{k}" for k in range(int(found.group(2)), 0, -1) for n in names]
+
+
 def parse_order(text: str) -> Tuple[Slot, ...]:
     """The ``(register, k)`` slots of an order: song register names, ``voice(...)``
-    (each voice's registers in turn) and ``interleave(...)`` (register by register);
-    ``name`` is a register's last write in a call, ``name:2`` the one before."""
+    (each voice's registers in turn) and ``interleave(...)`` (register by register).
+    ``name`` is a register's last write in a call; a voice's ``sr``, ``ad`` and ``ctrl``
+    also have ``name:k``, the one of the ``k``-th last gate segment, which
+    ``segments(sr,ad,ctrl):N`` lists for ``N`` segments, oldest first."""
     slots: List[Slot] = []
     for item in _split(text):
         group = re.fullmatch(r"(voice|interleave)\((.*)\)", item)
         if group is None:
             slots.append(_token(item, None))
             continue
-        tokens = group.group(2).split(",")
+        tokens = [r for t in _split(group.group(2)) for r in _rounds(t)]
         pairs = [(v, t) for v in range(3) for t in tokens]
         if group.group(1) == "interleave":
             pairs = [(v, t) for t in tokens for v in range(3)]
@@ -87,20 +98,80 @@ def parse_order(text: str) -> Tuple[Slot, ...]:
     at = {s: i for i, s in enumerate(slots)}
     if len(at) != len(slots) or {r for r, k in slots if k == 1} != set(range(REGS)):
         raise OrderError(f"{text!r} must keep every register's last write once")
-    if any(at[(r, 1)] < i for (r, k), i in at.items() if k == 2):
-        raise OrderError(f"{text!r} puts a register's last write first")
+    if any((r, k - 1) not in at or at[(r, k)] > at[(r, k - 1)] for r, k in at if k > 1):
+        raise OrderError(f"{text!r} must list a register's segments oldest first")
+    d = depth(slots)
+    if any(len({d[7 * v + o] for o in SEGMENTED}) > 1 for v in range(3)) or any(
+        d[r] > 1 for r in range(REGS) if r >= 21 or r % 7 not in SEGMENTED
+    ):
+        raise OrderError(f"{text!r} must give sr, ad and ctrl the same segments")
     return tuple(slots)
 
 
-def kept(writes: Sequence[Tuple[int, int]], slots: Sequence[Slot]) -> List[Tuple]:
-    """The ``(register, value)`` writes of one call that ``slots`` keep, in their order."""
+def depth(slots: Sequence[Slot]) -> Dict[int, int]:
+    """Each register's number of segments in ``slots``."""
+    out: Dict[int, int] = {}
+    for r, k in slots:
+        out[r] = max(out.get(r, 0), k)
+    return out
+
+
+SEGMENTED = (4, 5, 6)
+
+
+def segments(slots: Sequence[Slot]) -> Dict[int, int]:
+    """Each voice ``slots`` writes by gate segment, with its number of segments."""
+    d = depth(slots)
+    return {v: d[7 * v + 4] for v in range(3) if d[7 * v + 4] > 1}
+
+
+def segment_regs(deep: Dict[int, int]) -> FrozenSet[int]:
+    """The registers of the voices ``deep`` (:func:`segments`) writes by segment."""
+    return frozenset(7 * v + o for v in deep for o in SEGMENTED)
+
+
+def _closed(writes: Sequence[Tuple[int, int]], voice: int, n: int) -> Tuple[list, dict]:
+    """``(closed, open)`` of a voice's writes: the segments ended by a gate or test
+    edge (the first ctrl write is one), ``(sr, ad, ctrl)`` each, the last ``n - 1``,
+    and the writes since the last edge."""
+    closed: List[tuple] = []
+    pending: Dict[int, int] = {}
+    last = None
+    for reg, value in writes:
+        off = reg - 7 * voice
+        if off not in SEGMENTED:
+            continue
+        if off == 4 and (last is None or (last ^ value) & EDGE_BITS):
+            closed.append((pending.get(6), pending.get(5), value))
+            pending = {}
+        else:
+            pending[off] = value
+        last = value if off == 4 else last
+    return closed[max(len(closed) - n + 1, 0) :], pending
+
+
+def kept(
+    writes: Sequence[Tuple[int, int]], slots: Sequence[Slot], native=frozenset()
+) -> List[Tuple]:
+    """The ``(register, value)`` writes of one call that ``slots`` keep, in their order,
+    after the ``native`` registers' writes in place."""
+    deep = {v: n for v, n in segments(slots).items() if 7 * v + 4 not in native}
+    slots = live_slots(slots, native)
     regs = np.fromiter((r for r, _ in writes), np.int64, len(writes))
-    out = []
+    table: Dict[Slot, int] = {}
     for reg, k in slots:
         at = np.flatnonzero(regs == reg)
-        if len(at) >= k:
-            out.append(tuple(writes[at[-k]]))
-    return out
+        if reg not in segment_regs(deep) and len(at) >= k:
+            table[(reg, k)] = int(writes[at[-k]][1])
+    for v, n in deep.items():
+        closed, pending = _closed(writes, v, n)
+        for j, group in enumerate(reversed(closed), 2):
+            table.update(
+                ((7 * v + 6 - i, j), g) for i, g in enumerate(group) if g is not None
+            )
+        table.update(((7 * v + o, 1), x) for o, x in pending.items())
+    out = [tuple(w) for w in writes if w[0] in native]
+    return out + [(r, table[(r, k)]) for r, k in slots if (r, k) in table]
 
 
 # ---- expressions ---------------------------------------------------------------------
@@ -514,9 +585,19 @@ def flag_var(slot: Slot) -> V:
     return V(f"h{slot[1]}_{slot[0]}", 1)
 
 
+def last_var(reg: int) -> V:
+    """The last value stored to a segmented register."""
+    return V(f"last_{reg}", 8)
+
+
+def seen_var(reg: int) -> V:
+    """Whether a segmented register was stored."""
+    return V(f"seen_{reg}", 1)
+
+
 def staging(name: str) -> bool:
     """Whether ``name`` is an output variable or flag."""
-    return re.fullmatch(r"[oh][12]_\d+", name) is not None
+    return re.fullmatch(r"[oh]\d+_\d+", name) is not None
 
 
 def split(body, base: int = SID) -> list:
@@ -558,18 +639,98 @@ def split(body, base: int = SID) -> list:
     return rewrite(body, lambda e: rebuild(e, leaf), stmt)
 
 
-def instrument(body, slots: Sequence[Slot], base: int = SID) -> list:
+def peak(stmts, addr: int) -> int:
+    """The most stores to constant address ``addr`` a path through ``stmts`` makes (a
+    loop's body counts its bound times)."""
+    total = 0
+    for s in stmts:
+        if s[0] == "wr":
+            total += isinstance(s[1], K) and s[1].v == addr
+        elif s[0] == "if":
+            total += max(peak(s[2], addr), peak(s[3], addr))
+        elif s[0] == "loop":
+            total += peak(s[2], addr) * (s[3] or 1 << 16)
+    return total
+
+
+def native_regs(body, slots: Sequence[Slot], base: int = SID) -> FrozenSet[int]:
+    """The registers of each segmented voice whose ctrl a path may store as often as it
+    has segments: their writes stay in place, in the program's order."""
+    return frozenset(
+        7 * v + o
+        for v, n in segments(slots).items()
+        if peak(body, base + 7 * v + 4) >= n
+        for o in SEGMENTED
+    )
+
+
+def live_slots(slots: Sequence[Slot], native: FrozenSet[int]) -> Tuple[Slot, ...]:
+    """``slots`` without the ``native`` registers'."""
+    return tuple(s for s in slots if s[0] not in native)
+
+
+def _edge(ctrl: int, value: V):
+    """Whether storing ``value`` to register ``ctrl`` ends a segment."""
+    moved = mk("and", 8, mk("xor", 8, last_var(ctrl), value), K(EDGE_BITS, 8))
+    return mk("lor", 1, mk("lnot", 1, seen_var(ctrl)), mk("ne", 1, moved, K(0, 8)))
+
+
+def _segment_store(reg: int, value, n: int) -> list:
+    """The assignments of a store to a segmented register: a ctrl store that ends a
+    segment closes it, shifting the closed segments back."""
+    ctrl = 7 * (reg // 7) + 4
+    regs = [ctrl + 2, ctrl + 1, ctrl]
+    temp = V(f"t_{reg}", 8)
+
+    def move(r: int, dst: int, src: int) -> list:
+        return [
+            ("set", out_var((r, dst)).n, out_var((r, src))),
+            ("set", flag_var((r, dst)).n, flag_var((r, src))),
+        ]
+
+    out = [("set", temp.n, value)]
+    if reg == ctrl:
+        close = [x for j in range(n, 2, -1) for r in regs for x in move(r, j, j - 1)]
+        close += [x for r in regs[:2] for x in move(r, 2, 1)]
+        close += [
+            ("set", out_var((ctrl, 2)).n, temp),
+            ("set", flag_var((ctrl, 2)).n, TRUE),
+        ] + [("set", flag_var((r, 1)).n, FALSE) for r in regs]
+        out.append(
+            (
+                "if",
+                _edge(ctrl, temp),
+                close,
+                [
+                    ("set", out_var((ctrl, 1)).n, temp),
+                    ("set", flag_var((ctrl, 1)).n, TRUE),
+                ],
+            )
+        )
+    else:
+        out += [("set", out_var((reg, 1)).n, temp), ("set", flag_var((reg, 1)).n, TRUE)]
+    return out + [("set", last_var(reg).n, temp), ("set", seen_var(reg).n, TRUE)]
+
+
+def instrument(
+    body, slots: Sequence[Slot], base: int = SID, native: FrozenSet[int] = frozenset()
+) -> list:
     """``body`` with SID stores and reads through the slots' output variables (the flags
-    cleared first) and no SID store left; a store through a :func:`split` address
-    variable has missed every SID register."""
-    second = {r for r, k in slots if k == 2}
+    cleared first) and no SID store left but the ``native`` registers'; a store through
+    a :func:`split` address variable has missed every SID register."""
+    deep = segments(slots)
     band = [(base, base + REGS - 1)]
+    seg = segment_regs(deep) - native
 
     def leaf(e):
         if not isinstance(e, Rd):
             return None
         lo, hi = span(e.a)
         if lo == hi and _overlap(band, [(lo, hi)]):
+            if lo - base in native:
+                return None
+            if lo - base in seg:
+                return Op("ite", 8, (seen_var(lo - base), last_var(lo - base), e))
             slot = (lo - base, 1)
             return Op("ite", 8, (flag_var(slot), out_var(slot), e))
         if _overlap(band, [(lo, hi)]) and (lo, hi) != FULL:
@@ -584,18 +745,20 @@ def instrument(body, slots: Sequence[Slot], base: int = SID) -> list:
         lo, hi = span(s[1])
         if lo != hi:
             raise OrderError(f"a store at ${lo:04x}-${hi:04x} may reach the SID")
-        one, two = (lo - base, 1), (lo - base, 2)
-        shift = [
-            ("set", out_var(two).n, out_var(one)),
-            ("set", flag_var(two).n, flag_var(one)),
-        ]
-        return (shift if one[0] in second else []) + [
-            ("set", out_var(one).n, s[2]),
-            ("set", flag_var(one).n, TRUE),
-        ]
+        reg = lo - base
+        if reg in native:
+            return [s, ("set", flag_var((NATIVE, 1)).n, TRUE)]
+        if reg in seg:
+            return _segment_store(reg, s[2], deep[reg // 7])
+        one = (reg, 1)
+        return [("set", out_var(one).n, s[2]), ("set", flag_var(one).n, TRUE)]
 
-    head = [("set", out_var(s).n, K(0, 8)) for s in slots]
-    head += [("set", flag_var(s).n, FALSE) for s in slots]
+    live = live_slots(slots, native)
+    head = [("set", out_var(s).n, K(0, 8)) for s in live]
+    head += [("set", flag_var(s).n, FALSE) for s in live]
+    head += [("set", seen_var(r).n, FALSE) for r in sorted(seg)]
+    head += [("set", last_var(r).n, K(0, 8)) for r in sorted(seg)]
+    head += [("set", flag_var((NATIVE, 1)).n, FALSE)] * bool(native)
     return head + rewrite(body, lambda e: rebuild(e, leaf), stmt)
 
 
@@ -604,22 +767,49 @@ def flush(slot: Slot, base: int = SID) -> tuple:
     return ("if", flag_var(slot), [("wr", K(base + slot[0], 16), out_var(slot))], [])
 
 
+def marker(reg: int, deep: Dict[int, int], native: FrozenSet[int]) -> str:
+    """The flag a store to ``reg`` sets."""
+    if reg in native:
+        return flag_var((NATIVE, 1)).n
+    return (seen_var(reg) if reg in segment_regs(deep) else flag_var((reg, 1))).n
+
+
+def triggers(slot: Slot, deep: Dict[int, int]) -> FrozenSet[int]:
+    """The registers whose stores assign ``slot``'s variables."""
+    reg, k = slot
+    voice, off = divmod(reg, 7)
+    if reg >= 21 or voice not in deep or off not in SEGMENTED:
+        return frozenset((reg,))
+    if off == 4 or k > 1:
+        return frozenset((7 * voice + 4,))
+    return frozenset(7 * voice + o for o in SEGMENTED)
+
+
 class _Placer:
     """Flush placement over an instrumented body (see :func:`place`)."""
 
-    def __init__(self, slots: Sequence[Slot], base: int):
-        self.slots, self.base = tuple(slots), base
+    def __init__(self, slots: Sequence[Slot], base: int, native: FrozenSet[int]):
+        deep = segments(slots)
+        self.live = live_slots(slots, native)
+        self.slots = ((NATIVE, 1),) * bool(native) + self.live
+        self.base = base
+        self.trigger = [
+            frozenset((NATIVE,)) if s[0] == NATIVE else triggers(s, deep)
+            for s in self.slots
+        ]
         self.effects = Effects()
-        self.flags = {flag_var((r, 1)).n: r for r, _ in slots}
+        regs = [*range(REGS), *([NATIVE] if native else [])]
+        self.flags = {marker(r, deep, native): r for r in regs}
 
     def regs(self, s) -> FrozenSet[int]:
         """The SID registers statement ``s`` may store."""
         return frozenset(self.flags[n] for n in self.effects(s).sets if n in self.flags)
 
     def advance(self, done: int, future: FrozenSet[int], out: list) -> int:
-        """Flush slots from ``done`` while none of ``future`` stores their register."""
-        while done < len(self.slots) and self.slots[done][0] not in future:
-            out.append(flush(self.slots[done], self.base))
+        """Flush slots from ``done`` while none of ``future`` stores their registers."""
+        while done < len(self.slots) and not self.trigger[done] & future:
+            if self.slots[done][0] != NATIVE:
+                out.append(flush(self.slots[done], self.base))
             done += 1
         return done
 
@@ -628,11 +818,10 @@ class _Placer:
         ``done`` before its end (``after``: the registers stored after ``s``)."""
         if s[0] != "if" or done == len(self.slots):
             return False
-        reg = self.slots[done][0]
         return self.effects(s).finishes or any(
             arm
             and (
-                reg not in self.regs(arm[-1]) | after
+                not self.trigger[done] & (self.regs(arm[-1]) | after)
                 or self.early(arm[-1], done, after)
             )
             for arm in s[2:]
@@ -662,11 +851,13 @@ class _Placer:
         return out, done
 
 
-def place(body, slots: Sequence[Slot], base: int = SID) -> list:
+def place(
+    body, slots: Sequence[Slot], base: int = SID, native: FrozenSet[int] = frozenset()
+) -> list:
     """An instrumented ``body`` with each slot flushed once on every path, in order, at
-    the earliest boundary after its register's last store, in each arm of a branch
-    where that falls inside it."""
-    return _Placer(slots, base).seq(body, 0, frozenset())[0]
+    the earliest boundary after the last store that assigns its variables (after every
+    native store), in each arm of a branch where that falls inside it."""
+    return _Placer(slots, base, native).seq(body, 0, frozenset())[0]
 
 
 def flush_order(body, slots: Sequence[Slot]) -> FrozenSet[tuple]:
@@ -949,7 +1140,9 @@ def counts(stmts, base: int = SID) -> Counts:
 class Reordered:
     """A rescheduled program and what the transform did.
 
-    ``staged`` lists the output variables still assigned: buffers the order forces.
+    ``slots`` are the slots flushed, ``native`` the registers left in place (see
+    :func:`native_regs`) and ``staged`` the output variables still assigned: buffers the
+    order forces.
     """
 
     program: Program
@@ -960,6 +1153,7 @@ class Reordered:
     inlined: Counts
     after: Counts
     paths: FrozenSet[tuple] = field(default_factory=frozenset)
+    native: FrozenSet[int] = frozenset()
     ranges: Dict[str, Tuple[int, int]] = field(default_factory=dict)
     fixed: Dict[int, int] = field(default_factory=dict)
     text: str = ""
@@ -1006,11 +1200,12 @@ def _reorder(program, body, slots, base, observed, known, proof) -> Reordered:
         if "volatile" in cell.attrs:
             keep[cell.extent()] = True
     cells = frame_local(body, keep)
-    placed = place(
-        instrument(split(promote(body, cells), base), slots, base), slots, base
-    )
-    paths = flush_order(placed, slots)
-    if paths != {slots}:
+    split_body = split(promote(body, cells), base)
+    native = native_regs(split_body, slots, base)
+    live = live_slots(slots, native)
+    placed = place(instrument(split_body, slots, base, native), slots, base, native)
+    paths = flush_order(placed, live)
+    if paths != {live}:
         raise OrderError("a path flushes the slots out of order")
     end = frozenset(n for n, _w, _d in program.controls)
     proof["placed"], proof["forward"] = placed, []
@@ -1031,6 +1226,7 @@ def _reorder(program, body, slots, base, observed, known, proof) -> Reordered:
         counts(inline(program.body, program.procs), base),
         counts(out, base),
         paths,
+        native,
         known,
     )
 
@@ -1042,14 +1238,24 @@ def _wild(e) -> list:
     return [n.a for n in walk(e) if isinstance(n, Rd) and span(n.a) == FULL]
 
 
-def _logged(body, slots: Sequence[Slot], base: int, cells: Sequence[int]) -> list:
-    """``body`` with each SID store appended to the log variables instead of memory, and
-    ``alias`` set where an unbounded read may hit one of ``cells``."""
+def log_size(body, result: "Reordered", base: int) -> int:
+    """The entries a path through the instrumented ``body`` may log: the live slots'
+    flushes and the native stores."""
+    size = len(live_slots(result.slots, result.native)) + 1
+    size += sum(peak(body, base + r) for r in result.native)
+    if size > 255:
+        raise OrderError(f"a path may log {size} writes: use prove")
+    return size
+
+
+def _logged(body, size: int, base: int, cells: Sequence[int]) -> list:
+    """``body`` with each SID store appended to the ``size`` log variables instead of
+    memory, and ``alias`` set where an unbounded read may hit one of ``cells``."""
     regs = frozenset(range(base, base + REGS))
 
     def log(reg, value) -> list:
         out = [("set", "log_t", value)]
-        for i in range(len(slots) + 1):
+        for i in range(size):
             at = Op("eq", 1, (V("log_n", 8), K(i, 8)))
             out += [
                 ("set", f"log_r{i}", Op("ite", 8, (at, K(reg, 8), V(f"log_r{i}", 8)))),
@@ -1078,9 +1284,7 @@ def _logged(body, slots: Sequence[Slot], base: int, cells: Sequence[int]) -> lis
         return alias(s) + [s]
 
     head = [("set", "alias", FALSE), ("set", "log_n", K(0, 8))]
-    head += [
-        ("set", f"log_{c}{i}", K(0, 8)) for i in range(len(slots) + 1) for c in "rv"
-    ]
+    head += [("set", f"log_{c}{i}", K(0, 8)) for i in range(size) for c in "rv"]
     return head + rewrite(body, lambda e: e, stmt)
 
 
@@ -1105,10 +1309,13 @@ def check(
 
 
 def _check(original, result, base, timeout_ms, progress) -> Optional[tuple]:
-    flushes = [flush(s, base) for s in result.slots]
+    flushes = [flush(s, base) for s in live_slots(result.slots, result.native)]
     reference = rewrite(
         instrument(
-            split(inline(original.body, original.procs), base), result.slots, base
+            split(inline(original.body, original.procs), base),
+            result.slots,
+            base,
+            result.native,
         )
         + [("finish",)],
         lambda e: e,
@@ -1136,13 +1343,14 @@ def equal(
     """None if the two instrumented ``bodies`` log the same SID writes and leave the
     same memory and controls outside the SID and ``result``'s promoted cells, under
     ``result``'s premises; else ``(what differs, z3 model or None)``."""
-    slots, cells = result.slots, result.promoted
+    cells = result.promoted
+    size = log_size(bodies[0], result, base)
     memo: dict = {}
     a, b = (
         smt.step(
             replace(
                 original,
-                body=_logged(body, slots, base, [*cells, *range(base, base + REGS)]),
+                body=_logged(body, size, base, [*cells, *range(base, base + REGS)]),
                 procs={},
             ),
             smt.symbolic_memory("pre"),
@@ -1167,7 +1375,7 @@ def equal(
         claims["memory"] = z3.And(
             *away, smt.select(a.mem, probe, memo) != smt.select(b.mem, probe, memo)
         )
-    keys = ["log_n"] + [f"log_{c}{i}" for i in range(len(slots) + 1) for c in "rv"]
+    keys = ["log_n"] + [f"log_{c}{i}" for i in range(size) for c in "rv"]
     claims.update(
         (n, a.env[n] != b.env[n]) for n in keys + [n for n, _w, _d in original.controls]
     )
@@ -1243,9 +1451,13 @@ def compare(make, order, frames: int, base: int = SID, **options) -> Tuple:
     for result in results:
         if result.roundtrip is not None:
             return f"emitted spec differs: {result.roundtrip}", results
+    native = frozenset().union(*(r.native for r in results))
     for frame, (old, new) in enumerate(zip(writes, new_writes)):
-        if kept(old, slots) != new:
-            return f"frame {frame}: writes {new}, keeps {kept(old, slots)}", results
+        if kept(old, slots, native) != new:
+            return (
+                f"frame {frame}: writes {new}, keeps {kept(old, slots, native)}",
+                results,
+            )
     rows = np.flatnonzero((grid != new_grid).any(axis=1))
     return (f"frame {rows[0]}: grid differs" if len(rows) else None), results
 

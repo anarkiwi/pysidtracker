@@ -110,6 +110,9 @@ cell walker_owner: u8 @ 0x14ec;
 
 machine defmon_ordered {
   step {
+    let t: u8 = (mem[0x103b] ^ mem[0x103d]);
+    let t_2: u8 = (mem[0x106c] ^ mem[0x106e]);
+    let t_3: u8 = (mem[0x109d] ^ mem[0x109f]);
     let c: bool = false;
     if (op_hi == 0xe9) {
       c := !((cut_lo < cut_step_lo) || (cut_lo == cut_step_lo));
@@ -134,33 +137,33 @@ machine defmon_ordered {
     sid[FC_HI] := out;
     sid[RES_FILT] := res;
     sid[MODE_VOL] := (fv | 0xf);
-    sid[V0_AD] := mem[0x1039];
     sid[V0_SR] := mem[0x1037];
-    sid[V0_CTRL] := (mem[0x103b] ^ mem[0x103d]);
+    sid[V0_AD] := mem[0x1039];
+    sid[V0_CTRL] := t;
     sid[V0_FREQ_LO] := voice0_freq_lo;
     sid[V0_FREQ_HI] := voice0_freq_hi;
     sid[V0_PW_LO] := voice0_lo;
     sid[V0_PW_HI] := voice0_hi;
-    sid[V1_AD] := mem[0x106a];
     sid[V1_SR] := mem[0x1068];
-    sid[V1_CTRL] := (mem[0x106c] ^ mem[0x106e]);
+    sid[V1_AD] := mem[0x106a];
+    sid[V1_CTRL] := t_2;
     sid[V1_FREQ_LO] := voice1_freq_lo;
     sid[V1_FREQ_HI] := voice1_freq_hi;
     sid[V1_PW_LO] := voice1_lo;
     sid[V1_PW_HI] := voice1_hi;
-    sid[V2_AD] := mem[0x109b];
     sid[V2_SR] := mem[0x1099];
-    sid[V2_CTRL] := (mem[0x109d] ^ mem[0x109f]);
+    sid[V2_AD] := mem[0x109b];
+    sid[V2_CTRL] := t_3;
     sid[V2_FREQ_LO] := voice2_freq_lo;
     sid[V2_FREQ_HI] := voice2_freq_hi;
     sid[V2_PW_LO] := voice2_lo;
     sid[V2_PW_HI] := voice2_hi;
     if ((trigger & 0x80) != 0) {
-      let t: u8 = (trigger & 0xf);
-      trigger := t;
-      walker_c0 := t;
-      walker_c1 := t;
-      walker_c2 := t;
+      let t_4: u8 = (trigger & 0xf);
+      trigger := t_4;
+      walker_c0 := t_4;
+      walker_c1 := t_4;
+      walker_c2 := t_4;
       let y: u8 = cursor;
       if ((v1[cursor] & 0x80) != 0) {
         if (v3[cursor] == 0) {
