@@ -403,9 +403,10 @@ def prove(
         ),
         [*end, *program.inputs],
     )
+    live = O.live_slots(result.slots, result.native)
     checks = {
-        "flush order": None if result.paths == {result.slots} else "out of order",
-        "flushed after the last store": flushed_last(stages["placed"], result.slots),
+        "flush order": None if result.paths == {live} else "out of order",
+        "flushed after the last store": flushed_last(stages["placed"], live),
         "result": None if final == result.program.body else "differs from the passes",
     }
     sizes = var_widths(stages["nested"], stages["placed"], stages["forwarded"])

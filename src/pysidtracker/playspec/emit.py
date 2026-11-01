@@ -187,12 +187,11 @@ def _insert(stmts, path, inserts) -> list:
 
 def _stem(name: str, reg: Dict[int, str]) -> str:
     """A readable base name for IR variable ``name``."""
-    found = re.fullmatch(r"([oh])([12])_(\d+)", name)
+    found = re.fullmatch(r"(o|h|last|seen)(\d*)_(\d+)", name)
     if found:
-        kind = "out" if found.group(1) == "o" else "wrote"
-        return (
-            f"{kind}{'2' if found.group(2) == '2' else ''}_{reg[int(found.group(3))]}"
-        )
+        kind = {"o": "out", "h": "wrote"}.get(found.group(1), found.group(1))
+        k = found.group(2) if found.group(2) not in ("", "1") else ""
+        return f"{kind}{k}_{reg.get(int(found.group(3)), 'native')}"
     if name.startswith("g_"):
         return "cond"
     if name.startswith("cpu_"):

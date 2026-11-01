@@ -53,26 +53,14 @@ machine futurecomposer_ordered {
     let out_fc_hi: u8 = 0;
     let out_res_filt: u8 = 0;
     let out_mode_vol: u8 = 0;
-    let out_v0_ad: u8 = 0;
-    let out_v0_sr: u8 = 0;
-    let out2_v0_ctrl: u8 = 0;
-    let out_v0_ctrl: u8 = 0;
     let out_v0_freq_lo: u8 = 0;
     let out_v0_freq_hi: u8 = 0;
     let out_v0_pw_lo: u8 = 0;
     let out_v0_pw_hi: u8 = 0;
-    let out_v1_ad: u8 = 0;
-    let out_v1_sr: u8 = 0;
-    let out2_v1_ctrl: u8 = 0;
-    let out_v1_ctrl: u8 = 0;
     let out_v1_freq_lo: u8 = 0;
     let out_v1_freq_hi: u8 = 0;
     let out_v1_pw_lo: u8 = 0;
     let out_v1_pw_hi: u8 = 0;
-    let out_v2_ad: u8 = 0;
-    let out_v2_sr: u8 = 0;
-    let out2_v2_ctrl: u8 = 0;
-    let out_v2_ctrl: u8 = 0;
     let out_v2_freq_lo: u8 = 0;
     let out_v2_freq_hi: u8 = 0;
     let out_v2_pw_lo: u8 = 0;
@@ -81,26 +69,14 @@ machine futurecomposer_ordered {
     let wrote_fc_hi: bool = false;
     let wrote_res_filt: bool = false;
     let wrote_mode_vol: bool = false;
-    let wrote_v0_ad: bool = false;
-    let wrote_v0_sr: bool = false;
-    let wrote2_v0_ctrl: bool = false;
-    let wrote_v0_ctrl: bool = false;
     let wrote_v0_freq_lo: bool = false;
     let wrote_v0_freq_hi: bool = false;
     let wrote_v0_pw_lo: bool = false;
     let wrote_v0_pw_hi: bool = false;
-    let wrote_v1_ad: bool = false;
-    let wrote_v1_sr: bool = false;
-    let wrote2_v1_ctrl: bool = false;
-    let wrote_v1_ctrl: bool = false;
     let wrote_v1_freq_lo: bool = false;
     let wrote_v1_freq_hi: bool = false;
     let wrote_v1_pw_lo: bool = false;
     let wrote_v1_pw_hi: bool = false;
-    let wrote_v2_ad: bool = false;
-    let wrote_v2_sr: bool = false;
-    let wrote2_v2_ctrl: bool = false;
-    let wrote_v2_ctrl: bool = false;
     let wrote_v2_freq_lo: bool = false;
     let wrote_v2_freq_hi: bool = false;
     let wrote_v2_pw_lo: bool = false;
@@ -388,24 +364,15 @@ machine futurecomposer_ordered {
               wrote_fc_hi := true;
             }
             ret_wave_arp_step := false;
-            let cond_2: bool = ((ac & 0x10) == 0);
-            let cond_3: bool = false;
-            let cond_4: bool = false;
-            let cond_5: bool = false;
             if ((ac & 0x10) == 0) {
-              cond_4 := ((ac & 0x80) != 0);
               if ((ac & 0x80) != 0) {
-                cond_3 := (mem[0x2144] < 2);
                 if (mem[0x2144] < 2) {
                   out_v2_freq_hi := 0x48;
                   wrote_v2_freq_hi := true;
                   out_v2_freq_lo := 0;
                   wrote_v2_freq_lo := true;
                   mem[0x217b] := 0x81;
-                  out2_v2_ctrl := 0;
-                  wrote2_v2_ctrl := false;
-                  out_v2_ctrl := mem[0x217b];
-                  wrote_v2_ctrl := true;
+                  sid[V2_CTRL] := mem[0x217b];
                   ret_wave_arp_step := true;
                 } else {
                   out_v2_freq_lo := mem[0x213e];
@@ -415,7 +382,6 @@ machine futurecomposer_ordered {
                   mem[0x217b] := (mem[0x212f] & 0xfe);
                 }
               }
-              cond_5 := !ret_wave_arp_step;
               if !ret_wave_arp_step {
                 if ((ac & 4) != 0) {
                   nb8 := (mem[0x2163] - 1);
@@ -432,10 +398,7 @@ machine futurecomposer_ordered {
                   out_v2_freq_hi := sv_6;
                   wrote_v2_freq_hi := true;
                 }
-                out2_v2_ctrl := ite(cond_4, ite(cond_3, mem[0x217b], 0), 0);
-                wrote2_v2_ctrl := ite(cond_4, cond_3, false);
-                out_v2_ctrl := mem[0x217b];
-                wrote_v2_ctrl := true;
+                sid[V2_CTRL] := mem[0x217b];
                 ret_wave_arp_step := true;
               }
             }
@@ -448,10 +411,7 @@ machine futurecomposer_ordered {
               m_1cb7 := lo(w16_2);
               m_1cb8 := hi(w16_2);
               if (0xf <= mem[0x2144]) {
-                out2_v2_ctrl := ite(cond_2, ite(cond_5, mem[0x217b], ite(cond_4, ite(cond_3, mem[0x217b], 0), 0)), 0);
-                wrote2_v2_ctrl := ite(cond_2, ite(cond_5, true, ite(cond_4, cond_3, false)), false);
-                out_v2_ctrl := mem[0x217b];
-                wrote_v2_ctrl := true;
+                sid[V2_CTRL] := mem[0x217b];
               } else {
                 idx := (mem[0x2144] - 1);
                 mem[0x217b] := mem[(word(m_1caf, m_1cb0) + u16(idx))];
@@ -471,10 +431,7 @@ machine futurecomposer_ordered {
                   out_v2_freq_lo := 0;
                   wrote_v2_freq_lo := true;
                 }
-                out2_v2_ctrl := out_v2_ctrl;
-                wrote2_v2_ctrl := ite(cond_2, ite(cond_5, true, ite(cond_4, cond_3, false)), false);
-                out_v2_ctrl := mem[0x217b];
-                wrote_v2_ctrl := true;
+                sid[V2_CTRL] := mem[0x217b];
               }
             }
           } else {
@@ -484,24 +441,15 @@ machine futurecomposer_ordered {
               out_fc_hi := 0x40;
               wrote_fc_hi := true;
               ret_wave_arp_step := false;
-              let cond_6: bool = ((ac & 0x10) == 0);
-              let cond_7: bool = false;
-              let cond_8: bool = false;
-              let cond_9: bool = false;
               if ((ac & 0x10) == 0) {
-                cond_8 := ((ac & 0x80) != 0);
                 if ((ac & 0x80) != 0) {
-                  cond_7 := (mem[0x2144] < 2);
                   if (mem[0x2144] < 2) {
                     out_v2_freq_hi := 0x48;
                     wrote_v2_freq_hi := true;
                     out_v2_freq_lo := 0;
                     wrote_v2_freq_lo := true;
                     mem[0x217b] := 0x81;
-                    out2_v2_ctrl := 0;
-                    wrote2_v2_ctrl := false;
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                     ret_wave_arp_step := true;
                   } else {
                     out_v2_freq_lo := mem[0x213e];
@@ -511,7 +459,6 @@ machine futurecomposer_ordered {
                     mem[0x217b] := (mem[0x212f] & 0xfe);
                   }
                 }
-                cond_9 := !ret_wave_arp_step;
                 if !ret_wave_arp_step {
                   if ((ac & 4) != 0) {
                     nb8 := (mem[0x2163] - 1);
@@ -528,10 +475,7 @@ machine futurecomposer_ordered {
                     out_v2_freq_hi := sv_11;
                     wrote_v2_freq_hi := true;
                   }
-                  out2_v2_ctrl := ite(cond_8, ite(cond_7, mem[0x217b], 0), 0);
-                  wrote2_v2_ctrl := ite(cond_8, cond_7, false);
-                  out_v2_ctrl := mem[0x217b];
-                  wrote_v2_ctrl := true;
+                  sid[V2_CTRL] := mem[0x217b];
                   ret_wave_arp_step := true;
                 }
               }
@@ -544,10 +488,7 @@ machine futurecomposer_ordered {
                 m_1cb7 := lo(w16_2);
                 m_1cb8 := hi(w16_2);
                 if (0xf <= mem[0x2144]) {
-                  out2_v2_ctrl := ite(cond_6, ite(cond_9, mem[0x217b], ite(cond_8, ite(cond_7, mem[0x217b], 0), 0)), 0);
-                  wrote2_v2_ctrl := ite(cond_6, ite(cond_9, true, ite(cond_8, cond_7, false)), false);
-                  out_v2_ctrl := mem[0x217b];
-                  wrote_v2_ctrl := true;
+                  sid[V2_CTRL] := mem[0x217b];
                 } else {
                   idx := (mem[0x2144] - 1);
                   mem[0x217b] := mem[(word(m_1caf, m_1cb0) + u16(idx))];
@@ -567,10 +508,7 @@ machine futurecomposer_ordered {
                     out_v2_freq_lo := 0;
                     wrote_v2_freq_lo := true;
                   }
-                  out2_v2_ctrl := out_v2_ctrl;
-                  wrote2_v2_ctrl := ite(cond_6, ite(cond_9, true, ite(cond_8, cond_7, false)), false);
-                  out_v2_ctrl := mem[0x217b];
-                  wrote_v2_ctrl := true;
+                  sid[V2_CTRL] := mem[0x217b];
                 }
               }
             } else {
@@ -602,15 +540,7 @@ machine futurecomposer_ordered {
                   }
                 }
               }
-              let cond_10: bool = !handled;
-              let cond_11: bool = false;
-              let cond_12: bool = false;
-              let cond_13: bool = false;
-              let cond_14: bool = false;
-              let cond_15: bool = false;
-              let cond_16: bool = false;
               if !handled {
-                cond_16 := (1 <= mem[0x2144]);
                 if (1 <= mem[0x2144]) {
                   if ((c9 & 4) == 0) {
                     out_res_filt := (c9 + 4);
@@ -621,21 +551,15 @@ machine futurecomposer_ordered {
                   wrote_fc_hi := true;
                 } else {
                   ret_wave_arp_step := false;
-                  cond_14 := ((ac & 0x10) == 0);
                   if ((ac & 0x10) == 0) {
-                    cond_12 := ((ac & 0x80) != 0);
                     if ((ac & 0x80) != 0) {
-                      cond_11 := (mem[0x2144] < 2);
                       if (mem[0x2144] < 2) {
                         out_v2_freq_hi := 0x48;
                         wrote_v2_freq_hi := true;
                         out_v2_freq_lo := 0;
                         wrote_v2_freq_lo := true;
                         mem[0x217b] := 0x81;
-                        out2_v2_ctrl := 0;
-                        wrote2_v2_ctrl := false;
-                        out_v2_ctrl := mem[0x217b];
-                        wrote_v2_ctrl := true;
+                        sid[V2_CTRL] := mem[0x217b];
                         ret_wave_arp_step := true;
                       } else {
                         out_v2_freq_lo := mem[0x213e];
@@ -645,7 +569,6 @@ machine futurecomposer_ordered {
                         mem[0x217b] := (mem[0x212f] & 0xfe);
                       }
                     }
-                    cond_13 := !ret_wave_arp_step;
                     if !ret_wave_arp_step {
                       if ((ac & 4) != 0) {
                         nb8 := (mem[0x2163] - 1);
@@ -662,14 +585,10 @@ machine futurecomposer_ordered {
                         out_v2_freq_hi := sv_16;
                         wrote_v2_freq_hi := true;
                       }
-                      out2_v2_ctrl := ite(cond_12, ite(cond_11, mem[0x217b], 0), 0);
-                      wrote2_v2_ctrl := ite(cond_12, cond_11, false);
-                      out_v2_ctrl := mem[0x217b];
-                      wrote_v2_ctrl := true;
+                      sid[V2_CTRL] := mem[0x217b];
                       ret_wave_arp_step := true;
                     }
                   }
-                  cond_15 := !ret_wave_arp_step;
                   if !ret_wave_arp_step {
                     y := (vib & 0xf);
                     w16 := word(wprog[y], wprog[(y + 2)]);
@@ -679,10 +598,7 @@ machine futurecomposer_ordered {
                     m_1cb7 := lo(w16_2);
                     m_1cb8 := hi(w16_2);
                     if (0xf <= mem[0x2144]) {
-                      out2_v2_ctrl := ite(cond_14, ite(cond_13, mem[0x217b], ite(cond_12, ite(cond_11, mem[0x217b], 0), 0)), 0);
-                      wrote2_v2_ctrl := ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false);
-                      out_v2_ctrl := mem[0x217b];
-                      wrote_v2_ctrl := true;
+                      sid[V2_CTRL] := mem[0x217b];
                     } else {
                       idx := (mem[0x2144] - 1);
                       mem[0x217b] := mem[(word(m_1caf, m_1cb0) + u16(idx))];
@@ -702,10 +618,7 @@ machine futurecomposer_ordered {
                         out_v2_freq_lo := 0;
                         wrote_v2_freq_lo := true;
                       }
-                      out2_v2_ctrl := out_v2_ctrl;
-                      wrote2_v2_ctrl := ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false);
-                      out_v2_ctrl := mem[0x217b];
-                      wrote_v2_ctrl := true;
+                      sid[V2_CTRL] := mem[0x217b];
                     }
                   }
                   ret_filter_program := true;
@@ -713,24 +626,15 @@ machine futurecomposer_ordered {
               }
               if !ret_filter_program {
                 ret_wave_arp_step := false;
-                let cond_17: bool = ((ac & 0x10) == 0);
-                let cond_18: bool = false;
-                let cond_19: bool = false;
-                let cond_20: bool = false;
                 if ((ac & 0x10) == 0) {
-                  cond_19 := ((ac & 0x80) != 0);
                   if ((ac & 0x80) != 0) {
-                    cond_18 := (mem[0x2144] < 2);
                     if (mem[0x2144] < 2) {
                       out_v2_freq_hi := 0x48;
                       wrote_v2_freq_hi := true;
                       out_v2_freq_lo := 0;
                       wrote_v2_freq_lo := true;
                       mem[0x217b] := 0x81;
-                      out2_v2_ctrl := out_v2_ctrl;
-                      wrote2_v2_ctrl := ite(cond_10, ite(cond_16, false, ite(cond_15, true, ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false))), false);
-                      out_v2_ctrl := mem[0x217b];
-                      wrote_v2_ctrl := true;
+                      sid[V2_CTRL] := mem[0x217b];
                       ret_wave_arp_step := true;
                     } else {
                       out_v2_freq_lo := mem[0x213e];
@@ -740,7 +644,6 @@ machine futurecomposer_ordered {
                       mem[0x217b] := (mem[0x212f] & 0xfe);
                     }
                   }
-                  cond_20 := !ret_wave_arp_step;
                   if !ret_wave_arp_step {
                     if ((ac & 4) != 0) {
                       nb8 := (mem[0x2163] - 1);
@@ -757,10 +660,7 @@ machine futurecomposer_ordered {
                       out_v2_freq_hi := sv_21;
                       wrote_v2_freq_hi := true;
                     }
-                    out2_v2_ctrl := out_v2_ctrl;
-                    wrote2_v2_ctrl := ite(cond_19, ite(cond_18, true, ite(cond_10, ite(cond_16, false, ite(cond_15, true, ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false))), false)), ite(cond_10, ite(cond_16, false, ite(cond_15, true, ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false))), false));
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                     ret_wave_arp_step := true;
                   }
                 }
@@ -773,10 +673,7 @@ machine futurecomposer_ordered {
                   m_1cb7 := lo(w16_2);
                   m_1cb8 := hi(w16_2);
                   if (0xf <= mem[0x2144]) {
-                    out2_v2_ctrl := out_v2_ctrl;
-                    wrote2_v2_ctrl := ite(cond_17, ite(cond_20, true, ite(cond_19, ite(cond_18, true, ite(cond_10, ite(cond_16, false, ite(cond_15, true, ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false))), false)), ite(cond_10, ite(cond_16, false, ite(cond_15, true, ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false))), false))), ite(cond_10, ite(cond_16, false, ite(cond_15, true, ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false))), false));
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                   } else {
                     idx := (mem[0x2144] - 1);
                     mem[0x217b] := mem[(word(m_1caf, m_1cb0) + u16(idx))];
@@ -796,10 +693,7 @@ machine futurecomposer_ordered {
                       out_v2_freq_lo := 0;
                       wrote_v2_freq_lo := true;
                     }
-                    out2_v2_ctrl := out_v2_ctrl;
-                    wrote2_v2_ctrl := ite(cond_17, ite(cond_20, true, ite(cond_19, ite(cond_18, true, ite(cond_10, ite(cond_16, false, ite(cond_15, true, ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false))), false)), ite(cond_10, ite(cond_16, false, ite(cond_15, true, ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false))), false))), ite(cond_10, ite(cond_16, false, ite(cond_15, true, ite(cond_14, ite(cond_13, true, ite(cond_12, cond_11, false)), false))), false));
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                   }
                 }
               }
@@ -818,14 +712,9 @@ machine futurecomposer_ordered {
             wrote_v0_pw_lo := true;
             out_v0_pw_hi := 0;
             wrote_v0_pw_hi := true;
-            out2_v0_ctrl := 0;
-            wrote2_v0_ctrl := false;
-            out_v0_ctrl := 0;
-            wrote_v0_ctrl := true;
-            out_v0_ad := 0;
-            wrote_v0_ad := true;
-            out_v0_sr := 0;
-            wrote_v0_sr := true;
+            sid[V0_CTRL] := 0;
+            sid[V0_AD] := 0;
+            sid[V0_SR] := 0;
             out_v1_freq_lo := 0;
             wrote_v1_freq_lo := true;
             out_v1_freq_hi := 0;
@@ -834,14 +723,9 @@ machine futurecomposer_ordered {
             wrote_v1_pw_lo := true;
             out_v1_pw_hi := 0;
             wrote_v1_pw_hi := true;
-            out2_v1_ctrl := 0;
-            wrote2_v1_ctrl := false;
-            out_v1_ctrl := 0;
-            wrote_v1_ctrl := true;
-            out_v1_ad := 0;
-            wrote_v1_ad := true;
-            out_v1_sr := 0;
-            wrote_v1_sr := true;
+            sid[V1_CTRL] := 0;
+            sid[V1_AD] := 0;
+            sid[V1_SR] := 0;
             out_v2_freq_lo := 0;
             wrote_v2_freq_lo := true;
             out_v2_freq_hi := 0;
@@ -850,14 +734,9 @@ machine futurecomposer_ordered {
             wrote_v2_pw_lo := true;
             out_v2_pw_hi := 0;
             wrote_v2_pw_hi := true;
-            out2_v2_ctrl := 0;
-            wrote2_v2_ctrl := false;
-            out_v2_ctrl := 0;
-            wrote_v2_ctrl := true;
-            out_v2_ad := 0;
-            wrote_v2_ad := true;
-            out_v2_sr := 0;
-            wrote_v2_sr := true;
+            sid[V2_CTRL] := 0;
+            sid[V2_AD] := 0;
+            sid[V2_SR] := 0;
             out_fc_lo := 0;
             wrote_fc_lo := true;
             out_fc_hi := 0;
@@ -891,14 +770,9 @@ machine futurecomposer_ordered {
               wrote_v0_pw_lo := true;
               out_v0_pw_hi := 0;
               wrote_v0_pw_hi := true;
-              out2_v0_ctrl := out_v0_ctrl;
-              wrote2_v0_ctrl := wrote_v0_ctrl;
-              out_v0_ctrl := 0;
-              wrote_v0_ctrl := true;
-              out_v0_ad := 0;
-              wrote_v0_ad := true;
-              out_v0_sr := 0;
-              wrote_v0_sr := true;
+              sid[V0_CTRL] := 0;
+              sid[V0_AD] := 0;
+              sid[V0_SR] := 0;
               out_v1_freq_lo := 0;
               wrote_v1_freq_lo := true;
               out_v1_freq_hi := 0;
@@ -907,14 +781,9 @@ machine futurecomposer_ordered {
               wrote_v1_pw_lo := true;
               out_v1_pw_hi := 0;
               wrote_v1_pw_hi := true;
-              out2_v1_ctrl := out_v1_ctrl;
-              wrote2_v1_ctrl := wrote_v1_ctrl;
-              out_v1_ctrl := 0;
-              wrote_v1_ctrl := true;
-              out_v1_ad := 0;
-              wrote_v1_ad := true;
-              out_v1_sr := 0;
-              wrote_v1_sr := true;
+              sid[V1_CTRL] := 0;
+              sid[V1_AD] := 0;
+              sid[V1_SR] := 0;
               out_v2_freq_lo := 0;
               wrote_v2_freq_lo := true;
               out_v2_freq_hi := 0;
@@ -923,14 +792,9 @@ machine futurecomposer_ordered {
               wrote_v2_pw_lo := true;
               out_v2_pw_hi := 0;
               wrote_v2_pw_hi := true;
-              out2_v2_ctrl := out_v2_ctrl;
-              wrote2_v2_ctrl := wrote_v2_ctrl;
-              out_v2_ctrl := 0;
-              wrote_v2_ctrl := true;
-              out_v2_ad := 0;
-              wrote_v2_ad := true;
-              out_v2_sr := 0;
-              wrote_v2_sr := true;
+              sid[V2_CTRL] := 0;
+              sid[V2_AD] := 0;
+              sid[V2_SR] := 0;
               out_fc_lo := 0;
               wrote_fc_lo := true;
               out_fc_hi := 0;
@@ -1010,10 +874,7 @@ machine futurecomposer_ordered {
                   mem[0x2123] := (mem[0x2123] + 1);
                 }
               }
-              out2_v2_ctrl := out_v2_ctrl;
-              wrote2_v2_ctrl := wrote_v2_ctrl;
-              out_v2_ctrl := mem[0x217b];
-              wrote_v2_ctrl := true;
+              sid[V2_CTRL] := mem[0x217b];
               ret_pattern_walk := true;
             } else {
               if ((f8 & 0xf0) == 0xe0) {
@@ -1045,10 +906,7 @@ machine futurecomposer_ordered {
                   if advance {
                     mem[0x2123] := (mem[0x2123] + 1);
                   }
-                  out2_v2_ctrl := out_v2_ctrl;
-                  wrote2_v2_ctrl := wrote_v2_ctrl;
-                  out_v2_ctrl := mem[0x217b];
-                  wrote_v2_ctrl := true;
+                  sid[V2_CTRL] := mem[0x217b];
                 }
                 cur := (cur + 1);
                 if (b_2 == 0xff) {
@@ -1075,10 +933,7 @@ machine futurecomposer_ordered {
                     if advance {
                       mem[0x2123] := (mem[0x2123] + 1);
                     }
-                    out2_v2_ctrl := out_v2_ctrl;
-                    wrote2_v2_ctrl := wrote_v2_ctrl;
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                   }
                   cur := (cur + 1);
                   if (b_2 == 0xff) {
@@ -1099,11 +954,9 @@ machine futurecomposer_ordered {
                   ins_2 := (mem[0x2135] << 3);
                   record_base := (0x2188 + u16(ins_2));
                   let sv_25: u8 = instr_tab[(u16(ins_2) + 2)];
-                  out_v2_ad := sv_25;
-                  wrote_v2_ad := true;
+                  sid[V2_AD] := sv_25;
                   let sv_26: u8 = instr_tab[(u16(ins_2) + 3)];
-                  out_v2_sr := sv_26;
-                  wrote_v2_sr := true;
+                  sid[V2_SR] := sv_26;
                   pulse_ctrl := instr_tab[ins_2];
                   wave := instr_tab[(u16(ins_2) + 1)];
                   mem[0x212f] := wave;
@@ -1133,10 +986,7 @@ machine futurecomposer_ordered {
                       mem[0x2123] := (mem[0x2123] + 1);
                     }
                   }
-                  out2_v2_ctrl := out_v2_ctrl;
-                  wrote2_v2_ctrl := wrote_v2_ctrl;
-                  out_v2_ctrl := mem[0x217b];
-                  wrote_v2_ctrl := true;
+                  sid[V2_CTRL] := mem[0x217b];
                   ret_pattern_walk := true;
                 }
               }
@@ -1176,10 +1026,7 @@ machine futurecomposer_ordered {
                     mem[0x2123] := (mem[0x2123] + 1);
                   }
                 }
-                out2_v2_ctrl := out_v2_ctrl;
-                wrote2_v2_ctrl := wrote_v2_ctrl;
-                out_v2_ctrl := mem[0x217b];
-                wrote_v2_ctrl := true;
+                sid[V2_CTRL] := mem[0x217b];
                 ret_pattern_walk := true;
               } elif !ret_pattern_walk {
                 if ((f8 & 0xf0) == 0xe0) {
@@ -1211,10 +1058,7 @@ machine futurecomposer_ordered {
                     if advance {
                       mem[0x2123] := (mem[0x2123] + 1);
                     }
-                    out2_v2_ctrl := out_v2_ctrl;
-                    wrote2_v2_ctrl := wrote_v2_ctrl;
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                   }
                   cur := (cur + 1);
                   if (b_2 == 0xff) {
@@ -1241,10 +1085,7 @@ machine futurecomposer_ordered {
                       if advance {
                         mem[0x2123] := (mem[0x2123] + 1);
                       }
-                      out2_v2_ctrl := out_v2_ctrl;
-                      wrote2_v2_ctrl := wrote_v2_ctrl;
-                      out_v2_ctrl := mem[0x217b];
-                      wrote_v2_ctrl := true;
+                      sid[V2_CTRL] := mem[0x217b];
                     }
                     cur := (cur + 1);
                     if (b_2 == 0xff) {
@@ -1265,11 +1106,9 @@ machine futurecomposer_ordered {
                     ins_2 := (mem[0x2135] << 3);
                     record_base := (0x2188 + u16(ins_2));
                     sv_27 := instr_tab[(u16(ins_2) + 2)];
-                    out_v2_ad := sv_27;
-                    wrote_v2_ad := true;
+                    sid[V2_AD] := sv_27;
                     sv_28 := instr_tab[(u16(ins_2) + 3)];
-                    out_v2_sr := sv_28;
-                    wrote_v2_sr := true;
+                    sid[V2_SR] := sv_28;
                     pulse_ctrl := instr_tab[ins_2];
                     wave := instr_tab[(u16(ins_2) + 1)];
                     mem[0x212f] := wave;
@@ -1299,10 +1138,7 @@ machine futurecomposer_ordered {
                         mem[0x2123] := (mem[0x2123] + 1);
                       }
                     }
-                    out2_v2_ctrl := out_v2_ctrl;
-                    wrote2_v2_ctrl := wrote_v2_ctrl;
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                     ret_pattern_walk := true;
                   }
                 }
@@ -1496,24 +1332,15 @@ machine futurecomposer_ordered {
             wrote_fc_hi := true;
           }
           ret_wave_arp_step := false;
-          let cond_21: bool = ((ac & 0x10) == 0);
-          let cond_22: bool = false;
-          let cond_23: bool = false;
-          let cond_24: bool = false;
           if ((ac & 0x10) == 0) {
-            cond_23 := ((ac & 0x80) != 0);
             if ((ac & 0x80) != 0) {
-              cond_22 := (mem[0x2144] < 2);
               if (mem[0x2144] < 2) {
                 out_v2_freq_hi := 0x48;
                 wrote_v2_freq_hi := true;
                 out_v2_freq_lo := 0;
                 wrote_v2_freq_lo := true;
                 mem[0x217b] := 0x81;
-                out2_v2_ctrl := 0;
-                wrote2_v2_ctrl := false;
-                out_v2_ctrl := mem[0x217b];
-                wrote_v2_ctrl := true;
+                sid[V2_CTRL] := mem[0x217b];
                 ret_wave_arp_step := true;
               } else {
                 out_v2_freq_lo := mem[0x213e];
@@ -1523,7 +1350,6 @@ machine futurecomposer_ordered {
                 mem[0x217b] := (mem[0x212f] & 0xfe);
               }
             }
-            cond_24 := !ret_wave_arp_step;
             if !ret_wave_arp_step {
               if ((ac & 4) != 0) {
                 nb8 := (mem[0x2163] - 1);
@@ -1540,10 +1366,7 @@ machine futurecomposer_ordered {
                 out_v2_freq_hi := sv_34;
                 wrote_v2_freq_hi := true;
               }
-              out2_v2_ctrl := ite(cond_23, ite(cond_22, mem[0x217b], 0), 0);
-              wrote2_v2_ctrl := ite(cond_23, cond_22, false);
-              out_v2_ctrl := mem[0x217b];
-              wrote_v2_ctrl := true;
+              sid[V2_CTRL] := mem[0x217b];
               ret_wave_arp_step := true;
             }
           }
@@ -1556,10 +1379,7 @@ machine futurecomposer_ordered {
             m_1cb7 := lo(w16_2);
             m_1cb8 := hi(w16_2);
             if (0xf <= mem[0x2144]) {
-              out2_v2_ctrl := ite(cond_21, ite(cond_24, mem[0x217b], ite(cond_23, ite(cond_22, mem[0x217b], 0), 0)), 0);
-              wrote2_v2_ctrl := ite(cond_21, ite(cond_24, true, ite(cond_23, cond_22, false)), false);
-              out_v2_ctrl := mem[0x217b];
-              wrote_v2_ctrl := true;
+              sid[V2_CTRL] := mem[0x217b];
             } else {
               idx := (mem[0x2144] - 1);
               mem[0x217b] := mem[(word(m_1caf, m_1cb0) + u16(idx))];
@@ -1579,10 +1399,7 @@ machine futurecomposer_ordered {
                 out_v2_freq_lo := 0;
                 wrote_v2_freq_lo := true;
               }
-              out2_v2_ctrl := out_v2_ctrl;
-              wrote2_v2_ctrl := ite(cond_21, ite(cond_24, true, ite(cond_23, cond_22, false)), false);
-              out_v2_ctrl := mem[0x217b];
-              wrote_v2_ctrl := true;
+              sid[V2_CTRL] := mem[0x217b];
             }
           }
         } else {
@@ -1592,24 +1409,15 @@ machine futurecomposer_ordered {
             out_fc_hi := 0x40;
             wrote_fc_hi := true;
             ret_wave_arp_step := false;
-            let cond_25: bool = ((ac & 0x10) == 0);
-            let cond_26: bool = false;
-            let cond_27: bool = false;
-            let cond_28: bool = false;
             if ((ac & 0x10) == 0) {
-              cond_27 := ((ac & 0x80) != 0);
               if ((ac & 0x80) != 0) {
-                cond_26 := (mem[0x2144] < 2);
                 if (mem[0x2144] < 2) {
                   out_v2_freq_hi := 0x48;
                   wrote_v2_freq_hi := true;
                   out_v2_freq_lo := 0;
                   wrote_v2_freq_lo := true;
                   mem[0x217b] := 0x81;
-                  out2_v2_ctrl := 0;
-                  wrote2_v2_ctrl := false;
-                  out_v2_ctrl := mem[0x217b];
-                  wrote_v2_ctrl := true;
+                  sid[V2_CTRL] := mem[0x217b];
                   ret_wave_arp_step := true;
                 } else {
                   out_v2_freq_lo := mem[0x213e];
@@ -1619,7 +1427,6 @@ machine futurecomposer_ordered {
                   mem[0x217b] := (mem[0x212f] & 0xfe);
                 }
               }
-              cond_28 := !ret_wave_arp_step;
               if !ret_wave_arp_step {
                 if ((ac & 4) != 0) {
                   nb8 := (mem[0x2163] - 1);
@@ -1636,10 +1443,7 @@ machine futurecomposer_ordered {
                   out_v2_freq_hi := sv_39;
                   wrote_v2_freq_hi := true;
                 }
-                out2_v2_ctrl := ite(cond_27, ite(cond_26, mem[0x217b], 0), 0);
-                wrote2_v2_ctrl := ite(cond_27, cond_26, false);
-                out_v2_ctrl := mem[0x217b];
-                wrote_v2_ctrl := true;
+                sid[V2_CTRL] := mem[0x217b];
                 ret_wave_arp_step := true;
               }
             }
@@ -1652,10 +1456,7 @@ machine futurecomposer_ordered {
               m_1cb7 := lo(w16_2);
               m_1cb8 := hi(w16_2);
               if (0xf <= mem[0x2144]) {
-                out2_v2_ctrl := ite(cond_25, ite(cond_28, mem[0x217b], ite(cond_27, ite(cond_26, mem[0x217b], 0), 0)), 0);
-                wrote2_v2_ctrl := ite(cond_25, ite(cond_28, true, ite(cond_27, cond_26, false)), false);
-                out_v2_ctrl := mem[0x217b];
-                wrote_v2_ctrl := true;
+                sid[V2_CTRL] := mem[0x217b];
               } else {
                 idx := (mem[0x2144] - 1);
                 mem[0x217b] := mem[(word(m_1caf, m_1cb0) + u16(idx))];
@@ -1675,10 +1476,7 @@ machine futurecomposer_ordered {
                   out_v2_freq_lo := 0;
                   wrote_v2_freq_lo := true;
                 }
-                out2_v2_ctrl := out_v2_ctrl;
-                wrote2_v2_ctrl := ite(cond_25, ite(cond_28, true, ite(cond_27, cond_26, false)), false);
-                out_v2_ctrl := mem[0x217b];
-                wrote_v2_ctrl := true;
+                sid[V2_CTRL] := mem[0x217b];
               }
             }
           } else {
@@ -1710,15 +1508,7 @@ machine futurecomposer_ordered {
                 }
               }
             }
-            let cond_29: bool = !handled;
-            let cond_30: bool = false;
-            let cond_31: bool = false;
-            let cond_32: bool = false;
-            let cond_33: bool = false;
-            let cond_34: bool = false;
-            let cond_35: bool = false;
             if !handled {
-              cond_35 := (1 <= mem[0x2144]);
               if (1 <= mem[0x2144]) {
                 if ((c9 & 4) == 0) {
                   out_res_filt := (c9 + 4);
@@ -1729,21 +1519,15 @@ machine futurecomposer_ordered {
                 wrote_fc_hi := true;
               } else {
                 ret_wave_arp_step := false;
-                cond_33 := ((ac & 0x10) == 0);
                 if ((ac & 0x10) == 0) {
-                  cond_31 := ((ac & 0x80) != 0);
                   if ((ac & 0x80) != 0) {
-                    cond_30 := (mem[0x2144] < 2);
                     if (mem[0x2144] < 2) {
                       out_v2_freq_hi := 0x48;
                       wrote_v2_freq_hi := true;
                       out_v2_freq_lo := 0;
                       wrote_v2_freq_lo := true;
                       mem[0x217b] := 0x81;
-                      out2_v2_ctrl := 0;
-                      wrote2_v2_ctrl := false;
-                      out_v2_ctrl := mem[0x217b];
-                      wrote_v2_ctrl := true;
+                      sid[V2_CTRL] := mem[0x217b];
                       ret_wave_arp_step := true;
                     } else {
                       out_v2_freq_lo := mem[0x213e];
@@ -1753,7 +1537,6 @@ machine futurecomposer_ordered {
                       mem[0x217b] := (mem[0x212f] & 0xfe);
                     }
                   }
-                  cond_32 := !ret_wave_arp_step;
                   if !ret_wave_arp_step {
                     if ((ac & 4) != 0) {
                       nb8 := (mem[0x2163] - 1);
@@ -1770,14 +1553,10 @@ machine futurecomposer_ordered {
                       out_v2_freq_hi := sv_44;
                       wrote_v2_freq_hi := true;
                     }
-                    out2_v2_ctrl := ite(cond_31, ite(cond_30, mem[0x217b], 0), 0);
-                    wrote2_v2_ctrl := ite(cond_31, cond_30, false);
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                     ret_wave_arp_step := true;
                   }
                 }
-                cond_34 := !ret_wave_arp_step;
                 if !ret_wave_arp_step {
                   y := (vib & 0xf);
                   w16 := word(wprog[y], wprog[(y + 2)]);
@@ -1787,10 +1566,7 @@ machine futurecomposer_ordered {
                   m_1cb7 := lo(w16_2);
                   m_1cb8 := hi(w16_2);
                   if (0xf <= mem[0x2144]) {
-                    out2_v2_ctrl := ite(cond_33, ite(cond_32, mem[0x217b], ite(cond_31, ite(cond_30, mem[0x217b], 0), 0)), 0);
-                    wrote2_v2_ctrl := ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false);
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                   } else {
                     idx := (mem[0x2144] - 1);
                     mem[0x217b] := mem[(word(m_1caf, m_1cb0) + u16(idx))];
@@ -1810,10 +1586,7 @@ machine futurecomposer_ordered {
                       out_v2_freq_lo := 0;
                       wrote_v2_freq_lo := true;
                     }
-                    out2_v2_ctrl := out_v2_ctrl;
-                    wrote2_v2_ctrl := ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false);
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                   }
                 }
                 ret_filter_program := true;
@@ -1821,24 +1594,15 @@ machine futurecomposer_ordered {
             }
             if !ret_filter_program {
               ret_wave_arp_step := false;
-              let cond_36: bool = ((ac & 0x10) == 0);
-              let cond_37: bool = false;
-              let cond_38: bool = false;
-              let cond_39: bool = false;
               if ((ac & 0x10) == 0) {
-                cond_38 := ((ac & 0x80) != 0);
                 if ((ac & 0x80) != 0) {
-                  cond_37 := (mem[0x2144] < 2);
                   if (mem[0x2144] < 2) {
                     out_v2_freq_hi := 0x48;
                     wrote_v2_freq_hi := true;
                     out_v2_freq_lo := 0;
                     wrote_v2_freq_lo := true;
                     mem[0x217b] := 0x81;
-                    out2_v2_ctrl := out_v2_ctrl;
-                    wrote2_v2_ctrl := ite(cond_29, ite(cond_35, false, ite(cond_34, true, ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false))), false);
-                    out_v2_ctrl := mem[0x217b];
-                    wrote_v2_ctrl := true;
+                    sid[V2_CTRL] := mem[0x217b];
                     ret_wave_arp_step := true;
                   } else {
                     out_v2_freq_lo := mem[0x213e];
@@ -1848,7 +1612,6 @@ machine futurecomposer_ordered {
                     mem[0x217b] := (mem[0x212f] & 0xfe);
                   }
                 }
-                cond_39 := !ret_wave_arp_step;
                 if !ret_wave_arp_step {
                   if ((ac & 4) != 0) {
                     nb8 := (mem[0x2163] - 1);
@@ -1865,10 +1628,7 @@ machine futurecomposer_ordered {
                     out_v2_freq_hi := sv_49;
                     wrote_v2_freq_hi := true;
                   }
-                  out2_v2_ctrl := out_v2_ctrl;
-                  wrote2_v2_ctrl := ite(cond_38, ite(cond_37, true, ite(cond_29, ite(cond_35, false, ite(cond_34, true, ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false))), false)), ite(cond_29, ite(cond_35, false, ite(cond_34, true, ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false))), false));
-                  out_v2_ctrl := mem[0x217b];
-                  wrote_v2_ctrl := true;
+                  sid[V2_CTRL] := mem[0x217b];
                   ret_wave_arp_step := true;
                 }
               }
@@ -1881,10 +1641,7 @@ machine futurecomposer_ordered {
                 m_1cb7 := lo(w16_2);
                 m_1cb8 := hi(w16_2);
                 if (0xf <= mem[0x2144]) {
-                  out2_v2_ctrl := out_v2_ctrl;
-                  wrote2_v2_ctrl := ite(cond_36, ite(cond_39, true, ite(cond_38, ite(cond_37, true, ite(cond_29, ite(cond_35, false, ite(cond_34, true, ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false))), false)), ite(cond_29, ite(cond_35, false, ite(cond_34, true, ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false))), false))), ite(cond_29, ite(cond_35, false, ite(cond_34, true, ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false))), false));
-                  out_v2_ctrl := mem[0x217b];
-                  wrote_v2_ctrl := true;
+                  sid[V2_CTRL] := mem[0x217b];
                 } else {
                   idx := (mem[0x2144] - 1);
                   mem[0x217b] := mem[(word(m_1caf, m_1cb0) + u16(idx))];
@@ -1904,10 +1661,7 @@ machine futurecomposer_ordered {
                     out_v2_freq_lo := 0;
                     wrote_v2_freq_lo := true;
                   }
-                  out2_v2_ctrl := out_v2_ctrl;
-                  wrote2_v2_ctrl := ite(cond_36, ite(cond_39, true, ite(cond_38, ite(cond_37, true, ite(cond_29, ite(cond_35, false, ite(cond_34, true, ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false))), false)), ite(cond_29, ite(cond_35, false, ite(cond_34, true, ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false))), false))), ite(cond_29, ite(cond_35, false, ite(cond_34, true, ite(cond_33, ite(cond_32, true, ite(cond_31, cond_30, false)), false))), false));
-                  out_v2_ctrl := mem[0x217b];
-                  wrote_v2_ctrl := true;
+                  sid[V2_CTRL] := mem[0x217b];
                 }
               }
             }
@@ -2159,10 +1913,7 @@ machine futurecomposer_ordered {
                   out_v1_freq_lo := 0;
                   wrote_v1_freq_lo := true;
                   mem[0x217a] := 0x81;
-                  out2_v1_ctrl := out_v1_ctrl;
-                  wrote2_v1_ctrl := wrote_v1_ctrl;
-                  out_v1_ctrl := mem[0x217a];
-                  wrote_v1_ctrl := true;
+                  sid[V1_CTRL] := mem[0x217a];
                   ret_wave_arp_step_2 := true;
                 } else {
                   out_v1_freq_lo := mem[0x213d];
@@ -2188,10 +1939,7 @@ machine futurecomposer_ordered {
                   out_v1_freq_hi := sv_58;
                   wrote_v1_freq_hi := true;
                 }
-                out2_v1_ctrl := out_v1_ctrl;
-                wrote2_v1_ctrl := wrote_v1_ctrl;
-                out_v1_ctrl := mem[0x217a];
-                wrote_v1_ctrl := true;
+                sid[V1_CTRL] := mem[0x217a];
                 ret_wave_arp_step_2 := true;
               }
             }
@@ -2204,10 +1952,7 @@ machine futurecomposer_ordered {
               m_1cb7 := lo(w16_4);
               m_1cb8 := hi(w16_4);
               if (0xf <= mem[0x2143]) {
-                out2_v1_ctrl := out_v1_ctrl;
-                wrote2_v1_ctrl := wrote_v1_ctrl;
-                out_v1_ctrl := mem[0x217a];
-                wrote_v1_ctrl := true;
+                sid[V1_CTRL] := mem[0x217a];
               } else {
                 idx_2 := (mem[0x2143] - 1);
                 mem[0x217a] := mem[(word(m_1caf, m_1cb0) + u16(idx_2))];
@@ -2227,10 +1972,7 @@ machine futurecomposer_ordered {
                   out_v1_freq_lo := 0;
                   wrote_v1_freq_lo := true;
                 }
-                out2_v1_ctrl := out_v1_ctrl;
-                wrote2_v1_ctrl := wrote_v1_ctrl;
-                out_v1_ctrl := mem[0x217a];
-                wrote_v1_ctrl := true;
+                sid[V1_CTRL] := mem[0x217a];
               }
             }
           } else {
@@ -2248,10 +1990,7 @@ machine futurecomposer_ordered {
                     out_v1_freq_lo := 0;
                     wrote_v1_freq_lo := true;
                     mem[0x217a] := 0x81;
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                     ret_wave_arp_step_2 := true;
                   } else {
                     out_v1_freq_lo := mem[0x213d];
@@ -2277,10 +2016,7 @@ machine futurecomposer_ordered {
                     out_v1_freq_hi := sv_63;
                     wrote_v1_freq_hi := true;
                   }
-                  out2_v1_ctrl := out_v1_ctrl;
-                  wrote2_v1_ctrl := wrote_v1_ctrl;
-                  out_v1_ctrl := mem[0x217a];
-                  wrote_v1_ctrl := true;
+                  sid[V1_CTRL] := mem[0x217a];
                   ret_wave_arp_step_2 := true;
                 }
               }
@@ -2293,10 +2029,7 @@ machine futurecomposer_ordered {
                 m_1cb7 := lo(w16_4);
                 m_1cb8 := hi(w16_4);
                 if (0xf <= mem[0x2143]) {
-                  out2_v1_ctrl := out_v1_ctrl;
-                  wrote2_v1_ctrl := wrote_v1_ctrl;
-                  out_v1_ctrl := mem[0x217a];
-                  wrote_v1_ctrl := true;
+                  sid[V1_CTRL] := mem[0x217a];
                 } else {
                   idx_2 := (mem[0x2143] - 1);
                   mem[0x217a] := mem[(word(m_1caf, m_1cb0) + u16(idx_2))];
@@ -2316,10 +2049,7 @@ machine futurecomposer_ordered {
                     out_v1_freq_lo := 0;
                     wrote_v1_freq_lo := true;
                   }
-                  out2_v1_ctrl := out_v1_ctrl;
-                  wrote2_v1_ctrl := wrote_v1_ctrl;
-                  out_v1_ctrl := mem[0x217a];
-                  wrote_v1_ctrl := true;
+                  sid[V1_CTRL] := mem[0x217a];
                 }
               }
             } else {
@@ -2370,10 +2100,7 @@ machine futurecomposer_ordered {
                         out_v1_freq_lo := 0;
                         wrote_v1_freq_lo := true;
                         mem[0x217a] := 0x81;
-                        out2_v1_ctrl := out_v1_ctrl;
-                        wrote2_v1_ctrl := wrote_v1_ctrl;
-                        out_v1_ctrl := mem[0x217a];
-                        wrote_v1_ctrl := true;
+                        sid[V1_CTRL] := mem[0x217a];
                         ret_wave_arp_step_2 := true;
                       } else {
                         out_v1_freq_lo := mem[0x213d];
@@ -2399,10 +2126,7 @@ machine futurecomposer_ordered {
                         out_v1_freq_hi := sv_68;
                         wrote_v1_freq_hi := true;
                       }
-                      out2_v1_ctrl := out_v1_ctrl;
-                      wrote2_v1_ctrl := wrote_v1_ctrl;
-                      out_v1_ctrl := mem[0x217a];
-                      wrote_v1_ctrl := true;
+                      sid[V1_CTRL] := mem[0x217a];
                       ret_wave_arp_step_2 := true;
                     }
                   }
@@ -2415,10 +2139,7 @@ machine futurecomposer_ordered {
                     m_1cb7 := lo(w16_4);
                     m_1cb8 := hi(w16_4);
                     if (0xf <= mem[0x2143]) {
-                      out2_v1_ctrl := out_v1_ctrl;
-                      wrote2_v1_ctrl := wrote_v1_ctrl;
-                      out_v1_ctrl := mem[0x217a];
-                      wrote_v1_ctrl := true;
+                      sid[V1_CTRL] := mem[0x217a];
                     } else {
                       idx_2 := (mem[0x2143] - 1);
                       mem[0x217a] := mem[(word(m_1caf, m_1cb0) + u16(idx_2))];
@@ -2438,10 +2159,7 @@ machine futurecomposer_ordered {
                         out_v1_freq_lo := 0;
                         wrote_v1_freq_lo := true;
                       }
-                      out2_v1_ctrl := out_v1_ctrl;
-                      wrote2_v1_ctrl := wrote_v1_ctrl;
-                      out_v1_ctrl := mem[0x217a];
-                      wrote_v1_ctrl := true;
+                      sid[V1_CTRL] := mem[0x217a];
                     }
                   }
                   ret_filter_program_2 := true;
@@ -2457,10 +2175,7 @@ machine futurecomposer_ordered {
                       out_v1_freq_lo := 0;
                       wrote_v1_freq_lo := true;
                       mem[0x217a] := 0x81;
-                      out2_v1_ctrl := out_v1_ctrl;
-                      wrote2_v1_ctrl := wrote_v1_ctrl;
-                      out_v1_ctrl := mem[0x217a];
-                      wrote_v1_ctrl := true;
+                      sid[V1_CTRL] := mem[0x217a];
                       ret_wave_arp_step_2 := true;
                     } else {
                       out_v1_freq_lo := mem[0x213d];
@@ -2486,10 +2201,7 @@ machine futurecomposer_ordered {
                       out_v1_freq_hi := sv_73;
                       wrote_v1_freq_hi := true;
                     }
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                     ret_wave_arp_step_2 := true;
                   }
                 }
@@ -2502,10 +2214,7 @@ machine futurecomposer_ordered {
                   m_1cb7 := lo(w16_4);
                   m_1cb8 := hi(w16_4);
                   if (0xf <= mem[0x2143]) {
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                   } else {
                     idx_2 := (mem[0x2143] - 1);
                     mem[0x217a] := mem[(word(m_1caf, m_1cb0) + u16(idx_2))];
@@ -2525,10 +2234,7 @@ machine futurecomposer_ordered {
                       out_v1_freq_lo := 0;
                       wrote_v1_freq_lo := true;
                     }
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                   }
                 }
               }
@@ -2547,14 +2253,9 @@ machine futurecomposer_ordered {
             wrote_v0_pw_lo := true;
             out_v0_pw_hi := 0;
             wrote_v0_pw_hi := true;
-            out2_v0_ctrl := out_v0_ctrl;
-            wrote2_v0_ctrl := wrote_v0_ctrl;
-            out_v0_ctrl := 0;
-            wrote_v0_ctrl := true;
-            out_v0_ad := 0;
-            wrote_v0_ad := true;
-            out_v0_sr := 0;
-            wrote_v0_sr := true;
+            sid[V0_CTRL] := 0;
+            sid[V0_AD] := 0;
+            sid[V0_SR] := 0;
             out_v1_freq_lo := 0;
             wrote_v1_freq_lo := true;
             out_v1_freq_hi := 0;
@@ -2563,14 +2264,9 @@ machine futurecomposer_ordered {
             wrote_v1_pw_lo := true;
             out_v1_pw_hi := 0;
             wrote_v1_pw_hi := true;
-            out2_v1_ctrl := out_v1_ctrl;
-            wrote2_v1_ctrl := wrote_v1_ctrl;
-            out_v1_ctrl := 0;
-            wrote_v1_ctrl := true;
-            out_v1_ad := 0;
-            wrote_v1_ad := true;
-            out_v1_sr := 0;
-            wrote_v1_sr := true;
+            sid[V1_CTRL] := 0;
+            sid[V1_AD] := 0;
+            sid[V1_SR] := 0;
             out_v2_freq_lo := 0;
             wrote_v2_freq_lo := true;
             out_v2_freq_hi := 0;
@@ -2579,14 +2275,9 @@ machine futurecomposer_ordered {
             wrote_v2_pw_lo := true;
             out_v2_pw_hi := 0;
             wrote_v2_pw_hi := true;
-            out2_v2_ctrl := out_v2_ctrl;
-            wrote2_v2_ctrl := wrote_v2_ctrl;
-            out_v2_ctrl := 0;
-            wrote_v2_ctrl := true;
-            out_v2_ad := 0;
-            wrote_v2_ad := true;
-            out_v2_sr := 0;
-            wrote_v2_sr := true;
+            sid[V2_CTRL] := 0;
+            sid[V2_AD] := 0;
+            sid[V2_SR] := 0;
             out_fc_lo := 0;
             wrote_fc_lo := true;
             out_fc_hi := 0;
@@ -2620,14 +2311,9 @@ machine futurecomposer_ordered {
               wrote_v0_pw_lo := true;
               out_v0_pw_hi := 0;
               wrote_v0_pw_hi := true;
-              out2_v0_ctrl := out_v0_ctrl;
-              wrote2_v0_ctrl := wrote_v0_ctrl;
-              out_v0_ctrl := 0;
-              wrote_v0_ctrl := true;
-              out_v0_ad := 0;
-              wrote_v0_ad := true;
-              out_v0_sr := 0;
-              wrote_v0_sr := true;
+              sid[V0_CTRL] := 0;
+              sid[V0_AD] := 0;
+              sid[V0_SR] := 0;
               out_v1_freq_lo := 0;
               wrote_v1_freq_lo := true;
               out_v1_freq_hi := 0;
@@ -2636,14 +2322,9 @@ machine futurecomposer_ordered {
               wrote_v1_pw_lo := true;
               out_v1_pw_hi := 0;
               wrote_v1_pw_hi := true;
-              out2_v1_ctrl := out_v1_ctrl;
-              wrote2_v1_ctrl := wrote_v1_ctrl;
-              out_v1_ctrl := 0;
-              wrote_v1_ctrl := true;
-              out_v1_ad := 0;
-              wrote_v1_ad := true;
-              out_v1_sr := 0;
-              wrote_v1_sr := true;
+              sid[V1_CTRL] := 0;
+              sid[V1_AD] := 0;
+              sid[V1_SR] := 0;
               out_v2_freq_lo := 0;
               wrote_v2_freq_lo := true;
               out_v2_freq_hi := 0;
@@ -2652,14 +2333,9 @@ machine futurecomposer_ordered {
               wrote_v2_pw_lo := true;
               out_v2_pw_hi := 0;
               wrote_v2_pw_hi := true;
-              out2_v2_ctrl := out_v2_ctrl;
-              wrote2_v2_ctrl := wrote_v2_ctrl;
-              out_v2_ctrl := 0;
-              wrote_v2_ctrl := true;
-              out_v2_ad := 0;
-              wrote_v2_ad := true;
-              out_v2_sr := 0;
-              wrote_v2_sr := true;
+              sid[V2_CTRL] := 0;
+              sid[V2_AD] := 0;
+              sid[V2_SR] := 0;
               out_fc_lo := 0;
               wrote_fc_lo := true;
               out_fc_hi := 0;
@@ -2739,10 +2415,7 @@ machine futurecomposer_ordered {
                   mem[0x2122] := (mem[0x2122] + 1);
                 }
               }
-              out2_v1_ctrl := out_v1_ctrl;
-              wrote2_v1_ctrl := wrote_v1_ctrl;
-              out_v1_ctrl := mem[0x217a];
-              wrote_v1_ctrl := true;
+              sid[V1_CTRL] := mem[0x217a];
               ret_pattern_walk_2 := true;
             } else {
               if ((f8_2 & 0xf0) == 0xe0) {
@@ -2774,10 +2447,7 @@ machine futurecomposer_ordered {
                   if advance_2 {
                     mem[0x2122] := (mem[0x2122] + 1);
                   }
-                  out2_v1_ctrl := out_v1_ctrl;
-                  wrote2_v1_ctrl := wrote_v1_ctrl;
-                  out_v1_ctrl := mem[0x217a];
-                  wrote_v1_ctrl := true;
+                  sid[V1_CTRL] := mem[0x217a];
                 }
                 cur_3 := (cur_3 + 1);
                 if (b_4 == 0xff) {
@@ -2804,10 +2474,7 @@ machine futurecomposer_ordered {
                     if advance_2 {
                       mem[0x2122] := (mem[0x2122] + 1);
                     }
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                   }
                   cur_3 := (cur_3 + 1);
                   if (b_4 == 0xff) {
@@ -2828,11 +2495,9 @@ machine futurecomposer_ordered {
                   ins_4 := (mem[0x2134] << 3);
                   record_base_2 := (0x2188 + u16(ins_4));
                   let sv_77: u8 = instr_tab[(u16(ins_4) + 2)];
-                  out_v1_ad := sv_77;
-                  wrote_v1_ad := true;
+                  sid[V1_AD] := sv_77;
                   let sv_78: u8 = instr_tab[(u16(ins_4) + 3)];
-                  out_v1_sr := sv_78;
-                  wrote_v1_sr := true;
+                  sid[V1_SR] := sv_78;
                   pulse_ctrl_2 := instr_tab[ins_4];
                   wave_2 := instr_tab[(u16(ins_4) + 1)];
                   mem[0x212e] := wave_2;
@@ -2862,10 +2527,7 @@ machine futurecomposer_ordered {
                       mem[0x2122] := (mem[0x2122] + 1);
                     }
                   }
-                  out2_v1_ctrl := out_v1_ctrl;
-                  wrote2_v1_ctrl := wrote_v1_ctrl;
-                  out_v1_ctrl := mem[0x217a];
-                  wrote_v1_ctrl := true;
+                  sid[V1_CTRL] := mem[0x217a];
                   ret_pattern_walk_2 := true;
                 }
               }
@@ -2905,10 +2567,7 @@ machine futurecomposer_ordered {
                     mem[0x2122] := (mem[0x2122] + 1);
                   }
                 }
-                out2_v1_ctrl := out_v1_ctrl;
-                wrote2_v1_ctrl := wrote_v1_ctrl;
-                out_v1_ctrl := mem[0x217a];
-                wrote_v1_ctrl := true;
+                sid[V1_CTRL] := mem[0x217a];
                 ret_pattern_walk_2 := true;
               } elif !ret_pattern_walk_2 {
                 if ((f8_2 & 0xf0) == 0xe0) {
@@ -2940,10 +2599,7 @@ machine futurecomposer_ordered {
                     if advance_2 {
                       mem[0x2122] := (mem[0x2122] + 1);
                     }
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                   }
                   cur_3 := (cur_3 + 1);
                   if (b_4 == 0xff) {
@@ -2970,10 +2626,7 @@ machine futurecomposer_ordered {
                       if advance_2 {
                         mem[0x2122] := (mem[0x2122] + 1);
                       }
-                      out2_v1_ctrl := out_v1_ctrl;
-                      wrote2_v1_ctrl := wrote_v1_ctrl;
-                      out_v1_ctrl := mem[0x217a];
-                      wrote_v1_ctrl := true;
+                      sid[V1_CTRL] := mem[0x217a];
                     }
                     cur_3 := (cur_3 + 1);
                     if (b_4 == 0xff) {
@@ -2994,11 +2647,9 @@ machine futurecomposer_ordered {
                     ins_4 := (mem[0x2134] << 3);
                     record_base_2 := (0x2188 + u16(ins_4));
                     sv_79 := instr_tab[(u16(ins_4) + 2)];
-                    out_v1_ad := sv_79;
-                    wrote_v1_ad := true;
+                    sid[V1_AD] := sv_79;
                     sv_80 := instr_tab[(u16(ins_4) + 3)];
-                    out_v1_sr := sv_80;
-                    wrote_v1_sr := true;
+                    sid[V1_SR] := sv_80;
                     pulse_ctrl_2 := instr_tab[ins_4];
                     wave_2 := instr_tab[(u16(ins_4) + 1)];
                     mem[0x212e] := wave_2;
@@ -3028,10 +2679,7 @@ machine futurecomposer_ordered {
                         mem[0x2122] := (mem[0x2122] + 1);
                       }
                     }
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                     ret_pattern_walk_2 := true;
                   }
                 }
@@ -3233,10 +2881,7 @@ machine futurecomposer_ordered {
                 out_v1_freq_lo := 0;
                 wrote_v1_freq_lo := true;
                 mem[0x217a] := 0x81;
-                out2_v1_ctrl := out_v1_ctrl;
-                wrote2_v1_ctrl := wrote_v1_ctrl;
-                out_v1_ctrl := mem[0x217a];
-                wrote_v1_ctrl := true;
+                sid[V1_CTRL] := mem[0x217a];
                 ret_wave_arp_step_2 := true;
               } else {
                 out_v1_freq_lo := mem[0x213d];
@@ -3262,10 +2907,7 @@ machine futurecomposer_ordered {
                 out_v1_freq_hi := sv_86;
                 wrote_v1_freq_hi := true;
               }
-              out2_v1_ctrl := out_v1_ctrl;
-              wrote2_v1_ctrl := wrote_v1_ctrl;
-              out_v1_ctrl := mem[0x217a];
-              wrote_v1_ctrl := true;
+              sid[V1_CTRL] := mem[0x217a];
               ret_wave_arp_step_2 := true;
             }
           }
@@ -3278,10 +2920,7 @@ machine futurecomposer_ordered {
             m_1cb7 := lo(w16_4);
             m_1cb8 := hi(w16_4);
             if (0xf <= mem[0x2143]) {
-              out2_v1_ctrl := out_v1_ctrl;
-              wrote2_v1_ctrl := wrote_v1_ctrl;
-              out_v1_ctrl := mem[0x217a];
-              wrote_v1_ctrl := true;
+              sid[V1_CTRL] := mem[0x217a];
             } else {
               idx_2 := (mem[0x2143] - 1);
               mem[0x217a] := mem[(word(m_1caf, m_1cb0) + u16(idx_2))];
@@ -3301,10 +2940,7 @@ machine futurecomposer_ordered {
                 out_v1_freq_lo := 0;
                 wrote_v1_freq_lo := true;
               }
-              out2_v1_ctrl := out_v1_ctrl;
-              wrote2_v1_ctrl := wrote_v1_ctrl;
-              out_v1_ctrl := mem[0x217a];
-              wrote_v1_ctrl := true;
+              sid[V1_CTRL] := mem[0x217a];
             }
           }
         } else {
@@ -3322,10 +2958,7 @@ machine futurecomposer_ordered {
                   out_v1_freq_lo := 0;
                   wrote_v1_freq_lo := true;
                   mem[0x217a] := 0x81;
-                  out2_v1_ctrl := out_v1_ctrl;
-                  wrote2_v1_ctrl := wrote_v1_ctrl;
-                  out_v1_ctrl := mem[0x217a];
-                  wrote_v1_ctrl := true;
+                  sid[V1_CTRL] := mem[0x217a];
                   ret_wave_arp_step_2 := true;
                 } else {
                   out_v1_freq_lo := mem[0x213d];
@@ -3351,10 +2984,7 @@ machine futurecomposer_ordered {
                   out_v1_freq_hi := sv_91;
                   wrote_v1_freq_hi := true;
                 }
-                out2_v1_ctrl := out_v1_ctrl;
-                wrote2_v1_ctrl := wrote_v1_ctrl;
-                out_v1_ctrl := mem[0x217a];
-                wrote_v1_ctrl := true;
+                sid[V1_CTRL] := mem[0x217a];
                 ret_wave_arp_step_2 := true;
               }
             }
@@ -3367,10 +2997,7 @@ machine futurecomposer_ordered {
               m_1cb7 := lo(w16_4);
               m_1cb8 := hi(w16_4);
               if (0xf <= mem[0x2143]) {
-                out2_v1_ctrl := out_v1_ctrl;
-                wrote2_v1_ctrl := wrote_v1_ctrl;
-                out_v1_ctrl := mem[0x217a];
-                wrote_v1_ctrl := true;
+                sid[V1_CTRL] := mem[0x217a];
               } else {
                 idx_2 := (mem[0x2143] - 1);
                 mem[0x217a] := mem[(word(m_1caf, m_1cb0) + u16(idx_2))];
@@ -3390,10 +3017,7 @@ machine futurecomposer_ordered {
                   out_v1_freq_lo := 0;
                   wrote_v1_freq_lo := true;
                 }
-                out2_v1_ctrl := out_v1_ctrl;
-                wrote2_v1_ctrl := wrote_v1_ctrl;
-                out_v1_ctrl := mem[0x217a];
-                wrote_v1_ctrl := true;
+                sid[V1_CTRL] := mem[0x217a];
               }
             }
           } else {
@@ -3444,10 +3068,7 @@ machine futurecomposer_ordered {
                       out_v1_freq_lo := 0;
                       wrote_v1_freq_lo := true;
                       mem[0x217a] := 0x81;
-                      out2_v1_ctrl := out_v1_ctrl;
-                      wrote2_v1_ctrl := wrote_v1_ctrl;
-                      out_v1_ctrl := mem[0x217a];
-                      wrote_v1_ctrl := true;
+                      sid[V1_CTRL] := mem[0x217a];
                       ret_wave_arp_step_2 := true;
                     } else {
                       out_v1_freq_lo := mem[0x213d];
@@ -3473,10 +3094,7 @@ machine futurecomposer_ordered {
                       out_v1_freq_hi := sv_96;
                       wrote_v1_freq_hi := true;
                     }
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                     ret_wave_arp_step_2 := true;
                   }
                 }
@@ -3489,10 +3107,7 @@ machine futurecomposer_ordered {
                   m_1cb7 := lo(w16_4);
                   m_1cb8 := hi(w16_4);
                   if (0xf <= mem[0x2143]) {
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                   } else {
                     idx_2 := (mem[0x2143] - 1);
                     mem[0x217a] := mem[(word(m_1caf, m_1cb0) + u16(idx_2))];
@@ -3512,10 +3127,7 @@ machine futurecomposer_ordered {
                       out_v1_freq_lo := 0;
                       wrote_v1_freq_lo := true;
                     }
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                   }
                 }
                 ret_filter_program_2 := true;
@@ -3531,10 +3143,7 @@ machine futurecomposer_ordered {
                     out_v1_freq_lo := 0;
                     wrote_v1_freq_lo := true;
                     mem[0x217a] := 0x81;
-                    out2_v1_ctrl := out_v1_ctrl;
-                    wrote2_v1_ctrl := wrote_v1_ctrl;
-                    out_v1_ctrl := mem[0x217a];
-                    wrote_v1_ctrl := true;
+                    sid[V1_CTRL] := mem[0x217a];
                     ret_wave_arp_step_2 := true;
                   } else {
                     out_v1_freq_lo := mem[0x213d];
@@ -3560,10 +3169,7 @@ machine futurecomposer_ordered {
                     out_v1_freq_hi := sv_101;
                     wrote_v1_freq_hi := true;
                   }
-                  out2_v1_ctrl := out_v1_ctrl;
-                  wrote2_v1_ctrl := wrote_v1_ctrl;
-                  out_v1_ctrl := mem[0x217a];
-                  wrote_v1_ctrl := true;
+                  sid[V1_CTRL] := mem[0x217a];
                   ret_wave_arp_step_2 := true;
                 }
               }
@@ -3576,10 +3182,7 @@ machine futurecomposer_ordered {
                 m_1cb7 := lo(w16_4);
                 m_1cb8 := hi(w16_4);
                 if (0xf <= mem[0x2143]) {
-                  out2_v1_ctrl := out_v1_ctrl;
-                  wrote2_v1_ctrl := wrote_v1_ctrl;
-                  out_v1_ctrl := mem[0x217a];
-                  wrote_v1_ctrl := true;
+                  sid[V1_CTRL] := mem[0x217a];
                 } else {
                   idx_2 := (mem[0x2143] - 1);
                   mem[0x217a] := mem[(word(m_1caf, m_1cb0) + u16(idx_2))];
@@ -3599,10 +3202,7 @@ machine futurecomposer_ordered {
                     out_v1_freq_lo := 0;
                     wrote_v1_freq_lo := true;
                   }
-                  out2_v1_ctrl := out_v1_ctrl;
-                  wrote2_v1_ctrl := wrote_v1_ctrl;
-                  out_v1_ctrl := mem[0x217a];
-                  wrote_v1_ctrl := true;
+                  sid[V1_CTRL] := mem[0x217a];
                 }
               }
             }
@@ -3850,10 +3450,7 @@ machine futurecomposer_ordered {
                   out_v0_freq_lo := 0;
                   wrote_v0_freq_lo := true;
                   mem[0x2179] := 0x81;
-                  out2_v0_ctrl := out_v0_ctrl;
-                  wrote2_v0_ctrl := wrote_v0_ctrl;
-                  out_v0_ctrl := mem[0x2179];
-                  wrote_v0_ctrl := true;
+                  sid[V0_CTRL] := mem[0x2179];
                   ret_wave_arp_step_3 := true;
                 } else {
                   out_v0_freq_lo := mem[0x213c];
@@ -3879,10 +3476,7 @@ machine futurecomposer_ordered {
                   out_v0_freq_hi := sv_110;
                   wrote_v0_freq_hi := true;
                 }
-                out2_v0_ctrl := out_v0_ctrl;
-                wrote2_v0_ctrl := wrote_v0_ctrl;
-                out_v0_ctrl := mem[0x2179];
-                wrote_v0_ctrl := true;
+                sid[V0_CTRL] := mem[0x2179];
                 ret_wave_arp_step_3 := true;
               }
             }
@@ -3895,6 +3489,7 @@ machine futurecomposer_ordered {
               m_1cb7 := lo(w16_6);
               m_1cb8 := hi(w16_6);
               if (0xf <= mem[0x2142]) {
+                sid[V0_CTRL] := mem[0x2179];
                 if wrote_fc_lo {
                   sid[FC_LO] := out_fc_lo;
                 }
@@ -3907,18 +3502,6 @@ machine futurecomposer_ordered {
                 if wrote_mode_vol {
                   sid[MODE_VOL] := out_mode_vol;
                 }
-                if wrote_v0_ad {
-                  sid[V0_AD] := out_v0_ad;
-                }
-                if wrote_v0_sr {
-                  sid[V0_SR] := out_v0_sr;
-                }
-                out2_v0_ctrl := out_v0_ctrl;
-                wrote2_v0_ctrl := wrote_v0_ctrl;
-                if wrote2_v0_ctrl {
-                  sid[V0_CTRL] := out2_v0_ctrl;
-                }
-                sid[V0_CTRL] := mem[0x2179];
                 if wrote_v0_freq_lo {
                   sid[V0_FREQ_LO] := out_v0_freq_lo;
                 }
@@ -3927,18 +3510,6 @@ machine futurecomposer_ordered {
                 }
                 sid[V0_PW_LO] := sv_107;
                 sid[V0_PW_HI] := sv_108;
-                if wrote_v1_ad {
-                  sid[V1_AD] := out_v1_ad;
-                }
-                if wrote_v1_sr {
-                  sid[V1_SR] := out_v1_sr;
-                }
-                if wrote2_v1_ctrl {
-                  sid[V1_CTRL] := out2_v1_ctrl;
-                }
-                if wrote_v1_ctrl {
-                  sid[V1_CTRL] := out_v1_ctrl;
-                }
                 if wrote_v1_freq_lo {
                   sid[V1_FREQ_LO] := out_v1_freq_lo;
                 }
@@ -3950,18 +3521,6 @@ machine futurecomposer_ordered {
                 }
                 if wrote_v1_pw_hi {
                   sid[V1_PW_HI] := out_v1_pw_hi;
-                }
-                if wrote_v2_ad {
-                  sid[V2_AD] := out_v2_ad;
-                }
-                if wrote_v2_sr {
-                  sid[V2_SR] := out_v2_sr;
-                }
-                if wrote2_v2_ctrl {
-                  sid[V2_CTRL] := out2_v2_ctrl;
-                }
-                if wrote_v2_ctrl {
-                  sid[V2_CTRL] := out_v2_ctrl;
                 }
                 if wrote_v2_freq_lo {
                   sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -3979,7 +3538,7 @@ machine futurecomposer_ordered {
                 idx_3 := (mem[0x2142] - 1);
                 mem[0x2179] := mem[(word(m_1caf, m_1cb0) + u16(idx_3))];
                 pitch_3 := mem[(word(m_1cb7, m_1cb8) + u16(idx_3))];
-                let cond_40: bool = ((vib_3 & 0x10) != 0);
+                let cond_2: bool = ((vib_3 & 0x10) != 0);
                 let sv_111: u8 = 0;
                 let sv_112: u8 = 0;
                 let sv_113: u8 = 0;
@@ -3990,6 +3549,7 @@ machine futurecomposer_ordered {
                 } else {
                   sv_113 := (pitch_3 + 0xd);
                 }
+                sid[V0_CTRL] := mem[0x2179];
                 if wrote_fc_lo {
                   sid[FC_LO] := out_fc_lo;
                 }
@@ -4002,34 +3562,10 @@ machine futurecomposer_ordered {
                 if wrote_mode_vol {
                   sid[MODE_VOL] := out_mode_vol;
                 }
-                if wrote_v0_ad {
-                  sid[V0_AD] := out_v0_ad;
-                }
-                if wrote_v0_sr {
-                  sid[V0_SR] := out_v0_sr;
-                }
-                out2_v0_ctrl := out_v0_ctrl;
-                wrote2_v0_ctrl := wrote_v0_ctrl;
-                if wrote2_v0_ctrl {
-                  sid[V0_CTRL] := out2_v0_ctrl;
-                }
-                sid[V0_CTRL] := mem[0x2179];
-                sid[V0_FREQ_LO] := ite(cond_40, sv_111, 0);
-                sid[V0_FREQ_HI] := ite(cond_40, sv_112, sv_113);
+                sid[V0_FREQ_LO] := ite(cond_2, sv_111, 0);
+                sid[V0_FREQ_HI] := ite(cond_2, sv_112, sv_113);
                 sid[V0_PW_LO] := sv_107;
                 sid[V0_PW_HI] := sv_108;
-                if wrote_v1_ad {
-                  sid[V1_AD] := out_v1_ad;
-                }
-                if wrote_v1_sr {
-                  sid[V1_SR] := out_v1_sr;
-                }
-                if wrote2_v1_ctrl {
-                  sid[V1_CTRL] := out2_v1_ctrl;
-                }
-                if wrote_v1_ctrl {
-                  sid[V1_CTRL] := out_v1_ctrl;
-                }
                 if wrote_v1_freq_lo {
                   sid[V1_FREQ_LO] := out_v1_freq_lo;
                 }
@@ -4041,18 +3577,6 @@ machine futurecomposer_ordered {
                 }
                 if wrote_v1_pw_hi {
                   sid[V1_PW_HI] := out_v1_pw_hi;
-                }
-                if wrote_v2_ad {
-                  sid[V2_AD] := out_v2_ad;
-                }
-                if wrote_v2_sr {
-                  sid[V2_SR] := out_v2_sr;
-                }
-                if wrote2_v2_ctrl {
-                  sid[V2_CTRL] := out2_v2_ctrl;
-                }
-                if wrote_v2_ctrl {
-                  sid[V2_CTRL] := out_v2_ctrl;
                 }
                 if wrote_v2_freq_lo {
                   sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -4080,18 +3604,6 @@ machine futurecomposer_ordered {
               if wrote_mode_vol {
                 sid[MODE_VOL] := out_mode_vol;
               }
-              if wrote_v0_ad {
-                sid[V0_AD] := out_v0_ad;
-              }
-              if wrote_v0_sr {
-                sid[V0_SR] := out_v0_sr;
-              }
-              if wrote2_v0_ctrl {
-                sid[V0_CTRL] := out2_v0_ctrl;
-              }
-              if wrote_v0_ctrl {
-                sid[V0_CTRL] := out_v0_ctrl;
-              }
               if wrote_v0_freq_lo {
                 sid[V0_FREQ_LO] := out_v0_freq_lo;
               }
@@ -4100,18 +3612,6 @@ machine futurecomposer_ordered {
               }
               sid[V0_PW_LO] := sv_107;
               sid[V0_PW_HI] := sv_108;
-              if wrote_v1_ad {
-                sid[V1_AD] := out_v1_ad;
-              }
-              if wrote_v1_sr {
-                sid[V1_SR] := out_v1_sr;
-              }
-              if wrote2_v1_ctrl {
-                sid[V1_CTRL] := out2_v1_ctrl;
-              }
-              if wrote_v1_ctrl {
-                sid[V1_CTRL] := out_v1_ctrl;
-              }
               if wrote_v1_freq_lo {
                 sid[V1_FREQ_LO] := out_v1_freq_lo;
               }
@@ -4123,18 +3623,6 @@ machine futurecomposer_ordered {
               }
               if wrote_v1_pw_hi {
                 sid[V1_PW_HI] := out_v1_pw_hi;
-              }
-              if wrote_v2_ad {
-                sid[V2_AD] := out_v2_ad;
-              }
-              if wrote_v2_sr {
-                sid[V2_SR] := out_v2_sr;
-              }
-              if wrote2_v2_ctrl {
-                sid[V2_CTRL] := out2_v2_ctrl;
-              }
-              if wrote_v2_ctrl {
-                sid[V2_CTRL] := out_v2_ctrl;
               }
               if wrote_v2_freq_lo {
                 sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -4162,10 +3650,7 @@ machine futurecomposer_ordered {
                     out_v0_freq_lo := 0;
                     wrote_v0_freq_lo := true;
                     mem[0x2179] := 0x81;
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    out_v0_ctrl := mem[0x2179];
-                    wrote_v0_ctrl := true;
+                    sid[V0_CTRL] := mem[0x2179];
                     ret_wave_arp_step_3 := true;
                   } else {
                     out_v0_freq_lo := mem[0x213c];
@@ -4191,10 +3676,7 @@ machine futurecomposer_ordered {
                     out_v0_freq_hi := sv_115;
                     wrote_v0_freq_hi := true;
                   }
-                  out2_v0_ctrl := out_v0_ctrl;
-                  wrote2_v0_ctrl := wrote_v0_ctrl;
-                  out_v0_ctrl := mem[0x2179];
-                  wrote_v0_ctrl := true;
+                  sid[V0_CTRL] := mem[0x2179];
                   ret_wave_arp_step_3 := true;
                 }
               }
@@ -4207,6 +3689,7 @@ machine futurecomposer_ordered {
                 m_1cb7 := lo(w16_6);
                 m_1cb8 := hi(w16_6);
                 if (0xf <= mem[0x2142]) {
+                  sid[V0_CTRL] := mem[0x2179];
                   if wrote_fc_lo {
                     sid[FC_LO] := out_fc_lo;
                   }
@@ -4217,18 +3700,6 @@ machine futurecomposer_ordered {
                   if wrote_mode_vol {
                     sid[MODE_VOL] := out_mode_vol;
                   }
-                  if wrote_v0_ad {
-                    sid[V0_AD] := out_v0_ad;
-                  }
-                  if wrote_v0_sr {
-                    sid[V0_SR] := out_v0_sr;
-                  }
-                  out2_v0_ctrl := out_v0_ctrl;
-                  wrote2_v0_ctrl := wrote_v0_ctrl;
-                  if wrote2_v0_ctrl {
-                    sid[V0_CTRL] := out2_v0_ctrl;
-                  }
-                  sid[V0_CTRL] := mem[0x2179];
                   if wrote_v0_freq_lo {
                     sid[V0_FREQ_LO] := out_v0_freq_lo;
                   }
@@ -4237,18 +3708,6 @@ machine futurecomposer_ordered {
                   }
                   sid[V0_PW_LO] := sv_107;
                   sid[V0_PW_HI] := sv_108;
-                  if wrote_v1_ad {
-                    sid[V1_AD] := out_v1_ad;
-                  }
-                  if wrote_v1_sr {
-                    sid[V1_SR] := out_v1_sr;
-                  }
-                  if wrote2_v1_ctrl {
-                    sid[V1_CTRL] := out2_v1_ctrl;
-                  }
-                  if wrote_v1_ctrl {
-                    sid[V1_CTRL] := out_v1_ctrl;
-                  }
                   if wrote_v1_freq_lo {
                     sid[V1_FREQ_LO] := out_v1_freq_lo;
                   }
@@ -4260,18 +3719,6 @@ machine futurecomposer_ordered {
                   }
                   if wrote_v1_pw_hi {
                     sid[V1_PW_HI] := out_v1_pw_hi;
-                  }
-                  if wrote_v2_ad {
-                    sid[V2_AD] := out_v2_ad;
-                  }
-                  if wrote_v2_sr {
-                    sid[V2_SR] := out_v2_sr;
-                  }
-                  if wrote2_v2_ctrl {
-                    sid[V2_CTRL] := out2_v2_ctrl;
-                  }
-                  if wrote_v2_ctrl {
-                    sid[V2_CTRL] := out_v2_ctrl;
                   }
                   if wrote_v2_freq_lo {
                     sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -4289,7 +3736,7 @@ machine futurecomposer_ordered {
                   idx_3 := (mem[0x2142] - 1);
                   mem[0x2179] := mem[(word(m_1caf, m_1cb0) + u16(idx_3))];
                   pitch_3 := mem[(word(m_1cb7, m_1cb8) + u16(idx_3))];
-                  let cond_41: bool = ((vib_3 & 0x10) != 0);
+                  let cond_3: bool = ((vib_3 & 0x10) != 0);
                   let sv_116: u8 = 0;
                   let sv_117: u8 = 0;
                   let sv_118: u8 = 0;
@@ -4300,6 +3747,7 @@ machine futurecomposer_ordered {
                   } else {
                     sv_118 := (pitch_3 + 0xd);
                   }
+                  sid[V0_CTRL] := mem[0x2179];
                   if wrote_fc_lo {
                     sid[FC_LO] := out_fc_lo;
                   }
@@ -4310,34 +3758,10 @@ machine futurecomposer_ordered {
                   if wrote_mode_vol {
                     sid[MODE_VOL] := out_mode_vol;
                   }
-                  if wrote_v0_ad {
-                    sid[V0_AD] := out_v0_ad;
-                  }
-                  if wrote_v0_sr {
-                    sid[V0_SR] := out_v0_sr;
-                  }
-                  out2_v0_ctrl := out_v0_ctrl;
-                  wrote2_v0_ctrl := wrote_v0_ctrl;
-                  if wrote2_v0_ctrl {
-                    sid[V0_CTRL] := out2_v0_ctrl;
-                  }
-                  sid[V0_CTRL] := mem[0x2179];
-                  sid[V0_FREQ_LO] := ite(cond_41, sv_116, 0);
-                  sid[V0_FREQ_HI] := ite(cond_41, sv_117, sv_118);
+                  sid[V0_FREQ_LO] := ite(cond_3, sv_116, 0);
+                  sid[V0_FREQ_HI] := ite(cond_3, sv_117, sv_118);
                   sid[V0_PW_LO] := sv_107;
                   sid[V0_PW_HI] := sv_108;
-                  if wrote_v1_ad {
-                    sid[V1_AD] := out_v1_ad;
-                  }
-                  if wrote_v1_sr {
-                    sid[V1_SR] := out_v1_sr;
-                  }
-                  if wrote2_v1_ctrl {
-                    sid[V1_CTRL] := out2_v1_ctrl;
-                  }
-                  if wrote_v1_ctrl {
-                    sid[V1_CTRL] := out_v1_ctrl;
-                  }
                   if wrote_v1_freq_lo {
                     sid[V1_FREQ_LO] := out_v1_freq_lo;
                   }
@@ -4349,18 +3773,6 @@ machine futurecomposer_ordered {
                   }
                   if wrote_v1_pw_hi {
                     sid[V1_PW_HI] := out_v1_pw_hi;
-                  }
-                  if wrote_v2_ad {
-                    sid[V2_AD] := out_v2_ad;
-                  }
-                  if wrote_v2_sr {
-                    sid[V2_SR] := out_v2_sr;
-                  }
-                  if wrote2_v2_ctrl {
-                    sid[V2_CTRL] := out2_v2_ctrl;
-                  }
-                  if wrote_v2_ctrl {
-                    sid[V2_CTRL] := out_v2_ctrl;
                   }
                   if wrote_v2_freq_lo {
                     sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -4386,18 +3798,6 @@ machine futurecomposer_ordered {
                 if wrote_mode_vol {
                   sid[MODE_VOL] := out_mode_vol;
                 }
-                if wrote_v0_ad {
-                  sid[V0_AD] := out_v0_ad;
-                }
-                if wrote_v0_sr {
-                  sid[V0_SR] := out_v0_sr;
-                }
-                if wrote2_v0_ctrl {
-                  sid[V0_CTRL] := out2_v0_ctrl;
-                }
-                if wrote_v0_ctrl {
-                  sid[V0_CTRL] := out_v0_ctrl;
-                }
                 if wrote_v0_freq_lo {
                   sid[V0_FREQ_LO] := out_v0_freq_lo;
                 }
@@ -4406,18 +3806,6 @@ machine futurecomposer_ordered {
                 }
                 sid[V0_PW_LO] := sv_107;
                 sid[V0_PW_HI] := sv_108;
-                if wrote_v1_ad {
-                  sid[V1_AD] := out_v1_ad;
-                }
-                if wrote_v1_sr {
-                  sid[V1_SR] := out_v1_sr;
-                }
-                if wrote2_v1_ctrl {
-                  sid[V1_CTRL] := out2_v1_ctrl;
-                }
-                if wrote_v1_ctrl {
-                  sid[V1_CTRL] := out_v1_ctrl;
-                }
                 if wrote_v1_freq_lo {
                   sid[V1_FREQ_LO] := out_v1_freq_lo;
                 }
@@ -4429,18 +3817,6 @@ machine futurecomposer_ordered {
                 }
                 if wrote_v1_pw_hi {
                   sid[V1_PW_HI] := out_v1_pw_hi;
-                }
-                if wrote_v2_ad {
-                  sid[V2_AD] := out_v2_ad;
-                }
-                if wrote_v2_sr {
-                  sid[V2_SR] := out_v2_sr;
-                }
-                if wrote2_v2_ctrl {
-                  sid[V2_CTRL] := out2_v2_ctrl;
-                }
-                if wrote_v2_ctrl {
-                  sid[V2_CTRL] := out_v2_ctrl;
                 }
                 if wrote_v2_freq_lo {
                   sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -4503,10 +3879,7 @@ machine futurecomposer_ordered {
                         out_v0_freq_lo := 0;
                         wrote_v0_freq_lo := true;
                         mem[0x2179] := 0x81;
-                        out2_v0_ctrl := out_v0_ctrl;
-                        wrote2_v0_ctrl := wrote_v0_ctrl;
-                        out_v0_ctrl := mem[0x2179];
-                        wrote_v0_ctrl := true;
+                        sid[V0_CTRL] := mem[0x2179];
                         ret_wave_arp_step_3 := true;
                       } else {
                         out_v0_freq_lo := mem[0x213c];
@@ -4532,10 +3905,7 @@ machine futurecomposer_ordered {
                         out_v0_freq_hi := sv_120;
                         wrote_v0_freq_hi := true;
                       }
-                      out2_v0_ctrl := out_v0_ctrl;
-                      wrote2_v0_ctrl := wrote_v0_ctrl;
-                      out_v0_ctrl := mem[0x2179];
-                      wrote_v0_ctrl := true;
+                      sid[V0_CTRL] := mem[0x2179];
                       ret_wave_arp_step_3 := true;
                     }
                   }
@@ -4548,10 +3918,7 @@ machine futurecomposer_ordered {
                     m_1cb7 := lo(w16_6);
                     m_1cb8 := hi(w16_6);
                     if (0xf <= mem[0x2142]) {
-                      out2_v0_ctrl := out_v0_ctrl;
-                      wrote2_v0_ctrl := wrote_v0_ctrl;
-                      out_v0_ctrl := mem[0x2179];
-                      wrote_v0_ctrl := true;
+                      sid[V0_CTRL] := mem[0x2179];
                     } else {
                       idx_3 := (mem[0x2142] - 1);
                       mem[0x2179] := mem[(word(m_1caf, m_1cb0) + u16(idx_3))];
@@ -4571,10 +3938,7 @@ machine futurecomposer_ordered {
                         out_v0_freq_lo := 0;
                         wrote_v0_freq_lo := true;
                       }
-                      out2_v0_ctrl := out_v0_ctrl;
-                      wrote2_v0_ctrl := wrote_v0_ctrl;
-                      out_v0_ctrl := mem[0x2179];
-                      wrote_v0_ctrl := true;
+                      sid[V0_CTRL] := mem[0x2179];
                     }
                   }
                   ret_filter_program_3 := true;
@@ -4590,10 +3954,7 @@ machine futurecomposer_ordered {
                       out_v0_freq_lo := 0;
                       wrote_v0_freq_lo := true;
                       mem[0x2179] := 0x81;
-                      out2_v0_ctrl := out_v0_ctrl;
-                      wrote2_v0_ctrl := wrote_v0_ctrl;
-                      out_v0_ctrl := mem[0x2179];
-                      wrote_v0_ctrl := true;
+                      sid[V0_CTRL] := mem[0x2179];
                       ret_wave_arp_step_3 := true;
                     } else {
                       out_v0_freq_lo := mem[0x213c];
@@ -4619,10 +3980,7 @@ machine futurecomposer_ordered {
                       out_v0_freq_hi := sv_125;
                       wrote_v0_freq_hi := true;
                     }
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    out_v0_ctrl := mem[0x2179];
-                    wrote_v0_ctrl := true;
+                    sid[V0_CTRL] := mem[0x2179];
                     ret_wave_arp_step_3 := true;
                   }
                 }
@@ -4635,6 +3993,7 @@ machine futurecomposer_ordered {
                   m_1cb7 := lo(w16_6);
                   m_1cb8 := hi(w16_6);
                   if (0xf <= mem[0x2142]) {
+                    sid[V0_CTRL] := mem[0x2179];
                     if wrote_fc_lo {
                       sid[FC_LO] := out_fc_lo;
                     }
@@ -4647,18 +4006,6 @@ machine futurecomposer_ordered {
                     if wrote_mode_vol {
                       sid[MODE_VOL] := out_mode_vol;
                     }
-                    if wrote_v0_ad {
-                      sid[V0_AD] := out_v0_ad;
-                    }
-                    if wrote_v0_sr {
-                      sid[V0_SR] := out_v0_sr;
-                    }
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    if wrote2_v0_ctrl {
-                      sid[V0_CTRL] := out2_v0_ctrl;
-                    }
-                    sid[V0_CTRL] := mem[0x2179];
                     if wrote_v0_freq_lo {
                       sid[V0_FREQ_LO] := out_v0_freq_lo;
                     }
@@ -4667,18 +4014,6 @@ machine futurecomposer_ordered {
                     }
                     sid[V0_PW_LO] := sv_107;
                     sid[V0_PW_HI] := sv_108;
-                    if wrote_v1_ad {
-                      sid[V1_AD] := out_v1_ad;
-                    }
-                    if wrote_v1_sr {
-                      sid[V1_SR] := out_v1_sr;
-                    }
-                    if wrote2_v1_ctrl {
-                      sid[V1_CTRL] := out2_v1_ctrl;
-                    }
-                    if wrote_v1_ctrl {
-                      sid[V1_CTRL] := out_v1_ctrl;
-                    }
                     if wrote_v1_freq_lo {
                       sid[V1_FREQ_LO] := out_v1_freq_lo;
                     }
@@ -4690,18 +4025,6 @@ machine futurecomposer_ordered {
                     }
                     if wrote_v1_pw_hi {
                       sid[V1_PW_HI] := out_v1_pw_hi;
-                    }
-                    if wrote_v2_ad {
-                      sid[V2_AD] := out_v2_ad;
-                    }
-                    if wrote_v2_sr {
-                      sid[V2_SR] := out_v2_sr;
-                    }
-                    if wrote2_v2_ctrl {
-                      sid[V2_CTRL] := out2_v2_ctrl;
-                    }
-                    if wrote_v2_ctrl {
-                      sid[V2_CTRL] := out_v2_ctrl;
                     }
                     if wrote_v2_freq_lo {
                       sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -4719,7 +4042,7 @@ machine futurecomposer_ordered {
                     idx_3 := (mem[0x2142] - 1);
                     mem[0x2179] := mem[(word(m_1caf, m_1cb0) + u16(idx_3))];
                     pitch_3 := mem[(word(m_1cb7, m_1cb8) + u16(idx_3))];
-                    let cond_42: bool = ((vib_3 & 0x10) != 0);
+                    let cond_4: bool = ((vib_3 & 0x10) != 0);
                     let sv_126: u8 = 0;
                     let sv_127: u8 = 0;
                     let sv_128: u8 = 0;
@@ -4730,6 +4053,7 @@ machine futurecomposer_ordered {
                     } else {
                       sv_128 := (pitch_3 + 0xd);
                     }
+                    sid[V0_CTRL] := mem[0x2179];
                     if wrote_fc_lo {
                       sid[FC_LO] := out_fc_lo;
                     }
@@ -4742,34 +4066,10 @@ machine futurecomposer_ordered {
                     if wrote_mode_vol {
                       sid[MODE_VOL] := out_mode_vol;
                     }
-                    if wrote_v0_ad {
-                      sid[V0_AD] := out_v0_ad;
-                    }
-                    if wrote_v0_sr {
-                      sid[V0_SR] := out_v0_sr;
-                    }
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    if wrote2_v0_ctrl {
-                      sid[V0_CTRL] := out2_v0_ctrl;
-                    }
-                    sid[V0_CTRL] := mem[0x2179];
-                    sid[V0_FREQ_LO] := ite(cond_42, sv_126, 0);
-                    sid[V0_FREQ_HI] := ite(cond_42, sv_127, sv_128);
+                    sid[V0_FREQ_LO] := ite(cond_4, sv_126, 0);
+                    sid[V0_FREQ_HI] := ite(cond_4, sv_127, sv_128);
                     sid[V0_PW_LO] := sv_107;
                     sid[V0_PW_HI] := sv_108;
-                    if wrote_v1_ad {
-                      sid[V1_AD] := out_v1_ad;
-                    }
-                    if wrote_v1_sr {
-                      sid[V1_SR] := out_v1_sr;
-                    }
-                    if wrote2_v1_ctrl {
-                      sid[V1_CTRL] := out2_v1_ctrl;
-                    }
-                    if wrote_v1_ctrl {
-                      sid[V1_CTRL] := out_v1_ctrl;
-                    }
                     if wrote_v1_freq_lo {
                       sid[V1_FREQ_LO] := out_v1_freq_lo;
                     }
@@ -4781,18 +4081,6 @@ machine futurecomposer_ordered {
                     }
                     if wrote_v1_pw_hi {
                       sid[V1_PW_HI] := out_v1_pw_hi;
-                    }
-                    if wrote_v2_ad {
-                      sid[V2_AD] := out_v2_ad;
-                    }
-                    if wrote_v2_sr {
-                      sid[V2_SR] := out_v2_sr;
-                    }
-                    if wrote2_v2_ctrl {
-                      sid[V2_CTRL] := out2_v2_ctrl;
-                    }
-                    if wrote_v2_ctrl {
-                      sid[V2_CTRL] := out_v2_ctrl;
                     }
                     if wrote_v2_freq_lo {
                       sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -4820,18 +4108,6 @@ machine futurecomposer_ordered {
                   if wrote_mode_vol {
                     sid[MODE_VOL] := out_mode_vol;
                   }
-                  if wrote_v0_ad {
-                    sid[V0_AD] := out_v0_ad;
-                  }
-                  if wrote_v0_sr {
-                    sid[V0_SR] := out_v0_sr;
-                  }
-                  if wrote2_v0_ctrl {
-                    sid[V0_CTRL] := out2_v0_ctrl;
-                  }
-                  if wrote_v0_ctrl {
-                    sid[V0_CTRL] := out_v0_ctrl;
-                  }
                   if wrote_v0_freq_lo {
                     sid[V0_FREQ_LO] := out_v0_freq_lo;
                   }
@@ -4840,18 +4116,6 @@ machine futurecomposer_ordered {
                   }
                   sid[V0_PW_LO] := sv_107;
                   sid[V0_PW_HI] := sv_108;
-                  if wrote_v1_ad {
-                    sid[V1_AD] := out_v1_ad;
-                  }
-                  if wrote_v1_sr {
-                    sid[V1_SR] := out_v1_sr;
-                  }
-                  if wrote2_v1_ctrl {
-                    sid[V1_CTRL] := out2_v1_ctrl;
-                  }
-                  if wrote_v1_ctrl {
-                    sid[V1_CTRL] := out_v1_ctrl;
-                  }
                   if wrote_v1_freq_lo {
                     sid[V1_FREQ_LO] := out_v1_freq_lo;
                   }
@@ -4863,18 +4127,6 @@ machine futurecomposer_ordered {
                   }
                   if wrote_v1_pw_hi {
                     sid[V1_PW_HI] := out_v1_pw_hi;
-                  }
-                  if wrote_v2_ad {
-                    sid[V2_AD] := out_v2_ad;
-                  }
-                  if wrote_v2_sr {
-                    sid[V2_SR] := out_v2_sr;
-                  }
-                  if wrote2_v2_ctrl {
-                    sid[V2_CTRL] := out2_v2_ctrl;
-                  }
-                  if wrote_v2_ctrl {
-                    sid[V2_CTRL] := out_v2_ctrl;
                   }
                   if wrote_v2_freq_lo {
                     sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -4902,18 +4154,6 @@ machine futurecomposer_ordered {
                 if wrote_mode_vol {
                   sid[MODE_VOL] := out_mode_vol;
                 }
-                if wrote_v0_ad {
-                  sid[V0_AD] := out_v0_ad;
-                }
-                if wrote_v0_sr {
-                  sid[V0_SR] := out_v0_sr;
-                }
-                if wrote2_v0_ctrl {
-                  sid[V0_CTRL] := out2_v0_ctrl;
-                }
-                if wrote_v0_ctrl {
-                  sid[V0_CTRL] := out_v0_ctrl;
-                }
                 if wrote_v0_freq_lo {
                   sid[V0_FREQ_LO] := out_v0_freq_lo;
                 }
@@ -4922,18 +4162,6 @@ machine futurecomposer_ordered {
                 }
                 sid[V0_PW_LO] := sv_107;
                 sid[V0_PW_HI] := sv_108;
-                if wrote_v1_ad {
-                  sid[V1_AD] := out_v1_ad;
-                }
-                if wrote_v1_sr {
-                  sid[V1_SR] := out_v1_sr;
-                }
-                if wrote2_v1_ctrl {
-                  sid[V1_CTRL] := out2_v1_ctrl;
-                }
-                if wrote_v1_ctrl {
-                  sid[V1_CTRL] := out_v1_ctrl;
-                }
                 if wrote_v1_freq_lo {
                   sid[V1_FREQ_LO] := out_v1_freq_lo;
                 }
@@ -4945,18 +4173,6 @@ machine futurecomposer_ordered {
                 }
                 if wrote_v1_pw_hi {
                   sid[V1_PW_HI] := out_v1_pw_hi;
-                }
-                if wrote_v2_ad {
-                  sid[V2_AD] := out_v2_ad;
-                }
-                if wrote_v2_sr {
-                  sid[V2_SR] := out_v2_sr;
-                }
-                if wrote2_v2_ctrl {
-                  sid[V2_CTRL] := out2_v2_ctrl;
-                }
-                if wrote_v2_ctrl {
-                  sid[V2_CTRL] := out_v2_ctrl;
                 }
                 if wrote_v2_freq_lo {
                   sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -4986,14 +4202,9 @@ machine futurecomposer_ordered {
             wrote_v0_pw_lo := true;
             out_v0_pw_hi := 0;
             wrote_v0_pw_hi := true;
-            out2_v0_ctrl := out_v0_ctrl;
-            wrote2_v0_ctrl := wrote_v0_ctrl;
-            out_v0_ctrl := 0;
-            wrote_v0_ctrl := true;
-            out_v0_ad := 0;
-            wrote_v0_ad := true;
-            out_v0_sr := 0;
-            wrote_v0_sr := true;
+            sid[V0_CTRL] := 0;
+            sid[V0_AD] := 0;
+            sid[V0_SR] := 0;
             out_v1_freq_lo := 0;
             wrote_v1_freq_lo := true;
             out_v1_freq_hi := 0;
@@ -5002,14 +4213,9 @@ machine futurecomposer_ordered {
             wrote_v1_pw_lo := true;
             out_v1_pw_hi := 0;
             wrote_v1_pw_hi := true;
-            out2_v1_ctrl := out_v1_ctrl;
-            wrote2_v1_ctrl := wrote_v1_ctrl;
-            out_v1_ctrl := 0;
-            wrote_v1_ctrl := true;
-            out_v1_ad := 0;
-            wrote_v1_ad := true;
-            out_v1_sr := 0;
-            wrote_v1_sr := true;
+            sid[V1_CTRL] := 0;
+            sid[V1_AD] := 0;
+            sid[V1_SR] := 0;
             out_v2_freq_lo := 0;
             wrote_v2_freq_lo := true;
             out_v2_freq_hi := 0;
@@ -5018,14 +4224,9 @@ machine futurecomposer_ordered {
             wrote_v2_pw_lo := true;
             out_v2_pw_hi := 0;
             wrote_v2_pw_hi := true;
-            out2_v2_ctrl := out_v2_ctrl;
-            wrote2_v2_ctrl := wrote_v2_ctrl;
-            out_v2_ctrl := 0;
-            wrote_v2_ctrl := true;
-            out_v2_ad := 0;
-            wrote_v2_ad := true;
-            out_v2_sr := 0;
-            wrote_v2_sr := true;
+            sid[V2_CTRL] := 0;
+            sid[V2_AD] := 0;
+            sid[V2_SR] := 0;
             out_fc_lo := 0;
             wrote_fc_lo := true;
             out_fc_hi := 0;
@@ -5059,14 +4260,9 @@ machine futurecomposer_ordered {
               wrote_v0_pw_lo := true;
               out_v0_pw_hi := 0;
               wrote_v0_pw_hi := true;
-              out2_v0_ctrl := out_v0_ctrl;
-              wrote2_v0_ctrl := wrote_v0_ctrl;
-              out_v0_ctrl := 0;
-              wrote_v0_ctrl := true;
-              out_v0_ad := 0;
-              wrote_v0_ad := true;
-              out_v0_sr := 0;
-              wrote_v0_sr := true;
+              sid[V0_CTRL] := 0;
+              sid[V0_AD] := 0;
+              sid[V0_SR] := 0;
               out_v1_freq_lo := 0;
               wrote_v1_freq_lo := true;
               out_v1_freq_hi := 0;
@@ -5075,14 +4271,9 @@ machine futurecomposer_ordered {
               wrote_v1_pw_lo := true;
               out_v1_pw_hi := 0;
               wrote_v1_pw_hi := true;
-              out2_v1_ctrl := out_v1_ctrl;
-              wrote2_v1_ctrl := wrote_v1_ctrl;
-              out_v1_ctrl := 0;
-              wrote_v1_ctrl := true;
-              out_v1_ad := 0;
-              wrote_v1_ad := true;
-              out_v1_sr := 0;
-              wrote_v1_sr := true;
+              sid[V1_CTRL] := 0;
+              sid[V1_AD] := 0;
+              sid[V1_SR] := 0;
               out_v2_freq_lo := 0;
               wrote_v2_freq_lo := true;
               out_v2_freq_hi := 0;
@@ -5091,14 +4282,9 @@ machine futurecomposer_ordered {
               wrote_v2_pw_lo := true;
               out_v2_pw_hi := 0;
               wrote_v2_pw_hi := true;
-              out2_v2_ctrl := out_v2_ctrl;
-              wrote2_v2_ctrl := wrote_v2_ctrl;
-              out_v2_ctrl := 0;
-              wrote_v2_ctrl := true;
-              out_v2_ad := 0;
-              wrote_v2_ad := true;
-              out_v2_sr := 0;
-              wrote_v2_sr := true;
+              sid[V2_CTRL] := 0;
+              sid[V2_AD] := 0;
+              sid[V2_SR] := 0;
               out_fc_lo := 0;
               wrote_fc_lo := true;
               out_fc_hi := 0;
@@ -5178,10 +4364,7 @@ machine futurecomposer_ordered {
                   mem[0x2121] := (mem[0x2121] + 1);
                 }
               }
-              out2_v0_ctrl := out_v0_ctrl;
-              wrote2_v0_ctrl := wrote_v0_ctrl;
-              out_v0_ctrl := mem[0x2179];
-              wrote_v0_ctrl := true;
+              sid[V0_CTRL] := mem[0x2179];
               ret_pattern_walk_3 := true;
             } else {
               if ((f8_3 & 0xf0) == 0xe0) {
@@ -5213,10 +4396,7 @@ machine futurecomposer_ordered {
                   if advance_3 {
                     mem[0x2121] := (mem[0x2121] + 1);
                   }
-                  out2_v0_ctrl := out_v0_ctrl;
-                  wrote2_v0_ctrl := wrote_v0_ctrl;
-                  out_v0_ctrl := mem[0x2179];
-                  wrote_v0_ctrl := true;
+                  sid[V0_CTRL] := mem[0x2179];
                 }
                 cur_5 := (cur_5 + 1);
                 if (b_6 == 0xff) {
@@ -5243,10 +4423,7 @@ machine futurecomposer_ordered {
                     if advance_3 {
                       mem[0x2121] := (mem[0x2121] + 1);
                     }
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    out_v0_ctrl := mem[0x2179];
-                    wrote_v0_ctrl := true;
+                    sid[V0_CTRL] := mem[0x2179];
                   }
                   cur_5 := (cur_5 + 1);
                   if (b_6 == 0xff) {
@@ -5267,11 +4444,9 @@ machine futurecomposer_ordered {
                   ins_6 := (mem[0x2133] << 3);
                   record_base_3 := (0x2188 + u16(ins_6));
                   let sv_129: u8 = instr_tab[(u16(ins_6) + 2)];
-                  out_v0_ad := sv_129;
-                  wrote_v0_ad := true;
+                  sid[V0_AD] := sv_129;
                   let sv_130: u8 = instr_tab[(u16(ins_6) + 3)];
-                  out_v0_sr := sv_130;
-                  wrote_v0_sr := true;
+                  sid[V0_SR] := sv_130;
                   pulse_ctrl_3 := instr_tab[ins_6];
                   wave_3 := instr_tab[(u16(ins_6) + 1)];
                   mem[0x212d] := wave_3;
@@ -5301,10 +4476,7 @@ machine futurecomposer_ordered {
                       mem[0x2121] := (mem[0x2121] + 1);
                     }
                   }
-                  out2_v0_ctrl := out_v0_ctrl;
-                  wrote2_v0_ctrl := wrote_v0_ctrl;
-                  out_v0_ctrl := mem[0x2179];
-                  wrote_v0_ctrl := true;
+                  sid[V0_CTRL] := mem[0x2179];
                   ret_pattern_walk_3 := true;
                 }
               }
@@ -5344,10 +4516,7 @@ machine futurecomposer_ordered {
                     mem[0x2121] := (mem[0x2121] + 1);
                   }
                 }
-                out2_v0_ctrl := out_v0_ctrl;
-                wrote2_v0_ctrl := wrote_v0_ctrl;
-                out_v0_ctrl := mem[0x2179];
-                wrote_v0_ctrl := true;
+                sid[V0_CTRL] := mem[0x2179];
                 ret_pattern_walk_3 := true;
               } elif !ret_pattern_walk_3 {
                 if ((f8_3 & 0xf0) == 0xe0) {
@@ -5379,10 +4548,7 @@ machine futurecomposer_ordered {
                     if advance_3 {
                       mem[0x2121] := (mem[0x2121] + 1);
                     }
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    out_v0_ctrl := mem[0x2179];
-                    wrote_v0_ctrl := true;
+                    sid[V0_CTRL] := mem[0x2179];
                   }
                   cur_5 := (cur_5 + 1);
                   if (b_6 == 0xff) {
@@ -5409,10 +4575,7 @@ machine futurecomposer_ordered {
                       if advance_3 {
                         mem[0x2121] := (mem[0x2121] + 1);
                       }
-                      out2_v0_ctrl := out_v0_ctrl;
-                      wrote2_v0_ctrl := wrote_v0_ctrl;
-                      out_v0_ctrl := mem[0x2179];
-                      wrote_v0_ctrl := true;
+                      sid[V0_CTRL] := mem[0x2179];
                     }
                     cur_5 := (cur_5 + 1);
                     if (b_6 == 0xff) {
@@ -5433,11 +4596,9 @@ machine futurecomposer_ordered {
                     ins_6 := (mem[0x2133] << 3);
                     record_base_3 := (0x2188 + u16(ins_6));
                     sv_131 := instr_tab[(u16(ins_6) + 2)];
-                    out_v0_ad := sv_131;
-                    wrote_v0_ad := true;
+                    sid[V0_AD] := sv_131;
                     sv_132 := instr_tab[(u16(ins_6) + 3)];
-                    out_v0_sr := sv_132;
-                    wrote_v0_sr := true;
+                    sid[V0_SR] := sv_132;
                     pulse_ctrl_3 := instr_tab[ins_6];
                     wave_3 := instr_tab[(u16(ins_6) + 1)];
                     mem[0x212d] := wave_3;
@@ -5467,10 +4628,7 @@ machine futurecomposer_ordered {
                         mem[0x2121] := (mem[0x2121] + 1);
                       }
                     }
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    out_v0_ctrl := mem[0x2179];
-                    wrote_v0_ctrl := true;
+                    sid[V0_CTRL] := mem[0x2179];
                     ret_pattern_walk_3 := true;
                   }
                 }
@@ -5489,18 +4647,6 @@ machine futurecomposer_ordered {
           if wrote_mode_vol {
             sid[MODE_VOL] := out_mode_vol;
           }
-          if wrote_v0_ad {
-            sid[V0_AD] := out_v0_ad;
-          }
-          if wrote_v0_sr {
-            sid[V0_SR] := out_v0_sr;
-          }
-          if wrote2_v0_ctrl {
-            sid[V0_CTRL] := out2_v0_ctrl;
-          }
-          if wrote_v0_ctrl {
-            sid[V0_CTRL] := out_v0_ctrl;
-          }
           if wrote_v0_freq_lo {
             sid[V0_FREQ_LO] := out_v0_freq_lo;
           }
@@ -5513,18 +4659,6 @@ machine futurecomposer_ordered {
           if wrote_v0_pw_hi {
             sid[V0_PW_HI] := out_v0_pw_hi;
           }
-          if wrote_v1_ad {
-            sid[V1_AD] := out_v1_ad;
-          }
-          if wrote_v1_sr {
-            sid[V1_SR] := out_v1_sr;
-          }
-          if wrote2_v1_ctrl {
-            sid[V1_CTRL] := out2_v1_ctrl;
-          }
-          if wrote_v1_ctrl {
-            sid[V1_CTRL] := out_v1_ctrl;
-          }
           if wrote_v1_freq_lo {
             sid[V1_FREQ_LO] := out_v1_freq_lo;
           }
@@ -5536,18 +4670,6 @@ machine futurecomposer_ordered {
           }
           if wrote_v1_pw_hi {
             sid[V1_PW_HI] := out_v1_pw_hi;
-          }
-          if wrote_v2_ad {
-            sid[V2_AD] := out_v2_ad;
-          }
-          if wrote_v2_sr {
-            sid[V2_SR] := out_v2_sr;
-          }
-          if wrote2_v2_ctrl {
-            sid[V2_CTRL] := out2_v2_ctrl;
-          }
-          if wrote_v2_ctrl {
-            sid[V2_CTRL] := out_v2_ctrl;
           }
           if wrote_v2_freq_lo {
             sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -5752,10 +4874,7 @@ machine futurecomposer_ordered {
                 out_v0_freq_lo := 0;
                 wrote_v0_freq_lo := true;
                 mem[0x2179] := 0x81;
-                out2_v0_ctrl := out_v0_ctrl;
-                wrote2_v0_ctrl := wrote_v0_ctrl;
-                out_v0_ctrl := mem[0x2179];
-                wrote_v0_ctrl := true;
+                sid[V0_CTRL] := mem[0x2179];
                 ret_wave_arp_step_3 := true;
               } else {
                 out_v0_freq_lo := mem[0x213c];
@@ -5781,10 +4900,7 @@ machine futurecomposer_ordered {
                 out_v0_freq_hi := sv_138;
                 wrote_v0_freq_hi := true;
               }
-              out2_v0_ctrl := out_v0_ctrl;
-              wrote2_v0_ctrl := wrote_v0_ctrl;
-              out_v0_ctrl := mem[0x2179];
-              wrote_v0_ctrl := true;
+              sid[V0_CTRL] := mem[0x2179];
               ret_wave_arp_step_3 := true;
             }
           }
@@ -5797,6 +4913,7 @@ machine futurecomposer_ordered {
             m_1cb7 := lo(w16_6);
             m_1cb8 := hi(w16_6);
             if (0xf <= mem[0x2142]) {
+              sid[V0_CTRL] := mem[0x2179];
               if wrote_fc_lo {
                 sid[FC_LO] := out_fc_lo;
               }
@@ -5809,18 +4926,6 @@ machine futurecomposer_ordered {
               if wrote_mode_vol {
                 sid[MODE_VOL] := out_mode_vol;
               }
-              if wrote_v0_ad {
-                sid[V0_AD] := out_v0_ad;
-              }
-              if wrote_v0_sr {
-                sid[V0_SR] := out_v0_sr;
-              }
-              out2_v0_ctrl := out_v0_ctrl;
-              wrote2_v0_ctrl := wrote_v0_ctrl;
-              if wrote2_v0_ctrl {
-                sid[V0_CTRL] := out2_v0_ctrl;
-              }
-              sid[V0_CTRL] := mem[0x2179];
               if wrote_v0_freq_lo {
                 sid[V0_FREQ_LO] := out_v0_freq_lo;
               }
@@ -5829,18 +4934,6 @@ machine futurecomposer_ordered {
               }
               sid[V0_PW_LO] := sv_135;
               sid[V0_PW_HI] := sv_136;
-              if wrote_v1_ad {
-                sid[V1_AD] := out_v1_ad;
-              }
-              if wrote_v1_sr {
-                sid[V1_SR] := out_v1_sr;
-              }
-              if wrote2_v1_ctrl {
-                sid[V1_CTRL] := out2_v1_ctrl;
-              }
-              if wrote_v1_ctrl {
-                sid[V1_CTRL] := out_v1_ctrl;
-              }
               if wrote_v1_freq_lo {
                 sid[V1_FREQ_LO] := out_v1_freq_lo;
               }
@@ -5852,18 +4945,6 @@ machine futurecomposer_ordered {
               }
               if wrote_v1_pw_hi {
                 sid[V1_PW_HI] := out_v1_pw_hi;
-              }
-              if wrote_v2_ad {
-                sid[V2_AD] := out_v2_ad;
-              }
-              if wrote_v2_sr {
-                sid[V2_SR] := out_v2_sr;
-              }
-              if wrote2_v2_ctrl {
-                sid[V2_CTRL] := out2_v2_ctrl;
-              }
-              if wrote_v2_ctrl {
-                sid[V2_CTRL] := out_v2_ctrl;
               }
               if wrote_v2_freq_lo {
                 sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -5881,7 +4962,7 @@ machine futurecomposer_ordered {
               idx_3 := (mem[0x2142] - 1);
               mem[0x2179] := mem[(word(m_1caf, m_1cb0) + u16(idx_3))];
               pitch_3 := mem[(word(m_1cb7, m_1cb8) + u16(idx_3))];
-              let cond_43: bool = ((vib_3 & 0x10) != 0);
+              let cond_5: bool = ((vib_3 & 0x10) != 0);
               let sv_139: u8 = 0;
               let sv_140: u8 = 0;
               let sv_141: u8 = 0;
@@ -5892,6 +4973,7 @@ machine futurecomposer_ordered {
               } else {
                 sv_141 := (pitch_3 + 0xd);
               }
+              sid[V0_CTRL] := mem[0x2179];
               if wrote_fc_lo {
                 sid[FC_LO] := out_fc_lo;
               }
@@ -5904,34 +4986,10 @@ machine futurecomposer_ordered {
               if wrote_mode_vol {
                 sid[MODE_VOL] := out_mode_vol;
               }
-              if wrote_v0_ad {
-                sid[V0_AD] := out_v0_ad;
-              }
-              if wrote_v0_sr {
-                sid[V0_SR] := out_v0_sr;
-              }
-              out2_v0_ctrl := out_v0_ctrl;
-              wrote2_v0_ctrl := wrote_v0_ctrl;
-              if wrote2_v0_ctrl {
-                sid[V0_CTRL] := out2_v0_ctrl;
-              }
-              sid[V0_CTRL] := mem[0x2179];
-              sid[V0_FREQ_LO] := ite(cond_43, sv_139, 0);
-              sid[V0_FREQ_HI] := ite(cond_43, sv_140, sv_141);
+              sid[V0_FREQ_LO] := ite(cond_5, sv_139, 0);
+              sid[V0_FREQ_HI] := ite(cond_5, sv_140, sv_141);
               sid[V0_PW_LO] := sv_135;
               sid[V0_PW_HI] := sv_136;
-              if wrote_v1_ad {
-                sid[V1_AD] := out_v1_ad;
-              }
-              if wrote_v1_sr {
-                sid[V1_SR] := out_v1_sr;
-              }
-              if wrote2_v1_ctrl {
-                sid[V1_CTRL] := out2_v1_ctrl;
-              }
-              if wrote_v1_ctrl {
-                sid[V1_CTRL] := out_v1_ctrl;
-              }
               if wrote_v1_freq_lo {
                 sid[V1_FREQ_LO] := out_v1_freq_lo;
               }
@@ -5943,18 +5001,6 @@ machine futurecomposer_ordered {
               }
               if wrote_v1_pw_hi {
                 sid[V1_PW_HI] := out_v1_pw_hi;
-              }
-              if wrote_v2_ad {
-                sid[V2_AD] := out_v2_ad;
-              }
-              if wrote_v2_sr {
-                sid[V2_SR] := out_v2_sr;
-              }
-              if wrote2_v2_ctrl {
-                sid[V2_CTRL] := out2_v2_ctrl;
-              }
-              if wrote_v2_ctrl {
-                sid[V2_CTRL] := out_v2_ctrl;
               }
               if wrote_v2_freq_lo {
                 sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -5982,18 +5028,6 @@ machine futurecomposer_ordered {
             if wrote_mode_vol {
               sid[MODE_VOL] := out_mode_vol;
             }
-            if wrote_v0_ad {
-              sid[V0_AD] := out_v0_ad;
-            }
-            if wrote_v0_sr {
-              sid[V0_SR] := out_v0_sr;
-            }
-            if wrote2_v0_ctrl {
-              sid[V0_CTRL] := out2_v0_ctrl;
-            }
-            if wrote_v0_ctrl {
-              sid[V0_CTRL] := out_v0_ctrl;
-            }
             if wrote_v0_freq_lo {
               sid[V0_FREQ_LO] := out_v0_freq_lo;
             }
@@ -6002,18 +5036,6 @@ machine futurecomposer_ordered {
             }
             sid[V0_PW_LO] := sv_135;
             sid[V0_PW_HI] := sv_136;
-            if wrote_v1_ad {
-              sid[V1_AD] := out_v1_ad;
-            }
-            if wrote_v1_sr {
-              sid[V1_SR] := out_v1_sr;
-            }
-            if wrote2_v1_ctrl {
-              sid[V1_CTRL] := out2_v1_ctrl;
-            }
-            if wrote_v1_ctrl {
-              sid[V1_CTRL] := out_v1_ctrl;
-            }
             if wrote_v1_freq_lo {
               sid[V1_FREQ_LO] := out_v1_freq_lo;
             }
@@ -6025,18 +5047,6 @@ machine futurecomposer_ordered {
             }
             if wrote_v1_pw_hi {
               sid[V1_PW_HI] := out_v1_pw_hi;
-            }
-            if wrote_v2_ad {
-              sid[V2_AD] := out_v2_ad;
-            }
-            if wrote_v2_sr {
-              sid[V2_SR] := out_v2_sr;
-            }
-            if wrote2_v2_ctrl {
-              sid[V2_CTRL] := out2_v2_ctrl;
-            }
-            if wrote_v2_ctrl {
-              sid[V2_CTRL] := out_v2_ctrl;
             }
             if wrote_v2_freq_lo {
               sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -6064,10 +5074,7 @@ machine futurecomposer_ordered {
                   out_v0_freq_lo := 0;
                   wrote_v0_freq_lo := true;
                   mem[0x2179] := 0x81;
-                  out2_v0_ctrl := out_v0_ctrl;
-                  wrote2_v0_ctrl := wrote_v0_ctrl;
-                  out_v0_ctrl := mem[0x2179];
-                  wrote_v0_ctrl := true;
+                  sid[V0_CTRL] := mem[0x2179];
                   ret_wave_arp_step_3 := true;
                 } else {
                   out_v0_freq_lo := mem[0x213c];
@@ -6093,10 +5100,7 @@ machine futurecomposer_ordered {
                   out_v0_freq_hi := sv_143;
                   wrote_v0_freq_hi := true;
                 }
-                out2_v0_ctrl := out_v0_ctrl;
-                wrote2_v0_ctrl := wrote_v0_ctrl;
-                out_v0_ctrl := mem[0x2179];
-                wrote_v0_ctrl := true;
+                sid[V0_CTRL] := mem[0x2179];
                 ret_wave_arp_step_3 := true;
               }
             }
@@ -6109,6 +5113,7 @@ machine futurecomposer_ordered {
               m_1cb7 := lo(w16_6);
               m_1cb8 := hi(w16_6);
               if (0xf <= mem[0x2142]) {
+                sid[V0_CTRL] := mem[0x2179];
                 if wrote_fc_lo {
                   sid[FC_LO] := out_fc_lo;
                 }
@@ -6119,18 +5124,6 @@ machine futurecomposer_ordered {
                 if wrote_mode_vol {
                   sid[MODE_VOL] := out_mode_vol;
                 }
-                if wrote_v0_ad {
-                  sid[V0_AD] := out_v0_ad;
-                }
-                if wrote_v0_sr {
-                  sid[V0_SR] := out_v0_sr;
-                }
-                out2_v0_ctrl := out_v0_ctrl;
-                wrote2_v0_ctrl := wrote_v0_ctrl;
-                if wrote2_v0_ctrl {
-                  sid[V0_CTRL] := out2_v0_ctrl;
-                }
-                sid[V0_CTRL] := mem[0x2179];
                 if wrote_v0_freq_lo {
                   sid[V0_FREQ_LO] := out_v0_freq_lo;
                 }
@@ -6139,18 +5132,6 @@ machine futurecomposer_ordered {
                 }
                 sid[V0_PW_LO] := sv_135;
                 sid[V0_PW_HI] := sv_136;
-                if wrote_v1_ad {
-                  sid[V1_AD] := out_v1_ad;
-                }
-                if wrote_v1_sr {
-                  sid[V1_SR] := out_v1_sr;
-                }
-                if wrote2_v1_ctrl {
-                  sid[V1_CTRL] := out2_v1_ctrl;
-                }
-                if wrote_v1_ctrl {
-                  sid[V1_CTRL] := out_v1_ctrl;
-                }
                 if wrote_v1_freq_lo {
                   sid[V1_FREQ_LO] := out_v1_freq_lo;
                 }
@@ -6162,18 +5143,6 @@ machine futurecomposer_ordered {
                 }
                 if wrote_v1_pw_hi {
                   sid[V1_PW_HI] := out_v1_pw_hi;
-                }
-                if wrote_v2_ad {
-                  sid[V2_AD] := out_v2_ad;
-                }
-                if wrote_v2_sr {
-                  sid[V2_SR] := out_v2_sr;
-                }
-                if wrote2_v2_ctrl {
-                  sid[V2_CTRL] := out2_v2_ctrl;
-                }
-                if wrote_v2_ctrl {
-                  sid[V2_CTRL] := out_v2_ctrl;
                 }
                 if wrote_v2_freq_lo {
                   sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -6191,7 +5160,7 @@ machine futurecomposer_ordered {
                 idx_3 := (mem[0x2142] - 1);
                 mem[0x2179] := mem[(word(m_1caf, m_1cb0) + u16(idx_3))];
                 pitch_3 := mem[(word(m_1cb7, m_1cb8) + u16(idx_3))];
-                let cond_44: bool = ((vib_3 & 0x10) != 0);
+                let cond_6: bool = ((vib_3 & 0x10) != 0);
                 let sv_144: u8 = 0;
                 let sv_145: u8 = 0;
                 let sv_146: u8 = 0;
@@ -6202,6 +5171,7 @@ machine futurecomposer_ordered {
                 } else {
                   sv_146 := (pitch_3 + 0xd);
                 }
+                sid[V0_CTRL] := mem[0x2179];
                 if wrote_fc_lo {
                   sid[FC_LO] := out_fc_lo;
                 }
@@ -6212,34 +5182,10 @@ machine futurecomposer_ordered {
                 if wrote_mode_vol {
                   sid[MODE_VOL] := out_mode_vol;
                 }
-                if wrote_v0_ad {
-                  sid[V0_AD] := out_v0_ad;
-                }
-                if wrote_v0_sr {
-                  sid[V0_SR] := out_v0_sr;
-                }
-                out2_v0_ctrl := out_v0_ctrl;
-                wrote2_v0_ctrl := wrote_v0_ctrl;
-                if wrote2_v0_ctrl {
-                  sid[V0_CTRL] := out2_v0_ctrl;
-                }
-                sid[V0_CTRL] := mem[0x2179];
-                sid[V0_FREQ_LO] := ite(cond_44, sv_144, 0);
-                sid[V0_FREQ_HI] := ite(cond_44, sv_145, sv_146);
+                sid[V0_FREQ_LO] := ite(cond_6, sv_144, 0);
+                sid[V0_FREQ_HI] := ite(cond_6, sv_145, sv_146);
                 sid[V0_PW_LO] := sv_135;
                 sid[V0_PW_HI] := sv_136;
-                if wrote_v1_ad {
-                  sid[V1_AD] := out_v1_ad;
-                }
-                if wrote_v1_sr {
-                  sid[V1_SR] := out_v1_sr;
-                }
-                if wrote2_v1_ctrl {
-                  sid[V1_CTRL] := out2_v1_ctrl;
-                }
-                if wrote_v1_ctrl {
-                  sid[V1_CTRL] := out_v1_ctrl;
-                }
                 if wrote_v1_freq_lo {
                   sid[V1_FREQ_LO] := out_v1_freq_lo;
                 }
@@ -6251,18 +5197,6 @@ machine futurecomposer_ordered {
                 }
                 if wrote_v1_pw_hi {
                   sid[V1_PW_HI] := out_v1_pw_hi;
-                }
-                if wrote_v2_ad {
-                  sid[V2_AD] := out_v2_ad;
-                }
-                if wrote_v2_sr {
-                  sid[V2_SR] := out_v2_sr;
-                }
-                if wrote2_v2_ctrl {
-                  sid[V2_CTRL] := out2_v2_ctrl;
-                }
-                if wrote_v2_ctrl {
-                  sid[V2_CTRL] := out_v2_ctrl;
                 }
                 if wrote_v2_freq_lo {
                   sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -6288,18 +5222,6 @@ machine futurecomposer_ordered {
               if wrote_mode_vol {
                 sid[MODE_VOL] := out_mode_vol;
               }
-              if wrote_v0_ad {
-                sid[V0_AD] := out_v0_ad;
-              }
-              if wrote_v0_sr {
-                sid[V0_SR] := out_v0_sr;
-              }
-              if wrote2_v0_ctrl {
-                sid[V0_CTRL] := out2_v0_ctrl;
-              }
-              if wrote_v0_ctrl {
-                sid[V0_CTRL] := out_v0_ctrl;
-              }
               if wrote_v0_freq_lo {
                 sid[V0_FREQ_LO] := out_v0_freq_lo;
               }
@@ -6308,18 +5230,6 @@ machine futurecomposer_ordered {
               }
               sid[V0_PW_LO] := sv_135;
               sid[V0_PW_HI] := sv_136;
-              if wrote_v1_ad {
-                sid[V1_AD] := out_v1_ad;
-              }
-              if wrote_v1_sr {
-                sid[V1_SR] := out_v1_sr;
-              }
-              if wrote2_v1_ctrl {
-                sid[V1_CTRL] := out2_v1_ctrl;
-              }
-              if wrote_v1_ctrl {
-                sid[V1_CTRL] := out_v1_ctrl;
-              }
               if wrote_v1_freq_lo {
                 sid[V1_FREQ_LO] := out_v1_freq_lo;
               }
@@ -6331,18 +5241,6 @@ machine futurecomposer_ordered {
               }
               if wrote_v1_pw_hi {
                 sid[V1_PW_HI] := out_v1_pw_hi;
-              }
-              if wrote_v2_ad {
-                sid[V2_AD] := out_v2_ad;
-              }
-              if wrote_v2_sr {
-                sid[V2_SR] := out_v2_sr;
-              }
-              if wrote2_v2_ctrl {
-                sid[V2_CTRL] := out2_v2_ctrl;
-              }
-              if wrote_v2_ctrl {
-                sid[V2_CTRL] := out_v2_ctrl;
               }
               if wrote_v2_freq_lo {
                 sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -6405,10 +5303,7 @@ machine futurecomposer_ordered {
                       out_v0_freq_lo := 0;
                       wrote_v0_freq_lo := true;
                       mem[0x2179] := 0x81;
-                      out2_v0_ctrl := out_v0_ctrl;
-                      wrote2_v0_ctrl := wrote_v0_ctrl;
-                      out_v0_ctrl := mem[0x2179];
-                      wrote_v0_ctrl := true;
+                      sid[V0_CTRL] := mem[0x2179];
                       ret_wave_arp_step_3 := true;
                     } else {
                       out_v0_freq_lo := mem[0x213c];
@@ -6434,10 +5329,7 @@ machine futurecomposer_ordered {
                       out_v0_freq_hi := sv_148;
                       wrote_v0_freq_hi := true;
                     }
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    out_v0_ctrl := mem[0x2179];
-                    wrote_v0_ctrl := true;
+                    sid[V0_CTRL] := mem[0x2179];
                     ret_wave_arp_step_3 := true;
                   }
                 }
@@ -6450,10 +5342,7 @@ machine futurecomposer_ordered {
                   m_1cb7 := lo(w16_6);
                   m_1cb8 := hi(w16_6);
                   if (0xf <= mem[0x2142]) {
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    out_v0_ctrl := mem[0x2179];
-                    wrote_v0_ctrl := true;
+                    sid[V0_CTRL] := mem[0x2179];
                   } else {
                     idx_3 := (mem[0x2142] - 1);
                     mem[0x2179] := mem[(word(m_1caf, m_1cb0) + u16(idx_3))];
@@ -6473,10 +5362,7 @@ machine futurecomposer_ordered {
                       out_v0_freq_lo := 0;
                       wrote_v0_freq_lo := true;
                     }
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    out_v0_ctrl := mem[0x2179];
-                    wrote_v0_ctrl := true;
+                    sid[V0_CTRL] := mem[0x2179];
                   }
                 }
                 ret_filter_program_3 := true;
@@ -6492,10 +5378,7 @@ machine futurecomposer_ordered {
                     out_v0_freq_lo := 0;
                     wrote_v0_freq_lo := true;
                     mem[0x2179] := 0x81;
-                    out2_v0_ctrl := out_v0_ctrl;
-                    wrote2_v0_ctrl := wrote_v0_ctrl;
-                    out_v0_ctrl := mem[0x2179];
-                    wrote_v0_ctrl := true;
+                    sid[V0_CTRL] := mem[0x2179];
                     ret_wave_arp_step_3 := true;
                   } else {
                     out_v0_freq_lo := mem[0x213c];
@@ -6521,10 +5404,7 @@ machine futurecomposer_ordered {
                     out_v0_freq_hi := sv_153;
                     wrote_v0_freq_hi := true;
                   }
-                  out2_v0_ctrl := out_v0_ctrl;
-                  wrote2_v0_ctrl := wrote_v0_ctrl;
-                  out_v0_ctrl := mem[0x2179];
-                  wrote_v0_ctrl := true;
+                  sid[V0_CTRL] := mem[0x2179];
                   ret_wave_arp_step_3 := true;
                 }
               }
@@ -6537,6 +5417,7 @@ machine futurecomposer_ordered {
                 m_1cb7 := lo(w16_6);
                 m_1cb8 := hi(w16_6);
                 if (0xf <= mem[0x2142]) {
+                  sid[V0_CTRL] := mem[0x2179];
                   if wrote_fc_lo {
                     sid[FC_LO] := out_fc_lo;
                   }
@@ -6549,18 +5430,6 @@ machine futurecomposer_ordered {
                   if wrote_mode_vol {
                     sid[MODE_VOL] := out_mode_vol;
                   }
-                  if wrote_v0_ad {
-                    sid[V0_AD] := out_v0_ad;
-                  }
-                  if wrote_v0_sr {
-                    sid[V0_SR] := out_v0_sr;
-                  }
-                  out2_v0_ctrl := out_v0_ctrl;
-                  wrote2_v0_ctrl := wrote_v0_ctrl;
-                  if wrote2_v0_ctrl {
-                    sid[V0_CTRL] := out2_v0_ctrl;
-                  }
-                  sid[V0_CTRL] := mem[0x2179];
                   if wrote_v0_freq_lo {
                     sid[V0_FREQ_LO] := out_v0_freq_lo;
                   }
@@ -6569,18 +5438,6 @@ machine futurecomposer_ordered {
                   }
                   sid[V0_PW_LO] := sv_135;
                   sid[V0_PW_HI] := sv_136;
-                  if wrote_v1_ad {
-                    sid[V1_AD] := out_v1_ad;
-                  }
-                  if wrote_v1_sr {
-                    sid[V1_SR] := out_v1_sr;
-                  }
-                  if wrote2_v1_ctrl {
-                    sid[V1_CTRL] := out2_v1_ctrl;
-                  }
-                  if wrote_v1_ctrl {
-                    sid[V1_CTRL] := out_v1_ctrl;
-                  }
                   if wrote_v1_freq_lo {
                     sid[V1_FREQ_LO] := out_v1_freq_lo;
                   }
@@ -6592,18 +5449,6 @@ machine futurecomposer_ordered {
                   }
                   if wrote_v1_pw_hi {
                     sid[V1_PW_HI] := out_v1_pw_hi;
-                  }
-                  if wrote_v2_ad {
-                    sid[V2_AD] := out_v2_ad;
-                  }
-                  if wrote_v2_sr {
-                    sid[V2_SR] := out_v2_sr;
-                  }
-                  if wrote2_v2_ctrl {
-                    sid[V2_CTRL] := out2_v2_ctrl;
-                  }
-                  if wrote_v2_ctrl {
-                    sid[V2_CTRL] := out_v2_ctrl;
                   }
                   if wrote_v2_freq_lo {
                     sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -6621,7 +5466,7 @@ machine futurecomposer_ordered {
                   idx_3 := (mem[0x2142] - 1);
                   mem[0x2179] := mem[(word(m_1caf, m_1cb0) + u16(idx_3))];
                   pitch_3 := mem[(word(m_1cb7, m_1cb8) + u16(idx_3))];
-                  let cond_45: bool = ((vib_3 & 0x10) != 0);
+                  let cond_7: bool = ((vib_3 & 0x10) != 0);
                   let sv_154: u8 = 0;
                   let sv_155: u8 = 0;
                   let sv_156: u8 = 0;
@@ -6632,6 +5477,7 @@ machine futurecomposer_ordered {
                   } else {
                     sv_156 := (pitch_3 + 0xd);
                   }
+                  sid[V0_CTRL] := mem[0x2179];
                   if wrote_fc_lo {
                     sid[FC_LO] := out_fc_lo;
                   }
@@ -6644,34 +5490,10 @@ machine futurecomposer_ordered {
                   if wrote_mode_vol {
                     sid[MODE_VOL] := out_mode_vol;
                   }
-                  if wrote_v0_ad {
-                    sid[V0_AD] := out_v0_ad;
-                  }
-                  if wrote_v0_sr {
-                    sid[V0_SR] := out_v0_sr;
-                  }
-                  out2_v0_ctrl := out_v0_ctrl;
-                  wrote2_v0_ctrl := wrote_v0_ctrl;
-                  if wrote2_v0_ctrl {
-                    sid[V0_CTRL] := out2_v0_ctrl;
-                  }
-                  sid[V0_CTRL] := mem[0x2179];
-                  sid[V0_FREQ_LO] := ite(cond_45, sv_154, 0);
-                  sid[V0_FREQ_HI] := ite(cond_45, sv_155, sv_156);
+                  sid[V0_FREQ_LO] := ite(cond_7, sv_154, 0);
+                  sid[V0_FREQ_HI] := ite(cond_7, sv_155, sv_156);
                   sid[V0_PW_LO] := sv_135;
                   sid[V0_PW_HI] := sv_136;
-                  if wrote_v1_ad {
-                    sid[V1_AD] := out_v1_ad;
-                  }
-                  if wrote_v1_sr {
-                    sid[V1_SR] := out_v1_sr;
-                  }
-                  if wrote2_v1_ctrl {
-                    sid[V1_CTRL] := out2_v1_ctrl;
-                  }
-                  if wrote_v1_ctrl {
-                    sid[V1_CTRL] := out_v1_ctrl;
-                  }
                   if wrote_v1_freq_lo {
                     sid[V1_FREQ_LO] := out_v1_freq_lo;
                   }
@@ -6683,18 +5505,6 @@ machine futurecomposer_ordered {
                   }
                   if wrote_v1_pw_hi {
                     sid[V1_PW_HI] := out_v1_pw_hi;
-                  }
-                  if wrote_v2_ad {
-                    sid[V2_AD] := out_v2_ad;
-                  }
-                  if wrote_v2_sr {
-                    sid[V2_SR] := out_v2_sr;
-                  }
-                  if wrote2_v2_ctrl {
-                    sid[V2_CTRL] := out2_v2_ctrl;
-                  }
-                  if wrote_v2_ctrl {
-                    sid[V2_CTRL] := out_v2_ctrl;
                   }
                   if wrote_v2_freq_lo {
                     sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -6722,18 +5532,6 @@ machine futurecomposer_ordered {
                 if wrote_mode_vol {
                   sid[MODE_VOL] := out_mode_vol;
                 }
-                if wrote_v0_ad {
-                  sid[V0_AD] := out_v0_ad;
-                }
-                if wrote_v0_sr {
-                  sid[V0_SR] := out_v0_sr;
-                }
-                if wrote2_v0_ctrl {
-                  sid[V0_CTRL] := out2_v0_ctrl;
-                }
-                if wrote_v0_ctrl {
-                  sid[V0_CTRL] := out_v0_ctrl;
-                }
                 if wrote_v0_freq_lo {
                   sid[V0_FREQ_LO] := out_v0_freq_lo;
                 }
@@ -6742,18 +5540,6 @@ machine futurecomposer_ordered {
                 }
                 sid[V0_PW_LO] := sv_135;
                 sid[V0_PW_HI] := sv_136;
-                if wrote_v1_ad {
-                  sid[V1_AD] := out_v1_ad;
-                }
-                if wrote_v1_sr {
-                  sid[V1_SR] := out_v1_sr;
-                }
-                if wrote2_v1_ctrl {
-                  sid[V1_CTRL] := out2_v1_ctrl;
-                }
-                if wrote_v1_ctrl {
-                  sid[V1_CTRL] := out_v1_ctrl;
-                }
                 if wrote_v1_freq_lo {
                   sid[V1_FREQ_LO] := out_v1_freq_lo;
                 }
@@ -6765,18 +5551,6 @@ machine futurecomposer_ordered {
                 }
                 if wrote_v1_pw_hi {
                   sid[V1_PW_HI] := out_v1_pw_hi;
-                }
-                if wrote_v2_ad {
-                  sid[V2_AD] := out_v2_ad;
-                }
-                if wrote_v2_sr {
-                  sid[V2_SR] := out_v2_sr;
-                }
-                if wrote2_v2_ctrl {
-                  sid[V2_CTRL] := out2_v2_ctrl;
-                }
-                if wrote_v2_ctrl {
-                  sid[V2_CTRL] := out_v2_ctrl;
                 }
                 if wrote_v2_freq_lo {
                   sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -6804,18 +5578,6 @@ machine futurecomposer_ordered {
               if wrote_mode_vol {
                 sid[MODE_VOL] := out_mode_vol;
               }
-              if wrote_v0_ad {
-                sid[V0_AD] := out_v0_ad;
-              }
-              if wrote_v0_sr {
-                sid[V0_SR] := out_v0_sr;
-              }
-              if wrote2_v0_ctrl {
-                sid[V0_CTRL] := out2_v0_ctrl;
-              }
-              if wrote_v0_ctrl {
-                sid[V0_CTRL] := out_v0_ctrl;
-              }
               if wrote_v0_freq_lo {
                 sid[V0_FREQ_LO] := out_v0_freq_lo;
               }
@@ -6824,18 +5586,6 @@ machine futurecomposer_ordered {
               }
               sid[V0_PW_LO] := sv_135;
               sid[V0_PW_HI] := sv_136;
-              if wrote_v1_ad {
-                sid[V1_AD] := out_v1_ad;
-              }
-              if wrote_v1_sr {
-                sid[V1_SR] := out_v1_sr;
-              }
-              if wrote2_v1_ctrl {
-                sid[V1_CTRL] := out2_v1_ctrl;
-              }
-              if wrote_v1_ctrl {
-                sid[V1_CTRL] := out_v1_ctrl;
-              }
               if wrote_v1_freq_lo {
                 sid[V1_FREQ_LO] := out_v1_freq_lo;
               }
@@ -6847,18 +5597,6 @@ machine futurecomposer_ordered {
               }
               if wrote_v1_pw_hi {
                 sid[V1_PW_HI] := out_v1_pw_hi;
-              }
-              if wrote_v2_ad {
-                sid[V2_AD] := out_v2_ad;
-              }
-              if wrote_v2_sr {
-                sid[V2_SR] := out_v2_sr;
-              }
-              if wrote2_v2_ctrl {
-                sid[V2_CTRL] := out2_v2_ctrl;
-              }
-              if wrote_v2_ctrl {
-                sid[V2_CTRL] := out_v2_ctrl;
               }
               if wrote_v2_freq_lo {
                 sid[V2_FREQ_LO] := out_v2_freq_lo;
@@ -6889,18 +5627,6 @@ machine futurecomposer_ordered {
       if wrote_mode_vol {
         sid[MODE_VOL] := out_mode_vol;
       }
-      if wrote_v0_ad {
-        sid[V0_AD] := out_v0_ad;
-      }
-      if wrote_v0_sr {
-        sid[V0_SR] := out_v0_sr;
-      }
-      if wrote2_v0_ctrl {
-        sid[V0_CTRL] := out2_v0_ctrl;
-      }
-      if wrote_v0_ctrl {
-        sid[V0_CTRL] := out_v0_ctrl;
-      }
       if wrote_v0_freq_lo {
         sid[V0_FREQ_LO] := out_v0_freq_lo;
       }
@@ -6913,18 +5639,6 @@ machine futurecomposer_ordered {
       if wrote_v0_pw_hi {
         sid[V0_PW_HI] := out_v0_pw_hi;
       }
-      if wrote_v1_ad {
-        sid[V1_AD] := out_v1_ad;
-      }
-      if wrote_v1_sr {
-        sid[V1_SR] := out_v1_sr;
-      }
-      if wrote2_v1_ctrl {
-        sid[V1_CTRL] := out2_v1_ctrl;
-      }
-      if wrote_v1_ctrl {
-        sid[V1_CTRL] := out_v1_ctrl;
-      }
       if wrote_v1_freq_lo {
         sid[V1_FREQ_LO] := out_v1_freq_lo;
       }
@@ -6936,18 +5650,6 @@ machine futurecomposer_ordered {
       }
       if wrote_v1_pw_hi {
         sid[V1_PW_HI] := out_v1_pw_hi;
-      }
-      if wrote_v2_ad {
-        sid[V2_AD] := out_v2_ad;
-      }
-      if wrote_v2_sr {
-        sid[V2_SR] := out_v2_sr;
-      }
-      if wrote2_v2_ctrl {
-        sid[V2_CTRL] := out2_v2_ctrl;
-      }
-      if wrote_v2_ctrl {
-        sid[V2_CTRL] := out_v2_ctrl;
       }
       if wrote_v2_freq_lo {
         sid[V2_FREQ_LO] := out_v2_freq_lo;

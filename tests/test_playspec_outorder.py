@@ -10,11 +10,10 @@ import pytest
 from pysidtracker.playspec import SpecPlayer, cli, elaborate, parse
 from pysidtracker.playspec.cli import add_playspec_commands
 from pysidtracker.playspec import outorder as O
+from pysidtracker.playspec import outproof
 from pysidtracker.playspec.pyexec import compile_program, controls
 
-ORDER = (
-    "fc_lo,fc_hi,res_filt,mode_vol,voice(ad,sr,ctrl:2,ctrl,freq_lo,freq_hi,pw_lo,pw_hi)"
-)
+ORDER = O.ORDER
 BIND = {"sid": 0xD400, "w": 0x1000}
 HEAD = """spec t;
 layout { sid, w: addr; }
@@ -118,18 +117,18 @@ def test_reordered_calls_write_the_kept_writes_in_order(seed):
     slots = result.slots
     mem, calls = play(original, memory, 300)
     new_mem, new_calls = play(result.program, memory, 300)
-    assert [O.kept(c, slots) for c in calls] == new_calls
+    assert [O.kept(c, slots, result.native) for c in calls] == new_calls
     differs = np.flatnonzero(
         np.frombuffer(mem, np.uint8) != np.frombuffer(new_mem, np.uint8)
     )
     assert set(differs.tolist()) <= set(result.promoted)
-    assert any(len(c) > len(n) for c, n in zip(calls, new_calls))
+    assert any(c != n for c, n in zip(calls, new_calls))
 
 
 def test_reorder_removes_staging_and_scratch():
     result = O.reorder(program(PLAYER), ORDER)
     assert result.promoted == [0x1000, 0x1003, 0x1008]
-    assert result.staged == []
+    assert result.staged and all(n.endswith("_4") for n in result.staged)
     assert result.after.cells == result.inlined.cells - 3
     assert result.paths == {result.slots}
 
@@ -153,10 +152,15 @@ def test_order_that_needs_no_staging():
     assert O.reorder(program(STALE), order).staged == []
 
 
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
 @pytest.mark.parametrize(
     "text, slots",
     [
-        (ORDER, 28),
+        (ORDER, 52),
+        (
+            "fc_lo,fc_hi,res_filt,mode_vol,voice(ad,sr,ctrl,freq_lo,freq_hi,pw_lo,pw_hi)",
+            25,
+        ),
         (
             "interleave(freq_lo,freq_hi,pw_lo,pw_hi,ctrl,ad,sr),fc_lo,fc_hi,res_filt,mode_vol",
             25,
@@ -175,13 +179,22 @@ def test_interleave_runs_register_by_register():
     assert parsed[:3] == ((0, 1), (7, 1), (14, 1))
 
 
+SONG = "fc_lo,fc_hi,res_filt,mode_vol,"
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
 @pytest.mark.parametrize(
     "text",
     [
         "fc_lo,voice(ad)",
-        "fc_lo,fc_hi,res_filt,mode_vol,voice(ad,sr,ctrl,ctrl:2,freq_lo,freq_hi,pw_lo,pw_hi)",
-        "fc_lo,fc_hi,res_filt,mode_vol,voice(ad,sr,ctrl:3,ctrl,freq_lo,freq_hi,pw_lo,pw_hi)",
-        "fc_lo,fc_lo,fc_hi,res_filt,mode_vol,voice(ad,sr,ctrl,freq_lo,freq_hi,pw_lo,pw_hi)",
+        SONG + "voice(segments(sr,ad,ctrl):2,freq_lo,freq_hi,pw_lo,pw_hi),fc_lo",
+        SONG + "voice(ad,sr,ctrl,ctrl:2,freq_lo,freq_hi,pw_lo,pw_hi)",
+        SONG + "voice(ad,sr,ctrl:2,ctrl,freq_lo,freq_hi,pw_lo,pw_hi)",
+        SONG + "voice(sr:2,ad,sr,ctrl,freq_lo,freq_hi,pw_lo,pw_hi)",
+        SONG + "voice(segments(sr,ad,ctrl):2,freq_lo:2,freq_lo,freq_hi,pw_lo,pw_hi)",
+        "fc_lo:2,fc_lo,fc_hi,res_filt,mode_vol,voice(segments(sr,ad,ctrl):2,"
+        "freq_lo,freq_hi,pw_lo,pw_hi)",
+        "fc_lo,fc_hi,res_filt,mode_vol,voice(ad,sr,ctrl:x,freq_lo,freq_hi,pw_lo,pw_hi)",
     ],
 )
 def test_parse_order_refuses(text):
@@ -286,3 +299,140 @@ def test_a_store_at_a_variable_sid_offset_is_split():
     result = O.reorder(original, ORDER)
     assert result.after.sid_writes == 8
     assert O.check(original, result) is None
+
+
+def gate(stmts):
+    """A one-voice program running ``stmts`` on the SID registers of voice 0."""
+    return HEAD + "machine m { step { " + stmts + " } }\nschedule { m; }\n"
+
+
+def writes_of(text, order=ORDER):
+    """``(original, result, original writes, reordered writes)`` of one call."""
+    original = program(text)
+    result = O.reorder(original, order)
+    return (
+        original,
+        result,
+        play(original, bytes(0x10000), 1)[1][0],
+        play(result.program, bytes(0x10000), 1)[1][0],
+    )
+
+
+GATE_EDGES = gate(
+    "chip[5] := 0x11; chip[6] := 0x22; chip[0] := 7; chip[4] := 0x41;"
+    "chip[5] := 0x33; chip[6] := 0x44; chip[4] := 0x40; chip[1] := 8;"
+)
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+def test_two_gate_edges_come_out_as_two_rounds():
+    original, result, native, ordered = writes_of(GATE_EDGES)
+    assert result.native == frozenset()
+    assert ordered == [
+        (6, 0x22),
+        (5, 0x11),
+        (4, 0x41),
+        (6, 0x44),
+        (5, 0x33),
+        (4, 0x40),
+        (0, 7),
+        (1, 8),
+    ]
+    assert O.kept(native, result.slots) == ordered
+    assert O.check(original, result) is None
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+def test_envelope_values_before_a_gate_on_land_before_its_ctrl():
+    text = gate("chip[4] := 0x40; chip[5] := 0x55; chip[4] := 0x41; chip[6] := 0x66;")
+    original, result, _native, ordered = writes_of(text)
+    assert ordered == [(4, 0x40), (5, 0x55), (4, 0x41), (6, 0x66)]
+    assert O.check(original, result) is None
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+def test_writes_that_leave_the_gate_alone_collapse_to_the_last():
+    text = gate("chip[4] := 0x41; chip[4] := 0x21; chip[4] := 0x11; chip[5] := 3;")
+    original, result, _native, ordered = writes_of(text)
+    assert ordered == [(4, 0x41), (5, 3), (4, 0x11)]
+    assert O.check(original, result) is None
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+def test_a_test_bit_toggle_ends_a_segment():
+    text = gate("chip[4] := 0x09; chip[4] := 0x01; chip[4] := 0x09;")
+    _original, _result, _native, ordered = writes_of(text)
+    assert ordered == [(4, 0x09), (4, 0x01), (4, 0x09)]
+
+
+PULSES = gate(
+    "chip[5] := 1; chip[4] := 0x09; chip[4] := 0x01; chip[4] := 0x09;"
+    "chip[4] := 0x01; chip[6] := 2; chip[4] := 0x09; chip[0] := 9;"
+)
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+def test_repeated_test_pulses_keep_the_native_order():
+    original, result, native, ordered = writes_of(PULSES)
+    assert result.native == frozenset({4, 5, 6})
+    assert ordered == [w for w in native if w[0] != 0] + [(0, 9)]
+    assert O.kept(native, result.slots, result.native) == ordered
+    assert O.check(original, result) is None
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+def test_a_loop_storing_ctrl_keeps_the_native_order():
+    text = gate("for i in 0..8 { chip[4] := tick ^ 0x08; tick += 1; } chip[5] := 1;")
+    original, result, native, ordered = writes_of(text)
+    assert result.native == frozenset({4, 5, 6})
+    assert ordered == native
+    assert O.check(original, result) is None
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+def test_native_stores_are_proved_without_the_log():
+    text = gate("for i in 0..300 { chip[4] := tick ^ 0x08; tick += 1; }")
+    original = program(text)
+    result = O.reorder(original, ORDER)
+    with pytest.raises(O.OrderError, match="use prove"):
+        O.check(original, result)
+    assert outproof.prove(original, ORDER, timeout_ms=10_000).holds
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+def test_a_read_of_a_segmented_register_sees_its_last_store():
+    text = gate("chip[4] := 0x41; chip[4] := 0x40; tick := chip[4]; chip[5] := tick;")
+    original, result, native, ordered = writes_of(text)
+    assert native[-1] == (5, 0x40) and (5, 0x40) in ordered
+    assert O.check(original, result) is None
+
+
+def observed(writes):
+    """The gate edges of a call with the AD and SR in force at each and at its end."""
+    ad = sr = gate_bit = edges = None
+    out = []
+    for reg, value in writes:
+        if reg == 5:
+            ad = value
+        elif reg == 6:
+            sr = value
+        elif reg == 4:
+            if (gate_bit, edges) == (None, None) or (value ^ edges) & 9:
+                out.append((value & 9, ad, sr))
+            gate_bit, edges = value & 1, value
+    return out, (ad, sr, edges)
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+@pytest.mark.parametrize("seed", range(6))
+def test_kept_commands_the_same_envelope(seed):
+    rng = random.Random(seed)
+    slots = O.parse_order(ORDER)
+    for _ in range(300):
+        trace = [
+            (rng.choice((4, 4, 5, 6, 0)), rng.choice((0, 1, 8, 9, 0x41, 0x40, 0x21, 7)))
+            for _ in range(rng.randrange(2, 7))
+        ]
+        if sum(r == 4 for r, _ in trace) >= 4:
+            continue
+        assert observed(O.kept(trace, slots)) == observed(trace)

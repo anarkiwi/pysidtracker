@@ -221,14 +221,18 @@ machine goattracker_ordered {
       filter0_fstep := 0;
       initsongnum := 0xff;
     }
+    let t: u8 = 0;
+    let t_2: u8 = 0;
+    let t_3: u8 = 0;
     if start {
       chan0_songnum := (song + 0);
       mem[0x83e4] := 5;
       chan0_counter := 1;
       chan0_instr := 1;
-      sid[V0_AD] := chan0_adv;
+      t_3 := (chan0_wave & chan0_gate);
+      sid[V0_CTRL] := t_3;
       sid[V0_SR] := chan0_srv;
-      sid[V0_CTRL] := (chan0_wave & chan0_gate);
+      sid[V0_AD] := chan0_adv;
       sid[V0_FREQ_LO] := chan0_freqlo;
       sid[V0_FREQ_HI] := chan0_freqhi;
       sid[V0_PW_LO] := chan0_pulselo;
@@ -237,9 +241,10 @@ machine goattracker_ordered {
       mem[0x83eb] := 5;
       chan1_counter := 1;
       chan1_instr := 1;
-      sid[V1_AD] := chan1_adv;
+      t := (chan1_wave & chan1_gate);
+      sid[V1_CTRL] := t;
       sid[V1_SR] := chan1_srv;
-      sid[V1_CTRL] := (chan1_wave & chan1_gate);
+      sid[V1_AD] := chan1_adv;
       sid[V1_FREQ_LO] := chan1_freqlo;
       sid[V1_FREQ_HI] := chan1_freqhi;
       sid[V1_PW_LO] := chan1_pulselo;
@@ -248,9 +253,10 @@ machine goattracker_ordered {
       mem[0x83f2] := 5;
       chan2_counter := 1;
       chan2_instr := 1;
-      sid[V2_AD] := chan2_adv;
+      t_2 := (chan2_wave & chan2_gate);
+      sid[V2_CTRL] := t_2;
       sid[V2_SR] := chan2_srv;
-      sid[V2_CTRL] := (chan2_wave & chan2_gate);
+      sid[V2_AD] := chan2_adv;
       sid[V2_FREQ_LO] := chan2_freqlo;
       sid[V2_FREQ_HI] := chan2_freqhi;
       sid[V2_PW_LO] := chan2_pulselo;
@@ -725,17 +731,21 @@ machine goattracker_ordered {
         }
       }
       if (k == 9) {
-        sid[V0_AD] := chan0_adv;
+        t_3 := (chan0_wave & chan0_gate);
+        sid[V0_CTRL] := t_3;
         sid[V0_SR] := chan0_srv;
-        sid[V0_CTRL] := (chan0_wave & chan0_gate);
+        sid[V0_AD] := chan0_adv;
         sid[V0_FREQ_LO] := chan0_freqlo;
         sid[V0_FREQ_HI] := chan0_freqhi;
         sid[V0_PW_LO] := chan0_pulselo;
         sid[V0_PW_HI] := chan0_pulsehi;
       } else {
         let cond_7: bool = (k == 0xa);
+        if (k == 0xa) {
+          t_3 := (chan0_wave & chan0_gate);
+        }
         if cond_7 {
-          sid[V0_CTRL] := (chan0_wave & chan0_gate);
+          sid[V0_CTRL] := t_3;
         }
       }
       chan1_counter := (chan1_counter - 1);
@@ -1175,17 +1185,21 @@ machine goattracker_ordered {
         }
       }
       if (k_2 == 9) {
-        sid[V1_AD] := chan1_adv;
+        t := (chan1_wave & chan1_gate);
+        sid[V1_CTRL] := t;
         sid[V1_SR] := chan1_srv;
-        sid[V1_CTRL] := (chan1_wave & chan1_gate);
+        sid[V1_AD] := chan1_adv;
         sid[V1_FREQ_LO] := chan1_freqlo;
         sid[V1_FREQ_HI] := chan1_freqhi;
         sid[V1_PW_LO] := chan1_pulselo;
         sid[V1_PW_HI] := chan1_pulsehi;
       } else {
         let cond_14: bool = (k_2 == 0xa);
+        if (k_2 == 0xa) {
+          t := (chan1_wave & chan1_gate);
+        }
         if cond_14 {
-          sid[V1_CTRL] := (chan1_wave & chan1_gate);
+          sid[V1_CTRL] := t;
         }
       }
       chan2_counter := (chan2_counter - 1);
@@ -1625,17 +1639,21 @@ machine goattracker_ordered {
         }
       }
       if (k_3 == 9) {
-        sid[V2_AD] := chan2_adv;
+        t_2 := (chan2_wave & chan2_gate);
+        sid[V2_CTRL] := t_2;
         sid[V2_SR] := chan2_srv;
-        sid[V2_CTRL] := (chan2_wave & chan2_gate);
+        sid[V2_AD] := chan2_adv;
         sid[V2_FREQ_LO] := chan2_freqlo;
         sid[V2_FREQ_HI] := chan2_freqhi;
         sid[V2_PW_LO] := chan2_pulselo;
         sid[V2_PW_HI] := chan2_pulsehi;
       } else {
         let cond_21: bool = (k_3 == 0xa);
+        if (k_3 == 0xa) {
+          t_2 := (chan2_wave & chan2_gate);
+        }
         if cond_21 {
-          sid[V2_CTRL] := (chan2_wave & chan2_gate);
+          sid[V2_CTRL] := t_2;
         }
       }
     }

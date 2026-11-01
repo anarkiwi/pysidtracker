@@ -57,6 +57,12 @@ machine gt1_11_ordered {
     let out_v1_freq_hi: u8 = 0;
     let out_v2_freq_lo: u8 = 0;
     let out_v2_freq_hi: u8 = 0;
+    let seen_v0_ctrl: bool = false;
+    let seen_v1_ctrl: bool = false;
+    let seen_v2_ctrl: bool = false;
+    let last_v0_ctrl: u8 = 0;
+    let last_v1_ctrl: u8 = 0;
+    let last_v2_ctrl: u8 = 0;
     if (playflag < 0x80) {
       let pos: u8 = (((playflag << 1) + playflag) + (playflag >> 7));
       mem[0x1451] := songlo[pos];
@@ -191,6 +197,7 @@ machine gt1_11_ordered {
           let cond_2: bool = false;
           let cond_3: bool = false;
           let cond_4: bool = false;
+          let t_2: u8 = 0;
           if (zpnote <= 0x5e) {
             cond_3 := (zpnote < 0x5e);
             if (zpnote < 0x5e) {
@@ -205,47 +212,58 @@ machine gt1_11_ordered {
                 ret_newnotes := true;
               } else {
                 mem[0x142a] := 0;
-                sid[V0_AD] := 0;
               }
             }
             cond_4 := !ret_newnotes;
+            if !ret_newnotes {
+              t_2 := (mem[0x143c] & 0xfe);
+            }
+          }
+          if ite(cond, ite(cond_4, ite(cond_3, !cond_2, false), false), false) {
+            sid[V0_SR] := 0;
+          }
+          if ite(cond, ite(cond_4, ite(cond_3, !cond_2, false), false), false) {
+            sid[V0_AD] := 0;
+          }
+          if ite(cond, cond_4, false) {
+            sid[V0_CTRL] := ite(cond, ite(cond_4, t_2, 0), 0);
           }
           if !ret_newnotes {
             if (mem[0x142b] == 2) {
-              if ite(cond, ite(cond_3, !cond_2, false), false) {
+              if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
                 sid[V0_SR] := 0;
               }
-              if ite(cond, cond_4, false) {
-                sid[V0_CTRL] := ite(cond, ite(cond_4, (mem[0x143c] & 0xfe), 0), 0);
+              if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
+                sid[V0_AD] := 0;
               }
               cutoffadd := mem[0x142c];
             } elif (mem[0x142b] == 3) {
-              if ite(cond, ite(cond_3, !cond_2, false), false) {
+              if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
                 sid[V0_SR] := 0;
               }
-              if ite(cond, cond_4, false) {
-                sid[V0_CTRL] := ite(cond, ite(cond_4, (mem[0x143c] & 0xfe), 0), 0);
+              if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
+                sid[V0_AD] := 0;
               }
               mem[0x1441] := 0xfe;
             } elif (mem[0x142b] == 5) {
-              if ite(cond, ite(cond_3, !cond_2, false), false) {
+              if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
                 sid[V0_SR] := 0;
               }
-              if ite(cond, cond_4, false) {
-                sid[V0_CTRL] := ite(cond, ite(cond_4, (mem[0x143c] & 0xfe), 0), 0);
+              if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
+                sid[V0_AD] := 0;
               }
               ctrl := mem[0x142c];
             } elif (mem[0x142b] == 6) {
               sid[V0_SR] := mem[0x142c];
-              if ite(cond, cond_4, false) {
-                sid[V0_CTRL] := ite(cond, ite(cond_4, (mem[0x143c] & 0xfe), 0), 0);
+              if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
+                sid[V0_AD] := 0;
               }
             } else {
-              if ite(cond, ite(cond_3, !cond_2, false), false) {
+              if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
                 sid[V0_SR] := 0;
               }
-              if ite(cond, cond_4, false) {
-                sid[V0_CTRL] := ite(cond, ite(cond_4, (mem[0x143c] & 0xfe), 0), 0);
+              if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
+                sid[V0_AD] := 0;
               }
               if (mem[0x142b] == 7) {
                 if !((mem[0x142c] & 0x80) != 0) {
@@ -258,11 +276,11 @@ machine gt1_11_ordered {
               }
             }
           } else {
-            if ite(cond, ite(cond_3, !cond_2, false), false) {
+            if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
               sid[V0_SR] := 0;
             }
-            if ite(cond, cond_4, false) {
-              sid[V0_CTRL] := ite(cond, ite(cond_4, (mem[0x143c] & 0xfe), 0), 0);
+            if ite(cond, ite(cond_4, false, ite(cond_3, !cond_2, false)), false) {
+              sid[V0_AD] := 0;
             }
           }
         }
@@ -456,12 +474,16 @@ machine gt1_11_ordered {
             dir := mem[0x143f];
             let cond_9: bool = ((mem[0x143f] & 0x80) != 0);
             let cond_10: bool = false;
+            let t_3: u8 = 0;
+            let t_4: u8 = 0;
             if ((mem[0x143f] & 0x80) != 0) {
               mem[0x143f] := (mem[0x143f] & 0x7f);
               w_2 := wavetbl[i_wave[mem[0x142d]]];
               mem[0x143c] := w_2;
-              sid[V0_AD] := i_ad[mem[0x142d]];
-              sid[V0_SR] := i_sr[mem[0x142d]];
+              last_v0_ctrl := w_2;
+              seen_v0_ctrl := true;
+              t_3 := i_ad[mem[0x142d]];
+              t_4 := i_sr[mem[0x142d]];
               first := i_wave[mem[0x142d]];
               cond_10 := (first != 0);
               if (first != 0) {
@@ -508,14 +530,31 @@ machine gt1_11_ordered {
               if (mem[0x143d] != 0) {
                 w := wavetbl[mem[0x143d]];
                 let cond_11: bool = (w != 0);
+                let cond_12: bool = false;
                 if (w != 0) {
                   mem[0x143c] := w;
+                  cond_12 := (!seen_v0_ctrl || (((last_v0_ctrl ^ w) & 9) != 0));
                 }
-                if ite(cond_11, cond_9, false) {
-                  sid[V0_CTRL] := ite(cond_11, ite(cond_9, w_2, 0), 0);
+                if ite(cond_11, ite(cond_12, cond_9, false), false) {
+                  sid[V0_CTRL] := ite(cond_11, ite(cond_12, ite(cond_9, w_2, 0), 0), 0);
                 }
-                if ite(cond_11, true, cond_9) {
-                  sid[V0_CTRL] := ite(cond_11, w, ite(cond_9, w_2, 0));
+                if ite(cond_11, ite(cond_12, cond_9, false), false) {
+                  sid[V0_SR] := ite(cond_11, ite(cond_12, ite(cond_9, t_4, 0), 0), 0);
+                }
+                if ite(cond_11, ite(cond_12, cond_9, false), false) {
+                  sid[V0_AD] := ite(cond_11, ite(cond_12, ite(cond_9, t_3, 0), 0), 0);
+                }
+                if ite(cond_11, ite(cond_12, true, cond_9), cond_9) {
+                  sid[V0_CTRL] := ite(cond_11, ite(cond_12, w, ite(cond_9, w_2, 0)), ite(cond_9, w_2, 0));
+                }
+                if ite(cond_11, ite(cond_12, false, cond_9), cond_9) {
+                  sid[V0_SR] := ite(cond_9, t_4, 0);
+                }
+                if ite(cond_11, ite(cond_12, false, cond_9), cond_9) {
+                  sid[V0_AD] := ite(cond_9, t_3, 0);
+                }
+                if ite(cond_11, !cond_12, false) {
+                  sid[V0_CTRL] := ite(cond_11, ite(cond_12, 0, w), 0);
                 }
                 n := notetbl[mem[0x143d]];
                 if !((n & 0x80) != 0) {
@@ -545,6 +584,12 @@ machine gt1_11_ordered {
               } else {
                 if cond_9 {
                   sid[V0_CTRL] := w_2;
+                }
+                if cond_9 {
+                  sid[V0_SR] := t_4;
+                }
+                if cond_9 {
+                  sid[V0_AD] := t_3;
                 }
                 if (mem[0x142b] == 0) {
                   if ((mem[0x142c] == 0) || (((mem[0x142c] & 0x80) != 0) && ((mem[0x1455] & 1) != 0))) {
@@ -600,11 +645,11 @@ machine gt1_11_ordered {
                     zplo := (mem[0x142c] << 1);
                     here := word(mem[0x1428], mem[0x1429]);
                     there := word(freqlo[mem[0x1427]], freqhi[mem[0x1427]]);
-                    let cond_12: bool = ((mem[0x142c] & 0x80) != 0);
-                    let cond_13: bool = false;
+                    let cond_13: bool = ((mem[0x142c] & 0x80) != 0);
                     let cond_14: bool = false;
+                    let cond_15: bool = false;
                     if ((mem[0x142c] & 0x80) != 0) {
-                      cond_13 := (there < here);
+                      cond_14 := (there < here);
                       if (there < here) {
                         l_2 := mem[0x1428];
                         out_v0_freq_lo := mem[0x1428];
@@ -614,7 +659,7 @@ machine gt1_11_ordered {
                         ret_toneporta := true;
                       }
                     } else {
-                      cond_14 := (here < there);
+                      cond_15 := (here < there);
                       if (here < there) {
                         out_v0_freq_lo := mem[0x1428];
                         out_v0_freq_hi := mem[0x1429];
@@ -634,10 +679,10 @@ machine gt1_11_ordered {
                       sid[V0_PW_LO] := p_2;
                       sid[V0_PW_HI] := p_2;
                     } else {
-                      if ite(cond_12, ite(cond_13, true, ite(cond_9, cond_10, false)), ite(cond_14, true, ite(cond_9, cond_10, false))) {
+                      if ite(cond_13, ite(cond_14, true, ite(cond_9, cond_10, false)), ite(cond_15, true, ite(cond_9, cond_10, false))) {
                         sid[V0_FREQ_LO] := out_v0_freq_lo;
                       }
-                      if ite(cond_12, ite(cond_13, true, ite(cond_9, cond_10, false)), ite(cond_14, true, ite(cond_9, cond_10, false))) {
+                      if ite(cond_13, ite(cond_14, true, ite(cond_9, cond_10, false)), ite(cond_15, true, ite(cond_9, cond_10, false))) {
                         sid[V0_FREQ_HI] := out_v0_freq_hi;
                       }
                       sid[V0_PW_LO] := p_2;
@@ -679,6 +724,12 @@ machine gt1_11_ordered {
             } else {
               if cond_9 {
                 sid[V0_CTRL] := w_2;
+              }
+              if cond_9 {
+                sid[V0_SR] := t_4;
+              }
+              if cond_9 {
+                sid[V0_AD] := t_3;
               }
               if ite(cond_9, cond_10, false) {
                 sid[V0_FREQ_LO] := ite(cond_9, ite(cond_10, l, 0), 0);
@@ -738,15 +789,16 @@ machine gt1_11_ordered {
             zpnote := (acc - 0x60);
           }
           mem[0x145a] := ite((mem[(base + u16((row_pos + 0)))] == 0xff), 0xff, row_pos);
-          let cond_15: bool = (zpnote <= 0x5e);
-          let cond_16: bool = false;
+          let cond_16: bool = (zpnote <= 0x5e);
           let cond_17: bool = false;
           let cond_18: bool = false;
+          let cond_19: bool = false;
+          let t_5: u8 = 0;
           if (zpnote <= 0x5e) {
-            cond_17 := (zpnote < 0x5e);
+            cond_19 := (zpnote < 0x5e);
             if (zpnote < 0x5e) {
               mem[0x142e] := zpnote;
-              cond_16 := (mem[0x1432] == 3);
+              cond_18 := (mem[0x1432] == 3);
               if (mem[0x1432] == 3) {
                 if (mem[0x1432] == 2) {
                   cutoffadd := mem[0x1433];
@@ -756,47 +808,58 @@ machine gt1_11_ordered {
                 ret_newnotes := true;
               } else {
                 mem[0x1431] := 0;
-                sid[V1_AD] := 0;
               }
             }
-            cond_18 := !ret_newnotes;
+            cond_17 := !ret_newnotes;
+            if !ret_newnotes {
+              t_5 := (mem[0x1443] & 0xfe);
+            }
+          }
+          if ite(cond_16, ite(cond_17, ite(cond_19, !cond_18, false), false), false) {
+            sid[V1_SR] := 0;
+          }
+          if ite(cond_16, ite(cond_17, ite(cond_19, !cond_18, false), false), false) {
+            sid[V1_AD] := 0;
+          }
+          if ite(cond_16, cond_17, false) {
+            sid[V1_CTRL] := ite(cond_16, ite(cond_17, t_5, 0), 0);
           }
           if !ret_newnotes {
             if (mem[0x1432] == 2) {
-              if ite(cond_15, ite(cond_17, !cond_16, false), false) {
+              if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
                 sid[V1_SR] := 0;
               }
-              if ite(cond_15, cond_18, false) {
-                sid[V1_CTRL] := ite(cond_15, ite(cond_18, (mem[0x1443] & 0xfe), 0), 0);
+              if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
+                sid[V1_AD] := 0;
               }
               cutoffadd := mem[0x1433];
             } elif (mem[0x1432] == 3) {
-              if ite(cond_15, ite(cond_17, !cond_16, false), false) {
+              if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
                 sid[V1_SR] := 0;
               }
-              if ite(cond_15, cond_18, false) {
-                sid[V1_CTRL] := ite(cond_15, ite(cond_18, (mem[0x1443] & 0xfe), 0), 0);
+              if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
+                sid[V1_AD] := 0;
               }
               mem[0x1448] := 0xfe;
             } elif (mem[0x1432] == 5) {
-              if ite(cond_15, ite(cond_17, !cond_16, false), false) {
+              if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
                 sid[V1_SR] := 0;
               }
-              if ite(cond_15, cond_18, false) {
-                sid[V1_CTRL] := ite(cond_15, ite(cond_18, (mem[0x1443] & 0xfe), 0), 0);
+              if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
+                sid[V1_AD] := 0;
               }
               ctrl := mem[0x1433];
             } elif (mem[0x1432] == 6) {
               sid[V1_SR] := mem[0x1433];
-              if ite(cond_15, cond_18, false) {
-                sid[V1_CTRL] := ite(cond_15, ite(cond_18, (mem[0x1443] & 0xfe), 0), 0);
+              if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
+                sid[V1_AD] := 0;
               }
             } else {
-              if ite(cond_15, ite(cond_17, !cond_16, false), false) {
+              if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
                 sid[V1_SR] := 0;
               }
-              if ite(cond_15, cond_18, false) {
-                sid[V1_CTRL] := ite(cond_15, ite(cond_18, (mem[0x1443] & 0xfe), 0), 0);
+              if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
+                sid[V1_AD] := 0;
               }
               if (mem[0x1432] == 7) {
                 if !((mem[0x1433] & 0x80) != 0) {
@@ -809,11 +872,11 @@ machine gt1_11_ordered {
               }
             }
           } else {
-            if ite(cond_15, ite(cond_17, !cond_16, false), false) {
+            if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
               sid[V1_SR] := 0;
             }
-            if ite(cond_15, cond_18, false) {
-              sid[V1_CTRL] := ite(cond_15, ite(cond_18, (mem[0x1443] & 0xfe), 0), 0);
+            if ite(cond_16, ite(cond_17, false, ite(cond_19, !cond_18, false)), false) {
+              sid[V1_AD] := 0;
             }
           }
         }
@@ -836,11 +899,11 @@ machine gt1_11_ordered {
           if (mem[0x1431] != 0) {
             if (mem[0x1444] != 0) {
               w := wavetbl[mem[0x1444]];
-              let cond_19: bool = (w != 0);
+              let cond_20: bool = (w != 0);
               if (w != 0) {
                 mem[0x1443] := w;
               }
-              if cond_19 {
+              if cond_20 {
                 sid[V1_CTRL] := w;
               }
               n := notetbl[mem[0x1444]];
@@ -907,11 +970,11 @@ machine gt1_11_ordered {
                 zplo := (mem[0x1433] << 1);
                 here := word(mem[0x142f], mem[0x1430]);
                 there := word(freqlo[mem[0x142e]], freqhi[mem[0x142e]]);
-                let cond_20: bool = ((mem[0x1433] & 0x80) != 0);
-                let cond_21: bool = false;
+                let cond_21: bool = ((mem[0x1433] & 0x80) != 0);
                 let cond_22: bool = false;
+                let cond_23: bool = false;
                 if ((mem[0x1433] & 0x80) != 0) {
-                  cond_21 := (there < here);
+                  cond_22 := (there < here);
                   if (there < here) {
                     l_2 := mem[0x142f];
                     out_v1_freq_lo := mem[0x142f];
@@ -921,7 +984,7 @@ machine gt1_11_ordered {
                     ret_toneporta := true;
                   }
                 } else {
-                  cond_22 := (here < there);
+                  cond_23 := (here < there);
                   if (here < there) {
                     out_v1_freq_lo := mem[0x142f];
                     out_v1_freq_hi := mem[0x1430];
@@ -939,10 +1002,10 @@ machine gt1_11_ordered {
                   mem[0x1430] := h;
                   sid[V1_FREQ_HI] := h;
                 } else {
-                  if ite(cond_20, cond_21, cond_22) {
+                  if ite(cond_21, cond_22, cond_23) {
                     sid[V1_FREQ_LO] := out_v1_freq_lo;
                   }
-                  if ite(cond_20, cond_21, cond_22) {
+                  if ite(cond_21, cond_22, cond_23) {
                     sid[V1_FREQ_HI] := out_v1_freq_hi;
                   }
                 }
@@ -1005,16 +1068,20 @@ machine gt1_11_ordered {
             mem[0x1446] := ite((p != 0), 0x80, (mem[0x1446] | 0x80));
           } else {
             dir := mem[0x1446];
-            let cond_23: bool = ((mem[0x1446] & 0x80) != 0);
-            let cond_24: bool = false;
+            let cond_24: bool = ((mem[0x1446] & 0x80) != 0);
+            let cond_25: bool = false;
+            let t_6: u8 = 0;
+            let t_7: u8 = 0;
             if ((mem[0x1446] & 0x80) != 0) {
               mem[0x1446] := (mem[0x1446] & 0x7f);
               w_2 := wavetbl[i_wave[mem[0x1434]]];
               mem[0x1443] := w_2;
-              sid[V1_AD] := i_ad[mem[0x1434]];
-              sid[V1_SR] := i_sr[mem[0x1434]];
+              last_v1_ctrl := w_2;
+              seen_v1_ctrl := true;
+              t_6 := i_ad[mem[0x1434]];
+              t_7 := i_sr[mem[0x1434]];
               first := i_wave[mem[0x1434]];
-              cond_24 := (first != 0);
+              cond_25 := (first != 0);
               if (first != 0) {
                 n := notetbl[first];
                 if !((n & 0x80) != 0) {
@@ -1058,15 +1125,32 @@ machine gt1_11_ordered {
               }
               if (mem[0x1444] != 0) {
                 w := wavetbl[mem[0x1444]];
-                let cond_25: bool = (w != 0);
+                let cond_26: bool = (w != 0);
+                let cond_27: bool = false;
                 if (w != 0) {
                   mem[0x1443] := w;
+                  cond_27 := (!seen_v1_ctrl || (((last_v1_ctrl ^ w) & 9) != 0));
                 }
-                if ite(cond_25, cond_23, false) {
-                  sid[V1_CTRL] := ite(cond_25, ite(cond_23, w_2, 0), 0);
+                if ite(cond_26, ite(cond_27, cond_24, false), false) {
+                  sid[V1_CTRL] := ite(cond_26, ite(cond_27, ite(cond_24, w_2, 0), 0), 0);
                 }
-                if ite(cond_25, true, cond_23) {
-                  sid[V1_CTRL] := ite(cond_25, w, ite(cond_23, w_2, 0));
+                if ite(cond_26, ite(cond_27, cond_24, false), false) {
+                  sid[V1_SR] := ite(cond_26, ite(cond_27, ite(cond_24, t_7, 0), 0), 0);
+                }
+                if ite(cond_26, ite(cond_27, cond_24, false), false) {
+                  sid[V1_AD] := ite(cond_26, ite(cond_27, ite(cond_24, t_6, 0), 0), 0);
+                }
+                if ite(cond_26, ite(cond_27, true, cond_24), cond_24) {
+                  sid[V1_CTRL] := ite(cond_26, ite(cond_27, w, ite(cond_24, w_2, 0)), ite(cond_24, w_2, 0));
+                }
+                if ite(cond_26, ite(cond_27, false, cond_24), cond_24) {
+                  sid[V1_SR] := ite(cond_24, t_7, 0);
+                }
+                if ite(cond_26, ite(cond_27, false, cond_24), cond_24) {
+                  sid[V1_AD] := ite(cond_24, t_6, 0);
+                }
+                if ite(cond_26, !cond_27, false) {
+                  sid[V1_CTRL] := ite(cond_26, ite(cond_27, 0, w), 0);
                 }
                 n := notetbl[mem[0x1444]];
                 if !((n & 0x80) != 0) {
@@ -1094,16 +1178,22 @@ machine gt1_11_ordered {
                 sid[V1_PW_LO] := p_2;
                 sid[V1_PW_HI] := p_2;
               } else {
-                if cond_23 {
+                if cond_24 {
                   sid[V1_CTRL] := w_2;
+                }
+                if cond_24 {
+                  sid[V1_SR] := t_7;
+                }
+                if cond_24 {
+                  sid[V1_AD] := t_6;
                 }
                 if (mem[0x1432] == 0) {
                   if ((mem[0x1433] == 0) || (((mem[0x1433] & 0x80) != 0) && ((mem[0x145c] & 1) != 0))) {
-                    if ite(cond_23, cond_24, false) {
-                      sid[V1_FREQ_LO] := ite(cond_23, ite(cond_24, l, 0), 0);
+                    if ite(cond_24, cond_25, false) {
+                      sid[V1_FREQ_LO] := ite(cond_24, ite(cond_25, l, 0), 0);
                     }
-                    if ite(cond_23, cond_24, false) {
-                      sid[V1_FREQ_HI] := ite(cond_23, ite(cond_24, h, 0), 0);
+                    if ite(cond_24, cond_25, false) {
+                      sid[V1_FREQ_HI] := ite(cond_24, ite(cond_25, h, 0), 0);
                     }
                     sid[V1_PW_LO] := p_2;
                     sid[V1_PW_HI] := p_2;
@@ -1151,11 +1241,11 @@ machine gt1_11_ordered {
                     zplo := (mem[0x1433] << 1);
                     here := word(mem[0x142f], mem[0x1430]);
                     there := word(freqlo[mem[0x142e]], freqhi[mem[0x142e]]);
-                    let cond_26: bool = ((mem[0x1433] & 0x80) != 0);
-                    let cond_27: bool = false;
-                    let cond_28: bool = false;
+                    let cond_28: bool = ((mem[0x1433] & 0x80) != 0);
+                    let cond_29: bool = false;
+                    let cond_30: bool = false;
                     if ((mem[0x1433] & 0x80) != 0) {
-                      cond_27 := (there < here);
+                      cond_29 := (there < here);
                       if (there < here) {
                         l_2 := mem[0x142f];
                         out_v1_freq_lo := mem[0x142f];
@@ -1165,7 +1255,7 @@ machine gt1_11_ordered {
                         ret_toneporta := true;
                       }
                     } else {
-                      cond_28 := (here < there);
+                      cond_30 := (here < there);
                       if (here < there) {
                         out_v1_freq_lo := mem[0x142f];
                         out_v1_freq_hi := mem[0x1430];
@@ -1185,10 +1275,10 @@ machine gt1_11_ordered {
                       sid[V1_PW_LO] := p_2;
                       sid[V1_PW_HI] := p_2;
                     } else {
-                      if ite(cond_26, ite(cond_27, true, ite(cond_23, cond_24, false)), ite(cond_28, true, ite(cond_23, cond_24, false))) {
+                      if ite(cond_28, ite(cond_29, true, ite(cond_24, cond_25, false)), ite(cond_30, true, ite(cond_24, cond_25, false))) {
                         sid[V1_FREQ_LO] := out_v1_freq_lo;
                       }
-                      if ite(cond_26, ite(cond_27, true, ite(cond_23, cond_24, false)), ite(cond_28, true, ite(cond_23, cond_24, false))) {
+                      if ite(cond_28, ite(cond_29, true, ite(cond_24, cond_25, false)), ite(cond_30, true, ite(cond_24, cond_25, false))) {
                         sid[V1_FREQ_HI] := out_v1_freq_hi;
                       }
                       sid[V1_PW_LO] := p_2;
@@ -1216,11 +1306,11 @@ machine gt1_11_ordered {
                       mem[0x1430] := (mem[0x1430] + hi(sum_2));
                     }
                   } else {
-                    if ite(cond_23, cond_24, false) {
-                      sid[V1_FREQ_LO] := ite(cond_23, ite(cond_24, l, 0), 0);
+                    if ite(cond_24, cond_25, false) {
+                      sid[V1_FREQ_LO] := ite(cond_24, ite(cond_25, l, 0), 0);
                     }
-                    if ite(cond_23, cond_24, false) {
-                      sid[V1_FREQ_HI] := ite(cond_23, ite(cond_24, h, 0), 0);
+                    if ite(cond_24, cond_25, false) {
+                      sid[V1_FREQ_HI] := ite(cond_24, ite(cond_25, h, 0), 0);
                     }
                     sid[V1_PW_LO] := p_2;
                     sid[V1_PW_HI] := p_2;
@@ -1228,14 +1318,20 @@ machine gt1_11_ordered {
                 }
               }
             } else {
-              if cond_23 {
+              if cond_24 {
                 sid[V1_CTRL] := w_2;
               }
-              if ite(cond_23, cond_24, false) {
-                sid[V1_FREQ_LO] := ite(cond_23, ite(cond_24, l, 0), 0);
+              if cond_24 {
+                sid[V1_SR] := t_7;
               }
-              if ite(cond_23, cond_24, false) {
-                sid[V1_FREQ_HI] := ite(cond_23, ite(cond_24, h, 0), 0);
+              if cond_24 {
+                sid[V1_AD] := t_6;
+              }
+              if ite(cond_24, cond_25, false) {
+                sid[V1_FREQ_LO] := ite(cond_24, ite(cond_25, l, 0), 0);
+              }
+              if ite(cond_24, cond_25, false) {
+                sid[V1_FREQ_HI] := ite(cond_24, ite(cond_25, h, 0), 0);
               }
             }
           }
@@ -1289,15 +1385,16 @@ machine gt1_11_ordered {
             zpnote := (acc - 0x60);
           }
           mem[0x1461] := ite((mem[(base + u16((row_pos + 0)))] == 0xff), 0xff, row_pos);
-          let cond_29: bool = (zpnote <= 0x5e);
-          let cond_30: bool = false;
-          let cond_31: bool = false;
+          let cond_31: bool = (zpnote <= 0x5e);
           let cond_32: bool = false;
+          let cond_33: bool = false;
+          let cond_34: bool = false;
+          let t_8: u8 = 0;
           if (zpnote <= 0x5e) {
-            cond_31 := (zpnote < 0x5e);
+            cond_33 := (zpnote < 0x5e);
             if (zpnote < 0x5e) {
               mem[0x1435] := zpnote;
-              cond_30 := (mem[0x1439] == 3);
+              cond_32 := (mem[0x1439] == 3);
               if (mem[0x1439] == 3) {
                 if (mem[0x1439] == 2) {
                   cutoffadd := mem[0x143a];
@@ -1307,47 +1404,58 @@ machine gt1_11_ordered {
                 ret_newnotes := true;
               } else {
                 mem[0x1438] := 0;
-                sid[V2_AD] := 0;
               }
             }
-            cond_32 := !ret_newnotes;
+            cond_34 := !ret_newnotes;
+            if !ret_newnotes {
+              t_8 := (mem[0x144a] & 0xfe);
+            }
+          }
+          if ite(cond_31, ite(cond_34, ite(cond_33, !cond_32, false), false), false) {
+            sid[V2_SR] := 0;
+          }
+          if ite(cond_31, ite(cond_34, ite(cond_33, !cond_32, false), false), false) {
+            sid[V2_AD] := 0;
+          }
+          if ite(cond_31, cond_34, false) {
+            sid[V2_CTRL] := ite(cond_31, ite(cond_34, t_8, 0), 0);
           }
           if !ret_newnotes {
             if (mem[0x1439] == 2) {
-              if ite(cond_29, ite(cond_31, !cond_30, false), false) {
+              if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
                 sid[V2_SR] := 0;
               }
-              if ite(cond_29, cond_32, false) {
-                sid[V2_CTRL] := ite(cond_29, ite(cond_32, (mem[0x144a] & 0xfe), 0), 0);
+              if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
+                sid[V2_AD] := 0;
               }
               cutoffadd := mem[0x143a];
             } elif (mem[0x1439] == 3) {
-              if ite(cond_29, ite(cond_31, !cond_30, false), false) {
+              if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
                 sid[V2_SR] := 0;
               }
-              if ite(cond_29, cond_32, false) {
-                sid[V2_CTRL] := ite(cond_29, ite(cond_32, (mem[0x144a] & 0xfe), 0), 0);
+              if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
+                sid[V2_AD] := 0;
               }
               mem[0x144f] := 0xfe;
             } elif (mem[0x1439] == 5) {
-              if ite(cond_29, ite(cond_31, !cond_30, false), false) {
+              if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
                 sid[V2_SR] := 0;
               }
-              if ite(cond_29, cond_32, false) {
-                sid[V2_CTRL] := ite(cond_29, ite(cond_32, (mem[0x144a] & 0xfe), 0), 0);
+              if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
+                sid[V2_AD] := 0;
               }
               ctrl := mem[0x143a];
             } elif (mem[0x1439] == 6) {
               sid[V2_SR] := mem[0x143a];
-              if ite(cond_29, cond_32, false) {
-                sid[V2_CTRL] := ite(cond_29, ite(cond_32, (mem[0x144a] & 0xfe), 0), 0);
+              if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
+                sid[V2_AD] := 0;
               }
             } else {
-              if ite(cond_29, ite(cond_31, !cond_30, false), false) {
+              if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
                 sid[V2_SR] := 0;
               }
-              if ite(cond_29, cond_32, false) {
-                sid[V2_CTRL] := ite(cond_29, ite(cond_32, (mem[0x144a] & 0xfe), 0), 0);
+              if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
+                sid[V2_AD] := 0;
               }
               if (mem[0x1439] == 7) {
                 if !((mem[0x143a] & 0x80) != 0) {
@@ -1360,11 +1468,11 @@ machine gt1_11_ordered {
               }
             }
           } else {
-            if ite(cond_29, ite(cond_31, !cond_30, false), false) {
+            if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
               sid[V2_SR] := 0;
             }
-            if ite(cond_29, cond_32, false) {
-              sid[V2_CTRL] := ite(cond_29, ite(cond_32, (mem[0x144a] & 0xfe), 0), 0);
+            if ite(cond_31, ite(cond_34, false, ite(cond_33, !cond_32, false)), false) {
+              sid[V2_AD] := 0;
             }
           }
         }
@@ -1387,11 +1495,11 @@ machine gt1_11_ordered {
           if (mem[0x1438] != 0) {
             if (mem[0x144b] != 0) {
               w := wavetbl[mem[0x144b]];
-              let cond_33: bool = (w != 0);
+              let cond_35: bool = (w != 0);
               if (w != 0) {
                 mem[0x144a] := w;
               }
-              if cond_33 {
+              if cond_35 {
                 sid[V2_CTRL] := w;
               }
               n := notetbl[mem[0x144b]];
@@ -1458,11 +1566,11 @@ machine gt1_11_ordered {
                 zplo := (mem[0x143a] << 1);
                 here := word(mem[0x1436], mem[0x1437]);
                 there := word(freqlo[mem[0x1435]], freqhi[mem[0x1435]]);
-                let cond_34: bool = ((mem[0x143a] & 0x80) != 0);
-                let cond_35: bool = false;
-                let cond_36: bool = false;
+                let cond_36: bool = ((mem[0x143a] & 0x80) != 0);
+                let cond_37: bool = false;
+                let cond_38: bool = false;
                 if ((mem[0x143a] & 0x80) != 0) {
-                  cond_35 := (there < here);
+                  cond_37 := (there < here);
                   if (there < here) {
                     l_2 := mem[0x1436];
                     out_v2_freq_lo := mem[0x1436];
@@ -1472,7 +1580,7 @@ machine gt1_11_ordered {
                     ret_toneporta := true;
                   }
                 } else {
-                  cond_36 := (here < there);
+                  cond_38 := (here < there);
                   if (here < there) {
                     out_v2_freq_lo := mem[0x1436];
                     out_v2_freq_hi := mem[0x1437];
@@ -1490,10 +1598,10 @@ machine gt1_11_ordered {
                   mem[0x1437] := h;
                   sid[V2_FREQ_HI] := h;
                 } else {
-                  if ite(cond_34, cond_35, cond_36) {
+                  if ite(cond_36, cond_37, cond_38) {
                     sid[V2_FREQ_LO] := out_v2_freq_lo;
                   }
-                  if ite(cond_34, cond_35, cond_36) {
+                  if ite(cond_36, cond_37, cond_38) {
                     sid[V2_FREQ_HI] := out_v2_freq_hi;
                   }
                 }
@@ -1556,16 +1664,20 @@ machine gt1_11_ordered {
             mem[0x144d] := ite((p != 0), 0x80, (mem[0x144d] | 0x80));
           } else {
             dir := mem[0x144d];
-            let cond_37: bool = ((mem[0x144d] & 0x80) != 0);
-            let cond_38: bool = false;
+            let cond_39: bool = ((mem[0x144d] & 0x80) != 0);
+            let cond_40: bool = false;
+            let t_9: u8 = 0;
+            let t_10: u8 = 0;
             if ((mem[0x144d] & 0x80) != 0) {
               mem[0x144d] := (mem[0x144d] & 0x7f);
               w_2 := wavetbl[i_wave[mem[0x143b]]];
               mem[0x144a] := w_2;
-              sid[V2_AD] := i_ad[mem[0x143b]];
-              sid[V2_SR] := i_sr[mem[0x143b]];
+              last_v2_ctrl := w_2;
+              seen_v2_ctrl := true;
+              t_9 := i_ad[mem[0x143b]];
+              t_10 := i_sr[mem[0x143b]];
               first := i_wave[mem[0x143b]];
-              cond_38 := (first != 0);
+              cond_40 := (first != 0);
               if (first != 0) {
                 n := notetbl[first];
                 if !((n & 0x80) != 0) {
@@ -1609,15 +1721,32 @@ machine gt1_11_ordered {
               }
               if (mem[0x144b] != 0) {
                 w := wavetbl[mem[0x144b]];
-                let cond_39: bool = (w != 0);
+                let cond_41: bool = (w != 0);
+                let cond_42: bool = false;
                 if (w != 0) {
                   mem[0x144a] := w;
+                  cond_42 := (!seen_v2_ctrl || (((last_v2_ctrl ^ w) & 9) != 0));
                 }
-                if ite(cond_39, cond_37, false) {
-                  sid[V2_CTRL] := ite(cond_39, ite(cond_37, w_2, 0), 0);
+                if ite(cond_41, ite(cond_42, cond_39, false), false) {
+                  sid[V2_CTRL] := ite(cond_41, ite(cond_42, ite(cond_39, w_2, 0), 0), 0);
                 }
-                if ite(cond_39, true, cond_37) {
-                  sid[V2_CTRL] := ite(cond_39, w, ite(cond_37, w_2, 0));
+                if ite(cond_41, ite(cond_42, cond_39, false), false) {
+                  sid[V2_SR] := ite(cond_41, ite(cond_42, ite(cond_39, t_10, 0), 0), 0);
+                }
+                if ite(cond_41, ite(cond_42, cond_39, false), false) {
+                  sid[V2_AD] := ite(cond_41, ite(cond_42, ite(cond_39, t_9, 0), 0), 0);
+                }
+                if ite(cond_41, ite(cond_42, true, cond_39), cond_39) {
+                  sid[V2_CTRL] := ite(cond_41, ite(cond_42, w, ite(cond_39, w_2, 0)), ite(cond_39, w_2, 0));
+                }
+                if ite(cond_41, ite(cond_42, false, cond_39), cond_39) {
+                  sid[V2_SR] := ite(cond_39, t_10, 0);
+                }
+                if ite(cond_41, ite(cond_42, false, cond_39), cond_39) {
+                  sid[V2_AD] := ite(cond_39, t_9, 0);
+                }
+                if ite(cond_41, !cond_42, false) {
+                  sid[V2_CTRL] := ite(cond_41, ite(cond_42, 0, w), 0);
                 }
                 n := notetbl[mem[0x144b]];
                 if !((n & 0x80) != 0) {
@@ -1645,16 +1774,22 @@ machine gt1_11_ordered {
                 sid[V2_PW_LO] := p_2;
                 sid[V2_PW_HI] := p_2;
               } else {
-                if cond_37 {
+                if cond_39 {
                   sid[V2_CTRL] := w_2;
+                }
+                if cond_39 {
+                  sid[V2_SR] := t_10;
+                }
+                if cond_39 {
+                  sid[V2_AD] := t_9;
                 }
                 if (mem[0x1439] == 0) {
                   if ((mem[0x143a] == 0) || (((mem[0x143a] & 0x80) != 0) && ((mem[0x1463] & 1) != 0))) {
-                    if ite(cond_37, cond_38, false) {
-                      sid[V2_FREQ_LO] := ite(cond_37, ite(cond_38, l, 0), 0);
+                    if ite(cond_39, cond_40, false) {
+                      sid[V2_FREQ_LO] := ite(cond_39, ite(cond_40, l, 0), 0);
                     }
-                    if ite(cond_37, cond_38, false) {
-                      sid[V2_FREQ_HI] := ite(cond_37, ite(cond_38, h, 0), 0);
+                    if ite(cond_39, cond_40, false) {
+                      sid[V2_FREQ_HI] := ite(cond_39, ite(cond_40, h, 0), 0);
                     }
                     sid[V2_PW_LO] := p_2;
                     sid[V2_PW_HI] := p_2;
@@ -1702,11 +1837,11 @@ machine gt1_11_ordered {
                     zplo := (mem[0x143a] << 1);
                     here := word(mem[0x1436], mem[0x1437]);
                     there := word(freqlo[mem[0x1435]], freqhi[mem[0x1435]]);
-                    let cond_40: bool = ((mem[0x143a] & 0x80) != 0);
-                    let cond_41: bool = false;
-                    let cond_42: bool = false;
+                    let cond_43: bool = ((mem[0x143a] & 0x80) != 0);
+                    let cond_44: bool = false;
+                    let cond_45: bool = false;
                     if ((mem[0x143a] & 0x80) != 0) {
-                      cond_41 := (there < here);
+                      cond_44 := (there < here);
                       if (there < here) {
                         l_2 := mem[0x1436];
                         out_v2_freq_lo := mem[0x1436];
@@ -1716,7 +1851,7 @@ machine gt1_11_ordered {
                         ret_toneporta := true;
                       }
                     } else {
-                      cond_42 := (here < there);
+                      cond_45 := (here < there);
                       if (here < there) {
                         out_v2_freq_lo := mem[0x1436];
                         out_v2_freq_hi := mem[0x1437];
@@ -1736,10 +1871,10 @@ machine gt1_11_ordered {
                       sid[V2_PW_LO] := p_2;
                       sid[V2_PW_HI] := p_2;
                     } else {
-                      if ite(cond_40, ite(cond_41, true, ite(cond_37, cond_38, false)), ite(cond_42, true, ite(cond_37, cond_38, false))) {
+                      if ite(cond_43, ite(cond_44, true, ite(cond_39, cond_40, false)), ite(cond_45, true, ite(cond_39, cond_40, false))) {
                         sid[V2_FREQ_LO] := out_v2_freq_lo;
                       }
-                      if ite(cond_40, ite(cond_41, true, ite(cond_37, cond_38, false)), ite(cond_42, true, ite(cond_37, cond_38, false))) {
+                      if ite(cond_43, ite(cond_44, true, ite(cond_39, cond_40, false)), ite(cond_45, true, ite(cond_39, cond_40, false))) {
                         sid[V2_FREQ_HI] := out_v2_freq_hi;
                       }
                       sid[V2_PW_LO] := p_2;
@@ -1767,11 +1902,11 @@ machine gt1_11_ordered {
                       mem[0x1437] := (mem[0x1437] + hi(sum_2));
                     }
                   } else {
-                    if ite(cond_37, cond_38, false) {
-                      sid[V2_FREQ_LO] := ite(cond_37, ite(cond_38, l, 0), 0);
+                    if ite(cond_39, cond_40, false) {
+                      sid[V2_FREQ_LO] := ite(cond_39, ite(cond_40, l, 0), 0);
                     }
-                    if ite(cond_37, cond_38, false) {
-                      sid[V2_FREQ_HI] := ite(cond_37, ite(cond_38, h, 0), 0);
+                    if ite(cond_39, cond_40, false) {
+                      sid[V2_FREQ_HI] := ite(cond_39, ite(cond_40, h, 0), 0);
                     }
                     sid[V2_PW_LO] := p_2;
                     sid[V2_PW_HI] := p_2;
@@ -1779,14 +1914,20 @@ machine gt1_11_ordered {
                 }
               }
             } else {
-              if cond_37 {
+              if cond_39 {
                 sid[V2_CTRL] := w_2;
               }
-              if ite(cond_37, cond_38, false) {
-                sid[V2_FREQ_LO] := ite(cond_37, ite(cond_38, l, 0), 0);
+              if cond_39 {
+                sid[V2_SR] := t_10;
               }
-              if ite(cond_37, cond_38, false) {
-                sid[V2_FREQ_HI] := ite(cond_37, ite(cond_38, h, 0), 0);
+              if cond_39 {
+                sid[V2_AD] := t_9;
+              }
+              if ite(cond_39, cond_40, false) {
+                sid[V2_FREQ_LO] := ite(cond_39, ite(cond_40, l, 0), 0);
+              }
+              if ite(cond_39, cond_40, false) {
+                sid[V2_FREQ_HI] := ite(cond_39, ite(cond_40, h, 0), 0);
               }
             }
           }
