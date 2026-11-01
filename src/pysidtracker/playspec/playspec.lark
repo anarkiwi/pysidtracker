@@ -40,21 +40,21 @@ drop: "drop" NAME ("," NAME)* ";"
 
 event: "event" NAME ":" NAME ";"
 
-_object: counter | owner | walker | cursor
+_object: counter | owner | walker | cursor | handler
+handler: "handler" NAME "on" events block
 counter: "counter" NAME ":" NAME "{" _cclause* "}"
 _cclause: c_on | c_wrap | c_reload
-c_on: "on" events (ASSIGNOP expr | RESET) ";"
+c_on: "on" events (ASSIGNOP expr | "reset") ";"
 events: NAME ("," NAME)*
 c_wrap: "wrap" ["at" expr] ["->" NAME] ";"
 c_reload: "reload" expr ";"
-RESET.2: "reset"
 
 owner: "owner" NAME ":" NAME "{" _oclause* "}"
 _oclause: o_id | o_none | o_on
 o_id: "id" expr ";"
 o_none: "none" expr ";"
-o_on: "on" events CLAIM ["when" expr] ";"
-CLAIM.2: "claim" | "release"
+o_on: "on" events "claim" ["when" expr] ";"   -> o_claim
+    | "on" events "release" ["when" expr] ";" -> o_release
 
 walker: "walker" NAME "{" _wclause* "}"
 _wclause: w_table | w_pos | w_count | w_values | w_on | w_start | w_row
@@ -63,11 +63,11 @@ w_width: "width" expr
 w_pos: "pos" NAME ";"
 w_count: "count" NAME ";"
 w_values: "values" NAME ("," NAME)* ";"
-w_on: "on" events (STEP | RESET) ";"
+w_on: "on" events "step" ";"   -> w_step
+    | "on" events "reset" ";" -> w_reset
 w_start: "start" expr ";"
 w_row: "row" expr [".." expr] ":" w_act [w_then] ";"
 w_then: "then" wset ("," wset)*
-STEP.2: "step"
 w_act: "sweep" "(" wset ("," wset)* ")"  -> a_sweep
      | "delay" "(" wset ")"              -> a_delay
      | "set" "(" wset ("," wset)* ")"    -> a_set
@@ -77,8 +77,8 @@ wset: NAME ["." NAME] "=" expr
 
 cursor: "cursor" NAME "@" expr "pos" NAME ("grammar" gsel ("," gsel)*)? "{" _kclause* "}"
 _kclause: k_on | k_run | k_field
-k_on: "on" events (NEXT | RESET) ";"
-NEXT.2: "next"
+k_on: "on" events "next" ";"   -> k_next
+    | "on" events "reset" ";" -> k_reset
 k_run: "run" expr ".." expr "base" expr "->" NAME ";"
 k_field: "field" NAME ["when" expr] ["->" NAME "=" expr] ";"
 

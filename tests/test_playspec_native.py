@@ -9,11 +9,13 @@ from hypothesis import strategies as st
 from pysidtracker import SidParseError
 from pysidtracker.asm6502 import assemble
 from pysidtracker.playspec import SpecPlayer, SpecRuntimeError, native, parse
-from pysidtracker.playspec.ir import K, Op, Program, Rd, V
+from pysidtracker.playspec import elaborate
+from pysidtracker.playspec.ir import K, Obj, Op, Program, Rd, V
 from pysidtracker.playspec.pyexec import compile_program, controls
 from pysidtracker.testing import whole_song
 
 from .helpers import build_psid
+from .test_playspec_events import BINDING, FULL
 
 pytestmark = pytest.mark.skipif(
     not native.available(), reason="the native core is not built"
@@ -691,3 +693,277 @@ def test_a_bus_that_is_not_the_machines_is_played_in_python():
     fast._bus = Proxy(fast._bus)  # pylint: disable=protected-access
     fast.render_grid(whole_song(5))
     assert fast._played == 0  # pylint: disable=protected-access
+
+
+def run_both(program, memory, frames=3):
+    """Run ``program`` on both executors from ``memory``: the Python error or None, and
+    the native outcome, checking that they agree on the memory and the SID writes."""
+    expected, got = bytearray(memory), bytearray(memory)
+    frame, state = compile_program(program), controls(program)
+    core, out = native_core(program, got), bytearray(25)
+    for _ in range(frames):
+        before, writes = bytes(got), []
+        try:
+            frame(
+                expected.__getitem__, sid_writes_of(expected, writes), state, None, {}
+            )
+        except SpecRuntimeError as exc:
+            assert core.run(1, out, 0)[:2] == (0, 2) and bytes(got) == before
+            return exc
+        assert core.run(1, out, 0)[:2] == (1, 0)
+        assert bytes(got) == bytes(expected) and core.writes() == writes
+    return None
+
+
+def table_memory(seed):
+    """Memory whose scratch and table pages are ``seed`` over an alphabet of tags."""
+    memory = bytearray(0x10000)
+    tags = (0, 1, 2, 3, 0x7F, 0x80, 0x81, 0xF0, 0xF2, 0xFE, 0xFF)
+    for i, address in enumerate(range(0x2000, 0x2300)):
+        byte = seed[i % len(seed)]
+        memory[address] = tags[byte % len(tags)] if byte & 0x80 else byte
+    return memory
+
+
+@pytest.mark.strain_exempt(reason="asserts equality of two executors")
+@pytest.mark.parametrize("seed", range(6))
+def test_the_spec_of_every_object_kind_plays_the_same_natively(seed):
+    program = elaborate(parse(FULL), BINDING)
+    memory = bytearray(0x10000)
+    for i in range(0x2000, 0x2100):
+        memory[i] = (i * (seed + 3) >> 2) & 0xFF if seed % 2 else (i * 7 + seed) % 5
+    memory[0x12] = 3 + seed
+    assert run_both(program, memory, 40) is None
+
+
+def narrow(draw, width, source):
+    """An operand of ``width`` bits: a constant or bytes of the scratch page."""
+    pick = draw(source)
+    if width == 1:
+        return K(pick & 1, 1)
+    if pick & 1:
+        return K(pick if width == 8 else pick * 257 & 0xFFFF, width)
+    if width == 8:
+        return Rd(K(0x2000 + pick % 0x40, 16))
+    return Op(
+        "word", 16, (Rd(K(0x2000 + pick % 0x40, 16)), Rd(K(0x2001 + pick % 0x40, 16)))
+    )
+
+
+@st.composite
+def transforms(draw, columns):
+    """An ``(column, mask, shl, shr)`` operand over ``columns`` row bytes."""
+    col = draw(st.integers(-1, columns - 1))
+    mask = draw(st.sampled_from((0xFF, 0x7F, 0x0F, 0xF0, 0x03)))
+    shift = draw(st.sampled_from(((0, 0), (1, 0), (4, 0), (0, 1), (0, 4), (0, 0))))
+    return (col, mask, *shift) if col >= 0 else (-1, draw(st.integers(0, 255)), 0, 0)
+
+
+@st.composite
+def walkers(draw, name):
+    """A random walker over cells below ``$2040`` and a table in ``$2100``."""
+    columns, width = draw(st.integers(1, 3)), draw(st.integers(1, 3))
+    wide = [draw(st.booleans()) for _ in range(draw(st.integers(1, 3)))]
+    base = 0x2000 + 3 * draw(st.integers(0, 8))
+    locs = {"pos": (base, base + 1)[: 1 + draw(st.booleans())], "cnt": (base + 2,)}
+    for i, w in enumerate(wide):
+        locs[f"v{i}"] = (base + 3 + 3 * i, base + 4 + 3 * i)[: 1 + w]
+
+    def assigns():
+        out = []
+        for _ in range(draw(st.integers(0, 2))):
+            i = draw(st.integers(0, len(wide) - 1))
+            part = draw(st.integers(0, 2 if wide[i] else 1))
+            out.append((i, part, draw(transforms(columns))))
+        return tuple(out)
+
+    edges = sorted(
+        draw(st.lists(st.integers(0, 255), min_size=1, max_size=4, unique=True))
+    )
+    rows = []
+    for lo, hi in zip([0, *[e + 1 for e in edges[:-1]]], edges):
+        kind = draw(st.sampled_from(("stop", "jump", "sweep", "delay", "set")))
+        into = draw(st.integers(0, len(wide) - 1))
+        frac = draw(st.integers(1, 6)) if wide[into] and draw(st.booleans()) else 0
+        if kind == "jump":
+            action = ("jump", draw(transforms(columns)))
+        elif kind == "sweep":
+            count, step = draw(transforms(columns)), draw(transforms(columns))
+            action = ("sweep", into, count, step, frac, assigns())
+        elif kind == "delay":
+            action = ("delay", draw(transforms(columns)), assigns())
+        elif kind == "set":
+            action = ("set", assigns(), assigns())
+        else:
+            action = ("stop",)
+        rows.append((lo, hi, action))
+    events = draw(st.lists(st.sampled_from(("frame", "note")), min_size=1, unique=True))
+    reactions = {e: (draw(st.sampled_from(("step", "reset"))),) for e in events}
+    return Obj(name, "walker", "", locs, (width, columns, tuple(rows)), reactions)
+
+
+@st.composite
+def cursors(draw, name):
+    """A random cursor over a stream in ``$2100``."""
+    base = 0x2000 + 3 * draw(st.integers(0, 8))
+    locs = {"pos": (base,)}
+    run = None
+    if draw(st.booleans()):
+        lo = draw(st.integers(0, 250))
+        run = (lo, lo + draw(st.integers(0, 5)), draw(st.integers(0, lo)))
+        locs["run"] = (base + 1,)
+    fields = []
+    for k in range(draw(st.integers(1, 4))):
+        cond = (
+            draw(st.sampled_from((0x80, 0xFF, 0x0F))),
+            draw(st.integers(0, 3)),
+            draw(st.booleans()),
+        )
+        out = k if draw(st.booleans()) else None
+        if out is not None:
+            locs[f"o{k}"] = (base + 3 + 3 * k, base + 4 + 3 * k)[
+                : 1 + draw(st.booleans())
+            ]
+        keep, shl, shr = draw(
+            st.sampled_from(((0xFF, 0, 0), (0x7F, 0, 0), (0x0F, 4, 0), (0xFF, 0, 3)))
+        )
+        fields.append((cond, out, keep, shl, shr))
+    events = draw(st.lists(st.sampled_from(("frame", "row")), min_size=1, unique=True))
+    reactions = {e: (draw(st.sampled_from(("next", "reset"))),) for e in events}
+    return Obj(name, "cursor", "", locs, (run, tuple(fields)), reactions)
+
+
+@st.composite
+def small_objects(draw, name):
+    """A random counter or owner."""
+    base = 0x2000 + 3 * draw(st.integers(0, 8))
+    if draw(st.booleans()):
+        action = draw(
+            st.one_of(
+                st.just(("reset",)),
+                st.tuples(st.sampled_from(("up", "down")), st.integers(1, 9)),
+            )
+        )
+        loc = (base, base + 1)[: 1 + draw(st.booleans())]
+        fires = draw(st.sampled_from((None, "tick")))
+        return Obj(name, "counter", "", {"cell": loc}, (), {"frame": action}, fires)
+    action = (draw(st.sampled_from(("claim", "release"))),)
+    return Obj(name, "owner", "", {"cell": (base,)}, (), {"frame": action})
+
+
+@st.composite
+def object_programs(draw):
+    """A random program reacting random objects, and the flag of each wrap."""
+    objects = [
+        draw(st.one_of(walkers("o0"), cursors("o1"), small_objects("o2"))),
+        draw(st.one_of(walkers("o3"), cursors("o4"), small_objects("o5"))),
+    ]
+    program = Program("random", [], objects={o.name: o for o in objects})
+    source = st.integers(0, 255)
+    for index in range(draw(st.integers(1, 6))):
+        obj = objects[draw(st.integers(0, 1))]
+        event = draw(st.sampled_from(sorted(obj.reactions)))
+        ops = tuple(narrow(draw, w, source) for w in obj.widths())
+        if obj.kind in ("walker", "cursor"):
+            ops = (
+                tuple(
+                    K(0x2100 + draw(st.integers(0, 0x3F)), 16)
+                    for _ in ops[: obj.arity() - 1]
+                )
+                + ops[-1:]
+            )
+        flag = f"w{index}" if obj.fires and draw(st.booleans()) else None
+        program.body.append(("obj", obj.name, event, flag, ops, (), (), ()))
+        if flag:
+            program.body.append(
+                ("if", V(flag, 1), [("wr", K(0x2200 + index, 16), K(1, 8))], [])
+            )
+    return program
+
+
+@pytest.mark.strain_exempt(reason="asserts equality of two executors")
+@settings(
+    max_examples=400,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
+)
+@given(object_programs(), st.binary(min_size=4, max_size=64))
+def test_random_object_programs_agree_with_the_python_executor(program, seed):
+    run_both(program, table_memory(seed), 4)
+
+
+@pytest.mark.strain_exempt(reason="asserts equality of two executors")
+def test_a_native_walker_that_jumps_forever_bails_to_the_error_python_raises():
+    rows = ((0, 255, ("jump", (0, 0xFF, 0, 0))),)
+    walker = Obj(
+        "w",
+        "walker",
+        "",
+        {"pos": (0x2000,), "cnt": (0x2001,), "v0": (0x2002,)},
+        (1, 1, rows),
+        {"frame": ("step",)},
+    )
+    program = Program(
+        "loop",
+        [("obj", "w", "frame", None, (K(0x2100, 16), K(0, 8)), (), (), ())],
+        objects={"w": walker},
+    )
+    memory = bytearray(0x10000)
+    memory[0x2100:0x2200] = bytes((i + 1) & 0xFF for i in range(256))
+    assert "forever" in str(run_both(program, memory, 1))
+
+
+def instructions(*ins):
+    """The encoded ``(opcode name, argument)`` instructions."""
+    return b"".join(
+        native.OPS[op].to_bytes(8, "little") + arg.to_bytes(8, "little", signed=True)
+        for op, arg in ins
+    )
+
+
+@pytest.mark.strain_exempt(reason="asserts equality of two executors")
+@pytest.mark.parametrize(
+    "description, operands, message",
+    [
+        ([0, -1, 2, 0x10, -1, 1, 1], 1, "out of range"),
+        ([7, -1, 0], 0, "object kind"),
+        ([0, -1, 2, 0x10, -1], 2, "ends early"),
+        ([0, -1, 2, 0x10, -1, 1, 1, 0], 2, "too long"),
+        ([0, 9, 2, 0x10, -1, 1, 1], 2, "flag variable"),
+    ],
+)
+def test_malformed_object_descriptions_are_refused(description, operands, message):
+    core = native.Core(bytearray(0x10000), ENTRY, ENTRY, 1000)
+    core.add_bank(BANK, False, [], [ENTRY])
+    code = instructions(
+        *[("Konst", 0)] * operands, ("Obj", operands << 24), ("Halt", 0)
+    )
+    with pytest.raises(ValueError, match=message):
+        core.add(BANK, ENTRY, code, [], [], 1, 0, [description])
+
+
+@pytest.mark.strain_exempt(reason="asserts equality of two executors")
+@pytest.mark.parametrize(
+    "action", [("up", 1), ("up", 3), ("down", 1), ("down", 3), ("reset",)]
+)
+@pytest.mark.parametrize("wide", [False, True])
+def test_counters_wrap_at_every_boundary_natively(action, wide):
+    cell = (0x2000, 0x2001) if wide else (0x2000,)
+    counter = Obj("c", "counter", "", {"cell": cell}, (), {"frame": action}, "tick")
+
+    def operand(addr):
+        low = Rd(K(addr, 16))
+        return Op("word", 16, (low, Rd(K(addr + 1, 16)))) if wide else low
+
+    program = Program(
+        "count",
+        [("obj", "c", "frame", "w", (operand(0x2002), operand(0x2004)), (), (), ())],
+        objects={"c": counter},
+    )
+    for value in [0, 1, 2, 3, 4, 5, 0xFE, 0xFF, 0x100, 0x1FF, 0xFFFF]:
+        for limit in (0, 2, 5, 0xFF, 0x100):
+            memory = bytearray(0x10000)
+            memory[0x2000:0x2002] = (value & 0xFFFF).to_bytes(2, "little")
+            memory[0x2002:0x2004] = (limit & 0xFFFF).to_bytes(2, "little")
+            memory[0x2004:0x2006] = (0x1234 if wide else 0x34).to_bytes(2, "little")
+            assert run_both(program, memory, 1) is None

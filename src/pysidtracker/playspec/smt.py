@@ -244,10 +244,8 @@ class Executor:
     def react(self, s, st: State, guard) -> None:
         """An object reaction: every byte it writes and its wrap flag are uninterpreted
         functions of its operands and the bytes it may read, the same for every call."""
-        _tag, name, event, out, ops, reads, writes = s
-        if (0, 0xFFFF) in reads:
-            raise SidError(f"object {name} reads an unbounded table")
-        args = [self.expr(o, st) for o in ops]
+        _tag, name, event, out, ops, reads, writes, dynamic = s
+        args = [self.expr(o, st) for o in ops] + [st.mem] * bool(dynamic)
         for lo, hi in sorted(reads):
             args += [z3.Select(st.mem, z3.BitVecVal(a, 16)) for a in range(lo, hi + 1)]
         sorts = [a.sort() for a in args]

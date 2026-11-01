@@ -549,11 +549,11 @@ def frame_local(body, keep: np.ndarray) -> List[int]:
                     livein[lo : hi + 1] = True
             tag = s[0]
             if tag == "obj":
-                if FULL in s[5]:
-                    raise OrderError(f"object {s[1]} reads an unbounded table")
                 for lo, hi in s[5]:
                     livein[lo : hi + 1] = True
                 livein[list(s[6])] = True
+                if s[7]:
+                    livein[:] = True
             elif tag == "wr":
                 lo, hi = span(s[1])
                 if (lo, hi) == FULL:
@@ -1301,6 +1301,12 @@ def _logged(body, size: int, base: int, cells: Sequence[int]) -> list:
             for a in _wild(e)
             for c in cells
         ]
+        if s[0] == "obj":
+            hits += [
+                Op("ule", 1, (Op("sub", 16, (K(c, 16), s[4][i])), K(extra, 16)))
+                for i, extra in s[7]
+                for c in cells
+            ]
         return [("set", "alias", Op("lor", 1, (V("alias", 1), h))) for h in hits]
 
     def stmt(s):

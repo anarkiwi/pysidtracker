@@ -1,0 +1,55 @@
+// Pulse-width and filter tables walked once per frame, restarted by a note, and the voice
+// that owns the filter.
+spec pulse_filter;
+layout { w, pulse_table, filter_table: addr; }
+cell chip: u8[25] @ 0xD400 out;
+cell pw: u16 @ (L.w, L.w + 1);
+cell pwpos: u8 @ L.w + 2;
+cell pwcnt: u8 @ L.w + 3;
+cell cutoff: u16 @ (L.w + 4, L.w + 5);
+cell band: u8 @ L.w + 6;
+cell res: u8 @ L.w + 7;
+cell fpos: u8 @ L.w + 8;
+cell fcnt: u8 @ L.w + 9;
+cell owner_id: u8 @ L.w + 10;
+cell start_pulse: u8 @ L.w + 11;
+cell start_filter: u8 @ L.w + 12;
+cell gate: u8 @ L.w + 13;
+
+walker pulse {
+  table @ L.pulse_table width 3;
+  pos pwpos; count pwcnt; values pw; start start_pulse;
+  on frame step; on note reset;
+  row 0..0x7f:    sweep(into=pw, count=c0, step=c1);
+  row 0x80..0xfd: set(pw.hi = c0 & 0x7f, pw.lo = c1);
+  row 0xfe:       jump(c1);
+  row 0xff:       stop;
+}
+
+walker filter {
+  table @ L.filter_table width 3;
+  pos fpos; count fcnt; values cutoff, band, res; start start_filter;
+  on frame step; on instrument reset;
+  row 0..0x7f:    sweep(into=cutoff, count=c0, step=c1, frac=3);
+  row 0x80..0xfd: set(band = c0 & 0x70, res = c0 << 4, cutoff.hi = c1, cutoff.lo = 0);
+  row 0xfe:       jump(c1);
+  row 0xff:       stop;
+}
+
+owner filter_owner: owner_id { id x * 7; none 0xFF; on instrument claim when gate != 0; }
+
+machine voice[x in 0..3] {
+  step {
+    chip[7 * x + 2] := lo(pw);
+    chip[7 * x + 3] := hi(pw);
+    if gate != 0 { fire instrument; }
+    if filter_owner.mine {
+      chip[21] := lo(cutoff);
+      chip[22] := hi(cutoff);
+      chip[23] := res | 1;
+      chip[24] := band | 0x0F;
+    }
+  }
+}
+machine clock { step { fire frame; if gate == 2 { fire note; } } }
+schedule { clock; for v in 0..3 { voice[v]; } }

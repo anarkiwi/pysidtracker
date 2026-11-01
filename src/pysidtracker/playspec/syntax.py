@@ -96,7 +96,7 @@ def _line(meta, origin: str = "") -> Loc:
     )
 
 
-OBJECTS = ("counter", "owner", "walker", "cursor")
+OBJECTS = ("counter", "owner", "walker", "cursor", "handler")
 
 
 def _int(text: str) -> int:
@@ -165,6 +165,9 @@ class _ToAst(Transformer):
     def drop(self, meta, c):
         return self._n("drop", meta, [str(n) for n in c])
 
+    def handler(self, meta, c):
+        return self._n("handler", meta, str(c[0]), c[1], c[2])
+
     def event(self, meta, c):
         return self._n("event", meta, str(c[0]), str(c[1]))
 
@@ -176,7 +179,7 @@ class _ToAst(Transformer):
         return [str(n) for n in c]
 
     def c_on(self, meta, c):
-        if len(c) == 2:
+        if len(c) == 1:
             return self._n("c_on", meta, c[0], "reset", None)
         return self._n("c_on", meta, c[0], str(c[1]), c[2])
 
@@ -195,8 +198,11 @@ class _ToAst(Transformer):
     def o_none(self, meta, c):
         return self._n("o_none", meta, c[0])
 
-    def o_on(self, meta, c):
-        return self._n("o_on", meta, c[0], str(c[1]), c[2])
+    def o_claim(self, meta, c):
+        return self._n("o_on", meta, c[0], "claim", c[1])
+
+    def o_release(self, meta, c):
+        return self._n("o_on", meta, c[0], "release", c[1])
 
     def walker(self, meta, c):
         return self._n("walker", meta, str(c[0]), list(c[1:]))
@@ -217,8 +223,11 @@ class _ToAst(Transformer):
     def w_values(self, meta, c):
         return self._n("w_values", meta, [str(n) for n in c])
 
-    def w_on(self, meta, c):
-        return self._n("w_on", meta, c[0], str(c[1]))
+    def w_step(self, meta, c):
+        return self._n("w_on", meta, c[0], "step")
+
+    def w_reset(self, meta, c):
+        return self._n("w_on", meta, c[0], "reset")
 
     def w_start(self, meta, c):
         return self._n("w_start", meta, c[0])
@@ -255,8 +264,11 @@ class _ToAst(Transformer):
         clauses = [g for g in c[3:] if isinstance(g[1], Loc)]
         return self._n("cursor", meta, str(c[0]), c[1], str(c[2]), grammar, clauses)
 
-    def k_on(self, meta, c):
-        return self._n("k_on", meta, c[0], str(c[1]))
+    def k_next(self, meta, c):
+        return self._n("k_on", meta, c[0], "next")
+
+    def k_reset(self, meta, c):
+        return self._n("k_on", meta, c[0], "reset")
 
     def k_run(self, meta, c):
         return self._n("k_run", meta, c[0], c[1], c[2], str(c[3]))

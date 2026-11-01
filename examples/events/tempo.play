@@ -1,0 +1,10 @@
+// A tempo countdown: the frame counts the tempo down and a wrap is a row.
+spec tempo;
+layout { w: addr; }
+cell tempo: u8 @ L.w;
+cell speed: u8 @ L.w + 1;
+cell rows: u8 @ L.w + 2;
+counter countdown: tempo { on frame -= 1; reload speed; wrap -> row; }
+counter played: rows { on row += 1; }
+machine clock { step { fire frame; } }
+schedule { clock; }

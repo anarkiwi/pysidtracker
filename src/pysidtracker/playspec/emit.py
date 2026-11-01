@@ -539,7 +539,7 @@ def isomorphic(a, b, objects=None) -> Optional[str]:
                 )
                 if units.setdefault(s[1], t[1]) != t[1] or not same_flag:
                     return f"{here}: reacts {s[1]} against {t[1]}"
-                if (s[2], s[5], s[6], len(s[4])) != (t[2], t[5], t[6], len(t[4])):
+                if (s[2], s[5:], len(s[4])) != (t[2], t[5:], len(t[4])):
                     return f"{here}: {s[1:3]} against {t[1:3]}"
             if not all(map(same, _exprs(s), _exprs(t))):
                 return f"{here}: {s} against {t}"

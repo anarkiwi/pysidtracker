@@ -30,13 +30,6 @@ def mentions(node, names) -> bool:
     return isinstance(node, list) and any(mentions(n, names) for n in node)
 
 
-def window(base, extra: int) -> Tuple[int, int]:
-    """The address interval ``base`` reaches with up to ``extra`` added."""
-    if isinstance(base, K) and base.v is not None and base.v + extra <= TOP:
-        return (base.v, base.v + extra)
-    return (0, TOP)
-
-
 def const(value: int, w: int) -> tuple:
     """A syntax node for the constant ``value`` of width ``w``."""
     return ("_v", 0, K(value, w))
@@ -87,7 +80,8 @@ class ObjectLowering:
                 offset = self.static(where, scope, fline) or 0
             if typ not in SIZES:
                 self.error(fline, f"record field {name}: u8 or u16 only")
-            end = offset + SIZES.get(typ, 1)
+                continue
+            end = offset + SIZES[typ]
             if size is not None and end > size:
                 self.error(fline, f"record field {name} ends past the stride {size}")
             for byte in range(offset, end):
@@ -114,6 +108,17 @@ class ObjectLowering:
             return cell.place
         low = cell.place[0]
         return (low, None if low is None else (low + 1) & TOP)
+
+    def declare_reacting(self, item, table: Dict[str, object], scope) -> None:
+        """Bind an object or record a handler, in the declaration order a firing follows."""
+        if item[0] != "handler":
+            table[item[2]] = self.bind_object(item, scope)
+            return
+        for event in item[3]:
+            self.known_event(event, item[1])
+        if item[2] in self.inst.objects or item[2] in self.shared_objs:
+            self.error(item[1], f"{item[2]} is already declared")
+        table[item[2]] = item
 
     def bind_object(self, item, scope) -> Optional[Obj]:
         """The :class:`~.ir.Obj` an object declaration binds in the current instance."""
@@ -158,9 +163,10 @@ class ObjectLowering:
                     self.known_event(fires, clause[1])
             else:
                 reload = clause[2]
-        for event in reactions:
-            if fires and event in self.events and not self.below(fires, event):
+        for event, action in reactions.items():
+            if fires and action[0] != "reset" and not self.below(fires, event):
                 self.error(line, f"{name} fires {fires}, which is not below {event}")
+                fires = None
         asts = [limit or const((1 << w) - 1, w), reload or const(0, w)]
         obj = Obj(oid, "counter", "", {"cell": loc}, (), reactions, fires)
         return obj, dict.fromkeys(reactions, asts)
@@ -370,20 +376,20 @@ class ObjectLowering:
         obj = Obj(oid, "cursor", "", locs, (run, tuple(fields)), reactions, None, index)
         return obj, dict.fromkeys(reactions, [base, const(0, 8)])
 
-    def visible_objects(self) -> List[Obj]:
-        """The objects a firing reaches: the shared ones, then the current instance's."""
+    def visible_objects(self) -> list:
+        """What a firing reaches: the shared objects and handlers, then the current
+        instance's, each group in declaration order."""
         return [*self.shared_objs.values(), *self.inst.objects.values()]
 
     def find_object(self, name: str) -> Optional[Obj]:
         """The object ``name`` visible from the current instance."""
-        return self.inst.objects.get(name) or self.shared_objs.get(name)
+        found = self.inst.objects.get(name) or self.shared_objs.get(name)
+        return found if isinstance(found, Obj) else None
 
     def all_objects(self) -> Dict[str, Obj]:
         """Every bound object by id."""
-        objs = [*self.shared_objs.values()]
-        for inst in self.instances.values():
-            objs += inst.objects.values()
-        return {o.name: o for o in objs}
+        tables = [self.shared_objs, *(i.objects for i in self.instances.values())]
+        return {o.name: o for t in tables for o in t.values() if isinstance(o, Obj)}
 
     def operands(self, obj: Obj, event: str, scope, line: int) -> list:
         """The operands of ``obj``'s reaction to ``event``, lowered where it happens."""
@@ -404,11 +410,29 @@ class ObjectLowering:
         """The statements of one reaction (a cursor's grammar hook first)."""
         locs = [a for loc in obj.locs.values() for a in loc if a is not None]
         reads = [(a, a) for a in locs]
+        windows, extra = 0, 0
         if obj.kind == "walker":
-            reads += [window(o, 0xFF + obj.spec[0]) for o in ops[: obj.spec[1]]]
+            windows, extra = obj.spec[1], 0xFF + obj.spec[0]
         elif obj.kind == "cursor":
-            reads.append(window(ops[0], 0xFF + len(obj.spec[1])))
-        step = [("obj", obj.name, event, flag, tuple(ops), tuple(reads), tuple(locs))]
+            windows, extra = 1, 0xFF + len(obj.spec[1])
+        dyn = []
+        for index, base in enumerate(ops[:windows]):
+            if isinstance(base, K) and base.v is not None and base.v + extra <= TOP:
+                reads.append((base.v, base.v + extra))
+            else:
+                dyn.append((index, extra))
+        step = [
+            (
+                "obj",
+                obj.name,
+                event,
+                flag,
+                tuple(ops),
+                tuple(reads),
+                tuple(locs),
+                tuple(dyn),
+            )
+        ]
         if obj.grammar is not None and obj.reactions[event] == ("next",):
             return [("hook", obj.grammar, ops[0])] + step
         return step
@@ -416,12 +440,12 @@ class ObjectLowering:
     def reactions_to(self, event: str, scope, line: int) -> list:
         """The statements reacting to ``event``: each visible object's reaction and, for a
         counter that wraps, the firing of its event."""
-        if event in self.firing:
-            self.error(line, f"event {event} fires itself ({' -> '.join(self.firing)})")
-            return []
-        self.firing.append(event)
         out: list = []
         for obj in self.visible_objects():
+            if isinstance(obj, tuple):
+                if event in obj[3]:
+                    out += self.block(obj[4], type(scope)())
+                continue
             if event not in obj.reactions:
                 continue
             flag = self.fresh("wrap") if obj.fires else None
@@ -430,7 +454,6 @@ class ObjectLowering:
             if flag:
                 inner = self.reactions_to(obj.fires, scope, line)
                 out.append(("if", V(flag, 1), [("fire", obj.fires, inner)], []))
-        self.firing.pop()
         return out
 
     def st_fire(self, node, scope):

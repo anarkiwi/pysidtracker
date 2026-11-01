@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..notes import table
+from ..notes import entry
 from .ir import K, Op, evaluate, width
 
 
@@ -31,7 +31,7 @@ def note_entry(w: int, args):
     if all(isinstance(a, K) and a.v is not None for a in args):
         size = 1 << max(8, width(index))
         if 0 <= index.v < size:
-            return K(table(clock.v, part.v, offset.v, size)[index.v], w)
+            return K(entry(clock.v, part.v, offset.v, index.v), w)
     return Op("note", w, tuple(args))
 
 

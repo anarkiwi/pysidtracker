@@ -4,7 +4,7 @@ Parse (:func:`parse`/:func:`load`), check and lower (:func:`elaborate`), run
 (:class:`SpecPlayer`, :func:`compile_program`) and prove (:mod:`.smt`, :mod:`.tv`).
 """
 
-from .ir import Cell, K, Op, Program, Rd, V
+from .ir import Cell, K, Obj, Op, Program, Rd, V
 from .lower import elaborate
 from .player import SpecPlayer
 from .pyexec import SpecRuntimeError, compile_program, run
@@ -15,6 +15,7 @@ from .validate import StreamValidator
 __all__ = [
     "Cell",
     "K",
+    "Obj",
     "Op",
     "Program",
     "Rd",

@@ -100,7 +100,6 @@ class Lowerer(ObjectLowering):
         self.shared_objs: Dict[str, Obj] = {}
         self.asts: Dict[str, dict] = {}
         self.owner_exprs: Dict[str, tuple] = {}
-        self.firing: List[str] = []
         self.bind_events()
         for kind in set(spec.layout.values()) - LKINDS:
             self.error(0, f"unknown layout kind {kind!r}")
@@ -115,7 +114,7 @@ class Lowerer(ObjectLowering):
         for record in spec.records:
             self.bind_record(record, self.shared, Scope())
         for item in spec.objects:
-            self.shared_objs[item[2]] = self.bind_object(item, Scope())
+            self.declare_reacting(item, self.shared_objs, Scope())
         for name, machine in spec.machines.items():
             if machine[3] is None:
                 self.instance(name, None)
@@ -261,7 +260,7 @@ class Lowerer(ObjectLowering):
                 self.bind_record(item, inst.cells, scope)
         for item in machine[6]:
             if item[0] in OBJECTS:
-                inst.objects[item[2]] = self.bind_object(item, scope)
+                self.declare_reacting(item, inst.objects, scope)
         self.inst = saved
         return inst
 
