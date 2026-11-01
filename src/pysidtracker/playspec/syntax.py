@@ -69,6 +69,7 @@ class Spec:
     events: List[Tuple] = field(default_factory=list)
     objects: List[Tuple] = field(default_factory=list)
     records: List[Tuple] = field(default_factory=list)
+    views: List[Tuple] = field(default_factory=list)
     schedule: Tuple = ()
     invariants: List[Tuple] = field(default_factory=list)
     assumes: List[Tuple] = field(default_factory=list)
@@ -139,6 +140,8 @@ class _ToAst(Transformer):
                 spec.objects.append(item)
             elif tag == "record":
                 spec.records.append(item)
+            elif tag == "view":
+                spec.views.append(item)
             elif tag == "invariant":
                 spec.invariants.append(item)
             elif tag == "assume":
@@ -184,7 +187,7 @@ class _ToAst(Transformer):
         return self._n("c_on", meta, c[0], str(c[1]), c[2])
 
     def c_wrap(self, meta, c):
-        return self._n("c_wrap", meta, c[0], c[1] and str(c[1]))
+        return self._n("c_wrap", meta, c[0], c[1], c[2] and str(c[2]))
 
     def c_reload(self, meta, c):
         return self._n("c_reload", meta, c[0])
@@ -233,15 +236,15 @@ class _ToAst(Transformer):
         return self._n("w_start", meta, c[0])
 
     def w_row(self, meta, c):
-        then = c[3][2] if c[3] else []
-        return self._n("w_row", meta, c[0], c[1], c[2], then)
+        then = c[4][2] if c[4] else []
+        return self._n("w_row", meta, c[0], c[1], c[2], c[3], then)
 
     def w_then(self, meta, c):
         return self._n("w_then", meta, list(c))
 
     def wset(self, meta, c):
         del meta
-        return str(c[0]), c[1] and str(c[1]), c[2]
+        return str(c[0]), c[1] and str(c[1]), c[2], c[3], c[4]
 
     def a_sweep(self, meta, c):
         return self._n("sweep", meta, list(c))
@@ -253,16 +256,25 @@ class _ToAst(Transformer):
         return self._n("set", meta, list(c))
 
     def a_jump(self, meta, c):
-        return self._n("jump", meta, c[0])
+        return self._n("jump", meta, c[0], c[1:3], c[3])
 
     def a_stop(self, meta, c):
         del c
         return self._n("stop", meta)
 
     def cursor(self, meta, c):
-        grammar = [g for g in c[3:] if not isinstance(g[1], Loc)]
-        clauses = [g for g in c[3:] if isinstance(g[1], Loc)]
-        return self._n("cursor", meta, str(c[0]), c[1], str(c[2]), grammar, clauses)
+        grammar = [g for g in c[4:] if not isinstance(g[1], Loc)]
+        clauses = [g for g in c[4:] if isinstance(g[1], Loc)]
+        return self._n(
+            "cursor",
+            meta,
+            str(c[0]),
+            c[1],
+            str(c[2]),
+            c[3] is not None,
+            grammar,
+            clauses,
+        )
 
     def k_next(self, meta, c):
         return self._n("k_on", meta, c[0], "next")
@@ -270,14 +282,31 @@ class _ToAst(Transformer):
     def k_reset(self, meta, c):
         return self._n("k_on", meta, c[0], "reset")
 
+    def k_last(self, meta, c):
+        del meta, c
+        return True
+
+    def k_settle(self, meta, c):
+        return self._n("k_on", meta, c[0], "settle")
+
     def k_run(self, meta, c):
         return self._n("k_run", meta, c[0], c[1], c[2], str(c[3]))
 
     def k_field(self, meta, c):
-        return self._n("k_field", meta, str(c[0]), c[1], c[2] and str(c[2]), c[3])
+        return self._n("k_field", meta, str(c[0]), c[1], list(c[2:]))
+
+    def kout(self, meta, c):
+        del meta
+        return str(c[0]), c[1], c[2]
 
     def record(self, meta, c):
         return self._n("record", meta, str(c[0]), c[1], c[2], list(c[3:]))
+
+    def view(self, meta, c):
+        return self._n("view", meta, str(c[0]), c[1], list(c[2:]))
+
+    def vfield(self, meta, c):
+        return self._n("vfield", meta, str(c[0]), c[1])
 
     def rfield(self, meta, c):
         return self._n("rfield", meta, str(c[0]), str(c[1]), c[2])
@@ -735,6 +764,7 @@ class _Deriver:
             "event": [*base.events, *own.events],
             "object": [*base.objects, *own.objects],
             "record": [*base.records, *own.records],
+            "view": [*base.views, *own.views],
         }
         for kind, items in declared.items():
             seen: Dict[str, Tuple] = {}
@@ -775,6 +805,7 @@ class _Deriver:
             events=declared["event"],
             objects=declared["object"],
             records=declared["record"],
+            views=declared["view"],
             schedule=schedule,
             invariants=list(self.top["invariant"].values()),
             assumes=[*base.assumes, *own.assumes],

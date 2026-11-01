@@ -772,9 +772,17 @@ def walkers(draw, name):
     def assigns():
         out = []
         for _ in range(draw(st.integers(0, 2))):
-            i = draw(st.integers(0, len(wide) - 1))
-            part = draw(st.integers(0, 2 if wide[i] else 1))
-            out.append((i, part, draw(transforms(columns))))
+            i = draw(st.integers(0, len(wide)))
+            part = 0 if i == len(wide) else draw(st.integers(0, 2 if wide[i] else 1))
+            guard = None
+            if draw(st.booleans()):
+                guard = (
+                    draw(st.integers(0, columns - 1)),
+                    draw(st.sampled_from((0x80, 0xFF, 0xF0))),
+                    draw(st.sampled_from((0, 0x80, 0x10))),
+                    draw(st.booleans()),
+                )
+            out.append((i, part, draw(transforms(columns)), guard))
         return tuple(out)
 
     edges = sorted(
@@ -786,7 +794,9 @@ def walkers(draw, name):
         into = draw(st.integers(0, len(wide) - 1))
         frac = draw(st.integers(1, 6)) if wide[into] and draw(st.booleans()) else 0
         if kind == "jump":
-            action = ("jump", draw(transforms(columns)))
+            hold = draw(st.sampled_from((None, (0, 0x7F), (0x80, 0xFF), (3, 3))))
+            via = draw(st.sampled_from((None, 0x80, 0x10, 0)))
+            action = ("jump", draw(transforms(columns)), hold, via)
         elif kind == "sweep":
             count, step = draw(transforms(columns)), draw(transforms(columns))
             action = ("sweep", into, count, step, frac, assigns())
@@ -819,18 +829,27 @@ def cursors(draw, name):
             draw(st.integers(0, 3)),
             draw(st.booleans()),
         )
-        out = k if draw(st.booleans()) else None
-        if out is not None:
-            locs[f"o{k}"] = (base + 3 + 3 * k, base + 4 + 3 * k)[
+        stores = []
+        for j in range(draw(st.integers(0, 2))):
+            locs[f"o{k}_{j}"] = (base + 3 + 6 * k + 3 * j, base + 4 + 6 * k + 3 * j)[
                 : 1 + draw(st.booleans())
             ]
-        keep, shl, shr = draw(
-            st.sampled_from(((0xFF, 0, 0), (0x7F, 0, 0), (0x0F, 4, 0), (0xFF, 0, 3)))
-        )
-        fields.append((cond, out, keep, shl, shr))
+            keep, shl, shr = draw(
+                st.sampled_from(
+                    ((0xFF, 0, 0), (0x7F, 0, 0), (0x0F, 4, 0), (0xFF, 0, 3))
+                )
+            )
+            test = draw(
+                st.sampled_from(((0, 0, True), (0x80, 0, True), (0x80, 0, False)))
+            )
+            stores.append((keep, shl, shr, test))
+        fields.append((cond, tuple(stores)))
     events = draw(st.lists(st.sampled_from(("frame", "row")), min_size=1, unique=True))
-    reactions = {e: (draw(st.sampled_from(("next", "reset"))),) for e in events}
-    return Obj(name, "cursor", "", locs, (run, tuple(fields)), reactions)
+    reactions = {
+        e: (draw(st.sampled_from(("next", "reset", "settle"))),) for e in events
+    }
+    last = draw(st.booleans())
+    return Obj(name, "cursor", "", locs, (run, tuple(fields), last), reactions)
 
 
 @st.composite
@@ -842,6 +861,9 @@ def small_objects(draw, name):
             st.one_of(
                 st.just(("reset",)),
                 st.tuples(st.sampled_from(("up", "down")), st.integers(1, 9)),
+                st.tuples(
+                    st.sampled_from(("up", "down")), st.integers(1, 9), st.just(True)
+                ),
             )
         )
         loc = (base, base + 1)[: 1 + draw(st.booleans())]
@@ -894,7 +916,7 @@ def test_random_object_programs_agree_with_the_python_executor(program, seed):
 
 @pytest.mark.strain_exempt(reason="asserts equality of two executors")
 def test_a_native_walker_that_jumps_forever_bails_to_the_error_python_raises():
-    rows = ((0, 255, ("jump", (0, 0xFF, 0, 0))),)
+    rows = ((0, 255, ("jump", (0, 0xFF, 0, 0), None, None)),)
     walker = Obj(
         "w",
         "walker",

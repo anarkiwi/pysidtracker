@@ -95,8 +95,8 @@ def _xf(spec) -> List[int]:
 
 def _assigns(sets) -> List[int]:
     out = [len(sets)]
-    for index, part, spec in sets:
-        out += [index, part, *_xf(spec)]
+    for index, part, spec, guard in sets:
+        out += [index, part, *_xf(spec), *(guard or (-1, 0, 0, 1))]
     return out
 
 
@@ -110,8 +110,11 @@ def _row(row) -> List[int]:
     first = second = blank
     sets: tuple = ()
     then: tuple = ()
+    hold, via = (1, 0), -1
     if kind == "jump":
         first = action[1]
+        hold = action[2] or hold
+        via = -1 if action[3] is None else action[3]
     elif kind == "sweep":
         into, first, second, frac, then = action[1:]
     elif kind == "delay":
@@ -128,6 +131,8 @@ def _row(row) -> List[int]:
         *_xf(second),
         *_assigns(sets),
         *_assigns(then),
+        *hold,
+        via,
     ]
 
 
@@ -140,7 +145,7 @@ def describe(obj: Obj, event: str, out: int) -> List[int]:
         obj.arity(),
     ]
     if obj.kind == "counter":
-        code = {"reset": 0, "up": 1, "down": 2}[action[0]]
+        code = {"reset": 0, "up": 1, "down": 2}[action[0]] + 2 * (len(action) > 2)
         return head + [
             *_loc(obj.locs["cell"]),
             code,
@@ -156,23 +161,23 @@ def describe(obj: Obj, event: str, out: int) -> List[int]:
         out_ += [len(values)] + [x for v in values for x in _loc(v)]
         out_ += [len(rows)] + [x for r in rows for x in _row(r)]
         return out_ + [reset]
-    run, fields = obj.spec
+    run, fields, last = obj.spec
     out_ = head + _loc(obj.locs["pos"])
     out_ += [-1] if run is None else [0, run[0], run[1], run[2], *_loc(obj.locs["run"])]
-    out_ += [len(fields)]
-    for k, (cond, index, keep, shl, shr) in enumerate(fields):
-        loc = _loc(obj.locs[f"o{k}"]) if index is not None else [0, -1]
-        out_ += [
-            cond[0],
-            cond[1],
-            int(cond[2]),
-            int(index is not None),
-            *loc,
-            keep,
-            shl,
-            shr,
-        ]
-    return out_ + [reset]
+    out_ += [int(last), len(fields)]
+    for k, (cond, outs) in enumerate(fields):
+        out_ += [cond[0], cond[1], int(cond[2]), len(outs)]
+        for j, (keep, shl, shr, (gmask, gvalue, gequal)) in enumerate(outs):
+            out_ += [
+                *_loc(obj.locs[f"o{k}_{j}"]),
+                keep,
+                shl,
+                shr,
+                gmask,
+                gvalue,
+                int(gequal),
+            ]
+    return out_ + [{"next": 0, "reset": 1, "settle": 2}[action[0]]]
 
 
 def available() -> bool:

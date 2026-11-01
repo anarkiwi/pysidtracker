@@ -5,7 +5,7 @@ start: _item*
 
 _item: spec_decl | layout | const | cell | machine | proc | schedule
      | invariant | assume | override | extend | patch | drop
-     | event | _object | record
+     | event | _object | record | view
 
 spec_decl: "spec" NAME ("extends" NAME)? ";"
 layout: "layout" "{" lfield* "}"
@@ -46,7 +46,7 @@ counter: "counter" NAME ":" NAME "{" _cclause* "}"
 _cclause: c_on | c_wrap | c_reload
 c_on: "on" events (ASSIGNOP expr | "reset") ";"
 events: NAME ("," NAME)*
-c_wrap: "wrap" ["at" expr] ["->" NAME] ";"
+c_wrap: "wrap" ["at" expr] ["when" expr] ["->" NAME] ";"
 c_reload: "reload" expr ";"
 
 owner: "owner" NAME ":" NAME "{" _oclause* "}"
@@ -66,22 +66,27 @@ w_values: "values" NAME ("," NAME)* ";"
 w_on: "on" events "step" ";"   -> w_step
     | "on" events "reset" ";" -> w_reset
 w_start: "start" expr ";"
-w_row: "row" expr [".." expr] ":" w_act [w_then] ";"
+w_row: "row" expr [".." expr] ["if" expr] ":" w_act [w_then] ";"
 w_then: "then" wset ("," wset)*
 w_act: "sweep" "(" wset ("," wset)* ")"  -> a_sweep
      | "delay" "(" wset ")"              -> a_delay
      | "set" "(" wset ("," wset)* ")"    -> a_set
-     | "jump" "(" expr ")"               -> a_jump
+     | "jump" "(" expr ")" ["hold" expr ".." expr] ["as" expr] -> a_jump
      | "stop"                            -> a_stop
-wset: NAME ["." NAME] "=" expr
+wset: NAME ["." NAME] "=" expr ["if" expr] ["when" expr]
 
-cursor: "cursor" NAME "@" expr "pos" NAME ("grammar" gsel ("," gsel)*)? "{" _kclause* "}"
+cursor: "cursor" NAME "@" expr "pos" NAME [k_last] ("grammar" gsel ("," gsel)*)? "{" _kclause* "}"
 _kclause: k_on | k_run | k_field
+k_last: "last"
 k_on: "on" events "next" ";"   -> k_next
     | "on" events "reset" ";" -> k_reset
+    | "on" events "settle" ";" -> k_settle
 k_run: "run" expr ".." expr "base" expr "->" NAME ";"
-k_field: "field" NAME ["when" expr] ["->" NAME "=" expr] ";"
+k_field: "field" NAME ["when" expr] ["->" kout ("," kout)*] ";"
+kout: NAME "=" expr ["when" expr]
 
+view: "view" NAME "@" expr "{" vfield* "}"
+vfield: NAME "@" expr ";"
 record: "record" NAME "@" expr "stride" expr "{" rfield* "}"
 rfield: NAME ":" TYPE ["@" expr] ";"
 

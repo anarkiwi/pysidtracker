@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
 from .ir import Cell, K, Obj, V
-from .lowerops import mk
+from .lowerops import add16, mk
 
 EVENTS = {
     "frame": None,
@@ -98,7 +98,7 @@ class ObjectLowering:
     def object_cell(self, name: str, line: int, scope, wide: int = 2) -> tuple:
         """The byte addresses of the scalar cell ``name`` (at most ``wide`` bytes)."""
         found = self.lookup(name, scope)
-        cell = found[1] if found and found[0] == "cell" else None
+        cell = self.in_proc(found[1]) if found and found[0] == "cell" else None
         if cell is None or cell.length is not None or SIZES.get(cell.typ, 9) > wide:
             self.error(line, f"{name} is not a scalar cell of at most {wide} bytes")
             return (None,)
@@ -127,7 +127,11 @@ class ObjectLowering:
             self.error(line, f"object {name} is already declared")
         ident = self.inst.ident
         oid = f"{ident}.{name}" if ident else name
-        obj, asts = getattr(self, f"bind_{tag}")(item, oid, scope)
+        proc_saved, self.proc = self.proc, name
+        try:
+            obj, asts = getattr(self, f"bind_{tag}")(item, oid, scope)
+        finally:
+            self.proc = proc_saved
         obj.owner, obj.line = ident, line
         self.asts[oid] = asts
         return obj
@@ -147,6 +151,7 @@ class ObjectLowering:
         w = 8 * len(loc)
         reactions: dict = {}
         limit = reload = fires = None
+        gated = False
         for clause in clauses:
             if clause[0] == "c_on":
                 _t, cline, event, op, amount = clause
@@ -158,15 +163,24 @@ class ObjectLowering:
                     action = ("up" if op == "+=" else "down", step or 0)
                 self.reaction(name, event, cline, reactions, action)
             elif clause[0] == "c_wrap":
-                limit, fires = clause[2], clause[3]
+                limit, gate, fires = clause[2:5]
+                gated = gate is not None
+                if gated and limit is not None:
+                    self.error(
+                        clause[1],
+                        "a counter wraps at a limit or when a condition holds",
+                    )
+                limit = gate if gated else limit
                 if fires is not None:
                     self.known_event(fires, clause[1])
             else:
                 reload = clause[2]
-        for event, action in reactions.items():
+        for event, action in list(reactions.items()):
             if fires and action[0] != "reset" and not self.below(fires, event):
                 self.error(line, f"{name} fires {fires}, which is not below {event}")
                 fires = None
+            if gated and action[0] != "reset":
+                reactions[event] = (*action, True)
         asts = [limit or const((1 << w) - 1, w), reload or const(0, w)]
         obj = Obj(oid, "counter", "", {"cell": loc}, (), reactions, fires)
         return obj, dict.fromkeys(reactions, asts)
@@ -216,15 +230,29 @@ class ObjectLowering:
         return None
 
     def assigns(self, sets, names, cols, scope, line: int) -> tuple:
-        """``((value index, part, xf), ...)`` of ``value[.lo|.hi] = operand`` items."""
+        """``((value index, part, xf, guard), ...)`` of ``value[.lo|.hi] = operand [if static]
+        [when cond]`` items: an ``if`` that is false drops the item, a ``when`` becomes its
+        guard ``(column, mask, value, equal)``."""
         out = []
-        for name, part, expr in sets:
+        for name, part, expr, static, when in sets:
+            if static is not None and self.static(static, scope, line) == 0:
+                continue
             if part not in (None, "lo", "hi") or name not in names:
                 self.error(line, f"{name}.{part}: a value of {names} (.lo or .hi)")
                 continue
             spec = self.xform(expr, cols, scope, line) or (-1, 0, 0, 0)
-            out.append((names.index(name), (None, "lo", "hi").index(part), spec))
+            guard = None if when is None else self.guard(when, cols, scope, line)
+            out.append((names.index(name), (None, "lo", "hi").index(part), spec, guard))
         return tuple(out)
+
+    def guard(self, node, cols: Dict[str, int], scope, line: int):
+        """``(column, mask, value, equal)``: the test ``node`` makes of one row byte."""
+        for name, index in cols.items():
+            if mentions(node, (name,)):
+                found = self.condition(node, name, scope, line)
+                return None if found is None else (index, *found)
+        self.error(line, "a condition tests one of the row's bytes c0, c1, ...")
+        return None
 
     def bind_walker(self, item, oid, scope) -> Tuple[Obj, Asts]:
         """A walker: table, position and sweep counter cells, values, reactions, rows."""
@@ -249,8 +277,11 @@ class ObjectLowering:
         if len(bases) == 1 and columns > 1:
             bases = [("+", tline, bases[0], const(j, 0)) for j in range(columns)]
         cols = {f"c{j}": j for j in range(columns)}
+        targets = [*names, by_tag["w_count"][0][2]]
         rows = tuple(
-            self.walker_row(c, names, cols, scope) for c in by_tag.get("w_row", ())
+            row
+            for c in by_tag.get("w_row", ())
+            if (row := self.walker_row(c, targets, cols, scope)) is not None
         )
         reactions: dict = {}
         for _t, cline, event, action in by_tag.get("w_on", ()):
@@ -271,8 +302,8 @@ class ObjectLowering:
             sets = ()
             if action[0] in ("sweep", "delay", "set"):
                 sets = (*action[-1], *(action[1] if action[0] == "set" else ()))
-            for index, part, _xf in sets:
-                if part == 2 and len(locs[f"v{index}"]) < 2:
+            for index, part, _xf, _guard in sets:
+                if index < len(locs) - 2 and part == 2 and len(locs[f"v{index}"]) < 2:
                     self.error(line, f"walker {name}: value {index} has no high byte")
             if action[0] == "sweep":
                 frac, wide = action[4], len(locs[f"v{action[1]}"]) == 2
@@ -281,7 +312,9 @@ class ObjectLowering:
 
     def walker_row(self, clause, names, cols, scope) -> tuple:
         """``(lo, hi, action)`` of a ``row`` clause."""
-        _t, line, lo, hi, act, then = clause
+        _t, line, lo, hi, cond, act, then = clause
+        if cond is not None and self.static(cond, scope, line) == 0:
+            return None
         low = self.static(lo, scope, line) or 0
         high = low if hi is None else self.static(hi, scope, line) or 0
         after = self.assigns(then, names, cols, scope, line)
@@ -292,7 +325,7 @@ class ObjectLowering:
             if not {"into", "count", "step"} <= set(args) or into[0] != "name":
                 self.error(line, "sweep(into=, count=, step=[, frac=])")
                 return (low, high, ("stop",))
-            index = names.index(into[2]) if into[2] in names else 0
+            index = names.index(into[2]) if into[2] in names[:-1] else 0
             frac = self.static(args["frac"], scope, line) if "frac" in args else 0
             count, delta = (
                 self.xform(args[k], cols, scope, line) for k in ("count", "step")
@@ -303,7 +336,11 @@ class ObjectLowering:
         elif kind == "set":
             action = ("set", self.assigns(act[2], names, cols, scope, line), after)
         elif kind == "jump":
-            action = ("jump", self.xform(act[2], cols, scope, line))
+            hold = None
+            if act[3][0] is not None:
+                hold = tuple(self.static(x, scope, line) or 0 for x in act[3])
+            via = None if act[4] is None else self.static(act[4], scope, line) or 0
+            action = ("jump", self.xform(act[2], cols, scope, line), hold, via)
         else:
             action = ("stop",)
         return (low, high, action)
@@ -335,7 +372,7 @@ class ObjectLowering:
 
     def bind_cursor(self, item, oid, scope) -> Tuple[Obj, Asts]:
         """A cursor over the stream ``base @ pos``: reactions, run marker and fields."""
-        _tag, line, name, base, pos, grammar, clauses = item
+        _tag, line, name, base, pos, last, grammar, clauses = item
         locs = {"pos": self.object_cell(pos, line, scope, 1)}
         reactions: dict = {}
         run = None
@@ -349,20 +386,22 @@ class ObjectLowering:
                 locs["run"] = self.object_cell(clause[5], cline, scope, 1)
                 run = tuple(self.static(x, scope, cline) or 0 for x in clause[2:5])
             else:
-                _t, _l, field, when, out, expr = clause
+                _t, _l, field, when, outs = clause
                 cond = (0, 0, True)
                 if when is not None:
                     got = names and self.condition(when, names[-1], scope, cline)
                     if not names:
                         self.error(cline, "the first field is always there")
                     cond = got or cond
-                spec = (0xFF, 0, 0)
-                if out is not None:
-                    locs[f"o{len(fields)}"] = self.object_cell(out, cline, scope)
-                    spec = (self.xform(expr, {field: 0}, scope, cline) or (0, *spec))[
-                        1:
-                    ]
-                fields.append((cond, len(fields) if out else None, *spec))
+                stores = []
+                for j, (out, expr, test) in enumerate(outs):
+                    locs[f"o{len(fields)}_{j}"] = self.object_cell(out, cline, scope)
+                    spec = self.xform(expr, {field: 0}, scope, cline) or (0, 0xFF, 0, 0)
+                    where = (0, 0, True)
+                    if test is not None:
+                        where = self.condition(test, field, scope, cline) or where
+                    stores.append((*spec[1:], where))
+                fields.append((cond, tuple(stores)))
                 names.append(field)
         if not 0 < len(fields) <= MAX_BYTES:
             self.error(line, f"cursor {name} has 1..{MAX_BYTES} fields")
@@ -373,7 +412,16 @@ class ObjectLowering:
         if chosen is not None:
             self.grammars.append((chosen, line))
             index = len(self.grammars) - 1
-        obj = Obj(oid, "cursor", "", locs, (run, tuple(fields)), reactions, None, index)
+        obj = Obj(
+            oid,
+            "cursor",
+            "",
+            locs,
+            (run, tuple(fields), bool(last)),
+            reactions,
+            None,
+            index,
+        )
         return obj, dict.fromkeys(reactions, [base, const(0, 8)])
 
     def visible_objects(self) -> list:
@@ -394,10 +442,14 @@ class ObjectLowering:
     def operands(self, obj: Obj, event: str, scope, line: int) -> list:
         """The operands of ``obj``'s reaction to ``event``, lowered where it happens."""
         fresh = type(scope)()
-        return [
-            self.coerce(self.expr(self.given(ast), fresh), w, line)
-            for ast, w in zip(self.asts[obj.name][event], obj.widths())
-        ]
+        proc_saved, self.proc = self.proc, obj.name.rpartition(".")[2]
+        try:
+            return [
+                self.coerce(self.expr(self.given(ast), fresh), w, line)
+                for ast, w in zip(self.asts[obj.name][event], obj.widths())
+            ]
+        finally:
+            self.proc = proc_saved
 
     def given(self, ast):
         """``ast``, or for an owner's default id the index of the instance reacting."""
@@ -444,7 +496,11 @@ class ObjectLowering:
         for obj in self.visible_objects():
             if isinstance(obj, tuple):
                 if event in obj[3]:
-                    out += self.block(obj[4], type(scope)())
+                    proc_saved, self.proc = self.proc, obj[2]
+                    try:
+                        out += self.block(obj[4], type(scope)())
+                    finally:
+                        self.proc = proc_saved
                 continue
             if event not in obj.reactions:
                 continue
@@ -472,13 +528,16 @@ class ObjectLowering:
         if obj is None or event not in obj.reactions:
             self.error(line, f"no object {name!r} reacting to {event!r}")
             return []
-        if len(args) != obj.arity():
+        if not args and obj.kind in ("walker", "cursor"):
+            ops = self.operands(obj, event, scope, line)
+        elif len(args) != obj.arity():
             self.error(line, f"react {name} on {event} takes {obj.arity()} operands")
             return []
-        ops = [
-            self.coerce(self.expr(a, scope), w, line)
-            for a, w in zip(args, obj.widths())
-        ]
+        else:
+            ops = [
+                self.coerce(self.expr(a, scope), w, line)
+                for a, w in zip(args, obj.widths())
+            ]
         flag = None
         if out is not None:
             found = scope.names.get(out)
@@ -487,6 +546,26 @@ class ObjectLowering:
             else:
                 flag = found[1]
         return self.step_stmt(obj, event, ops, flag)
+
+    def cursor_value(self, name: str, attr: str, scope, line: int):
+        """``cursor.ahead`` (the byte the next row starts with) or ``cursor.idle`` (no run of
+        empty rows is pending), if ``name`` is a cursor."""
+        obj = self.find_object(name)
+        if obj is None or obj.kind != "cursor":
+            return None
+        if attr == "idle":
+            if "run" not in obj.locs:
+                return K(1, 1)
+            return mk("eq", 1, self.rd(K(obj.locs["run"][0], 16)), K(0, 8))
+        if attr == "ahead":
+            base = next(iter(self.asts[obj.name].values()))[0]
+            start = self.coerce(self.expr(self.given(base), type(scope)()), 16, line)
+            pos = mk(
+                "add", 8, self.rd(K(obj.locs["pos"][0], 16)), K(int(obj.spec[2]), 8)
+            )
+            return self.rd(add16(start, pos))
+        self.error(line, f"cursor {name} has ahead and idle")
+        return K(None, 8)
 
     def owner_value(self, name: str, attr: str, scope, line: int):
         """``owner.mine`` (the owner cell holds this instance's id) or ``owner.free``
