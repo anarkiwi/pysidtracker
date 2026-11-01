@@ -3,7 +3,7 @@ members = ["crates/specvm-core", "crates/specvm-py"]
 resolver = "2"
 
 [workspace.package]
-version = "0.56.1"
+version = "0.57.0"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["Josh Bailey <josh@overlyspecific.com>"]

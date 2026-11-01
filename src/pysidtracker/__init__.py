@@ -308,7 +308,7 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.56.1"
+__version__ = "0.57.0"
 
 __all__ = [
     "REACH",
