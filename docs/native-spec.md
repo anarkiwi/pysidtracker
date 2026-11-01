@@ -28,6 +28,12 @@ a modelled entry as that entry's program.
   compare-and-branch, conditional expressions evaluated lazily as Python does). The core checks a
   program once (operands, jump targets, a consistent stack at every instruction) and then runs it
   without bounds checks.
+- **Objects.** The reactions of [counters, owners, walkers and cursors](playspec.md#events-and-objects)
+  run natively: `native.describe` flattens each reaction (its kind, byte addresses, rows and
+  fields) to integers, `crates/specvm-core/src/objects.rs` parses them once into a `Step`, and an
+  `Obj` instruction pops the operands the encoder pushed, steps the reaction through the same
+  memory access as any store (so a device read or a refused store bails the frame), and sets the
+  wrap flag variable. `pysidtracker.playspec.objects` is the reference.
 - **Memory maps.** Each setting of the CPU port's low bits has its own map (ROM pages, I/O) and
   modelled entries, added by Python as it meets them; the port is read and written natively.
 - **Bails.** A frame that needs anything Python answers is undone from a log of its stores and
@@ -43,5 +49,7 @@ a modelled entry as that entry's program.
 - `tools/spec_native_diff.py` plays tunes with both executors and compares the register grids and
   the per-frame `writes`; it names the format, tune, frame and register of a difference.
 - `tools/spec_bench.py` times both on tunes.
-- `tests/test_playspec_native.py` compares random programs, and tunes with wrapped, banked and
-  device-reading play routines, against the Python executor.
+- `tests/test_playspec_native.py` compares random programs, random object programs, every counter
+  boundary, and tunes with wrapped, banked and device-reading play routines, against the Python
+  executor.
+- `tools/objects_bench.py` times both executors on a spec of every object kind.

@@ -12,6 +12,8 @@ use std::cell::Cell;
 
 use jennings_core::{FlatMemory, NoHooks};
 
+use crate::objects::Step;
+
 macro_rules! ops {
     ($($name:ident),* $(,)?) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,13 +36,15 @@ macro_rules! ops {
 // their right operand from the bits above; `J<cmp>` jumps when the left operand `<cmp>` the right.
 // `Native` takes the 6502 code's address, the values of the registers `a`, `x`, `y` its argument
 // mask names (in that order) and the address to resume at, and runs the tune's own code.
+// `Obj` pops the operands of the object reaction its argument names (index in the low 24 bits,
+// operand count above) and steps it.
 // `JzKeep` and `JnzKeep` jump keeping the top value if it is zero (non-zero), else pop it: the
 // short-circuit of `and`/`or`, with `Jz`/`Jmp` around the arms of a conditional expression.
 ops!(
     Konst, Var, Rd, RdK, Add, Sub, Mul, And, Or, Xor, Shl, Shr, Eq, Ne, Ult, Ule, Slt, Sle, Word,
     AddK, SubK, ShlK, AndK, OrK, XorK, ShrK, EqK, NeK, UltK, UleK, Not, Neg, Lo, Hi, Lnot, Sext,
     Note, Wr, WrK, Set, SetK, Jmp, Jz, Jnz, JzKeep, JnzKeep, JEq, JNe, JLt, JLe, JGe, JGt, JEqK,
-    JNeK, JLtK, JLeK, JGeK, JGtK, Call, Ret, Halt, Assert, Fail, Native,
+    JNeK, JLtK, JLeK, JGeK, JGtK, Call, Ret, Halt, Assert, Fail, Native, Obj,
 );
 
 pub const SID_BASE: i64 = 0xD400;
@@ -113,6 +117,7 @@ pub struct Ins {
 pub struct Vm {
     code: Vec<Ins>,
     tables: Vec<Vec<i64>>,
+    objects: Vec<Step>,
     inputs: Vec<(usize, usize)>,
     pub vars: Vec<i64>,
     controls: usize,
@@ -222,6 +227,7 @@ fn effect(ins: &Ins) -> (usize, usize, bool) {
         WrK | Set | Assert => (1, 0, true),
         SetK | Call | Ret | Halt | Fail => (0, 0, true),
         Native => (2 + (ins.arg & 7).count_ones() as usize, 0, true),
+        Obj => ((ins.arg >> 24) as usize, 0, true),
     }
 }
 
@@ -252,7 +258,7 @@ fn is_jump(op: Op) -> bool {
 /// The deepest the stack gets, if `code` is well formed: operands in range, every instruction
 /// finding the stack as the code before it and each jump to it leave it, every statement ending
 /// with it empty.
-fn verify(code: &[Ins], vars: usize, tables: usize) -> Result<usize, String> {
+fn verify(code: &[Ins], vars: usize, tables: usize, objects: &[Step]) -> Result<usize, String> {
     let len = code.len();
     let mut expect: Vec<Option<usize>> = vec![None; len + 1];
     let mut before = vec![0usize; len];
@@ -264,6 +270,9 @@ fn verify(code: &[Ins], vars: usize, tables: usize) -> Result<usize, String> {
             Op::SetK => (ins.arg & SETK_VAR) < vars as i64,
             Op::Note => (0..tables as i64).contains(&ins.arg),
             Op::Native => (0..8).contains(&ins.arg),
+            Op::Obj => objects
+                .get((ins.arg & TARGET) as usize)
+                .is_some_and(|o| o.operands as i64 == ins.arg >> 24),
             Op::Call => (0..len as i64).contains(&ins.arg),
             op if is_jump(op) => (ins.arg & TARGET) < len as i64,
             _ => true,
@@ -323,14 +332,20 @@ impl Vm {
         inputs: Vec<(usize, usize)>,
         vars: usize,
         controls: usize,
+        objects: &[Vec<i64>],
     ) -> Result<Vm, String> {
+        let objects = objects
+            .iter()
+            .map(|o| Step::parse(o, vars))
+            .collect::<Result<Vec<_>, _>>()?;
         if controls > vars || inputs.iter().any(|&(v, r)| v >= vars || r >= REGISTERS) {
             return Err("a program variable is out of range".into());
         }
-        let deepest = verify(&code, vars, tables.len())?;
+        let deepest = verify(&code, vars, tables.len(), &objects)?;
         Ok(Vm {
             code,
             tables,
+            objects,
             inputs,
             vars: vec![0; vars],
             controls,
@@ -356,6 +371,7 @@ impl Vm {
         let Vm {
             code,
             tables,
+            objects,
             inputs,
             vars,
             controls,
@@ -575,6 +591,15 @@ impl Vm {
                     }
                 }
                 Op::Fail => return Err(Bail::Spec),
+                Op::Obj => {
+                    let step = unsafe { objects.get_unchecked((arg & TARGET) as usize) };
+                    sp -= step.operands;
+                    let ops = unsafe { std::slice::from_raw_parts(stack.add(sp), step.operands) };
+                    let flag = step.run(env, ram, slow, ops)?;
+                    if let Some(out) = step.out {
+                        unsafe { *vars.add(out) = flag };
+                    }
+                }
                 Op::Native => {
                     let resume = pop!();
                     let mut given = [None; 3];
@@ -621,7 +646,7 @@ fn shr(a: i64, b: i64) -> Result<i64, Bail> {
 }
 
 #[inline(always)]
-fn read(env: &Env, ram: &[Cell<u8>], slow: u16, addr: i64) -> Result<i64, Bail> {
+pub(crate) fn read(env: &Env, ram: &[Cell<u8>], slow: u16, addr: i64) -> Result<i64, Bail> {
     if addr as u64 > 0xFFFF {
         return Err(Bail::Range);
     }
@@ -645,7 +670,7 @@ fn read_mapped(env: &Env, addr: u16) -> Result<i64, Bail> {
 }
 
 #[inline(always)]
-fn store(env: &mut Env, addr: i64, value: i64) -> Result<(), Bail> {
+pub(crate) fn store(env: &mut Env, addr: i64, value: i64) -> Result<(), Bail> {
     if addr as u64 > 0xFFFF || value as u64 > 0xFF {
         return Err(Bail::Range);
     }
@@ -692,7 +717,7 @@ mod tests {
 
     fn run_io(code: &[(Op, i64)], vars: usize, io: bool) -> Run {
         let ins = code.iter().map(|&(op, arg)| Ins { op, arg }).collect();
-        let mut vm = Vm::new(ins, vec![vec![10, 20, 30]], vec![], vars, 0).unwrap();
+        let mut vm = Vm::new(ins, vec![vec![10, 20, 30]], vec![], vars, 0, &[]).unwrap();
         let mem = FlatMemory::new();
         let (mut log, mut sid) = (Vec::new(), Vec::new());
         let mut hook = Hook::default();
@@ -719,7 +744,7 @@ mod tests {
         let mut full = code.to_vec();
         full.extend([(Op::Set, 0), (Op::Halt, 0)]);
         let ins = full.iter().map(|&(op, arg)| Ins { op, arg }).collect();
-        let mut vm = Vm::new(ins, vec![vec![10, 20, 30]], vec![], 1, 1).unwrap();
+        let mut vm = Vm::new(ins, vec![vec![10, 20, 30]], vec![], 1, 1, &[]).unwrap();
         let mem = FlatMemory::new();
         let (mut log, mut sid) = (Vec::new(), Vec::new());
         let mut hook = Hook::default();
@@ -901,7 +926,7 @@ mod tests {
     fn rejects_malformed_programs() {
         let one = |code: &[(Op, i64)]| {
             let ins = code.iter().map(|&(op, arg)| Ins { op, arg }).collect();
-            Vm::new(ins, vec![], vec![], 1, 0).is_err()
+            Vm::new(ins, vec![], vec![], 1, 0, &[]).is_err()
         };
         assert!(one(&[(Op::Jmp, 5)]));
         assert!(one(&[(Op::Var, 1), (Op::Set, 0)]));
@@ -915,8 +940,8 @@ mod tests {
             (Op::Konst, 2),
             (Op::Set, 0)
         ]));
-        assert!(Vm::new(vec![], vec![], vec![(0, 9)], 1, 0).is_err());
-        assert!(Vm::new(vec![], vec![], vec![], 1, 2).is_err());
+        assert!(Vm::new(vec![], vec![], vec![(0, 9)], 1, 0, &[]).is_err());
+        assert!(Vm::new(vec![], vec![], vec![], 1, 2, &[]).is_err());
         assert!(!one(&[(Op::Halt, 0)]));
     }
 
@@ -936,7 +961,7 @@ mod tests {
             .iter()
             .map(|&(op, arg)| Ins { op, arg })
             .collect();
-            let mut vm = Vm::new(code, vec![], vec![], 0, 0).unwrap();
+            let mut vm = Vm::new(code, vec![], vec![], 0, 0, &[]).unwrap();
             let mem = FlatMemory::new();
             let (mut log, mut sid) = (Vec::new(), Vec::new());
             let mut hook = Hook {
@@ -988,7 +1013,7 @@ mod tests {
         };
         let mem = FlatMemory::new();
         for (addr, v) in [(0xD401, 0xFF), (0xD402, 5), (0xD404, 7), (0x2000, 9)] {
-            let mut vm = Vm::new(store(addr, v), vec![], vec![], 0, 0).unwrap();
+            let mut vm = Vm::new(store(addr, v), vec![], vec![], 0, 0, &[]).unwrap();
             let (mut log, mut sid) = (Vec::new(), Vec::new());
             let mut hook = Hook::default();
             vm.exec(
@@ -1026,7 +1051,7 @@ mod tests {
         .iter()
         .map(|&(op, arg)| Ins { op, arg })
         .collect();
-        let mut vm = Vm::new(ins, vec![], vec![], 2, 1).unwrap();
+        let mut vm = Vm::new(ins, vec![], vec![], 2, 1, &[]).unwrap();
         let mem = FlatMemory::new();
         let (mut log, mut sid) = (Vec::new(), Vec::new());
         for _ in 0..3 {
@@ -1045,5 +1070,172 @@ mod tests {
         assert_eq!(vm.controls(), &[3]);
         assert_eq!(vm.vars[1], 1);
         assert!(vm.set_controls(&[1, 2]).is_err());
+    }
+
+    /// Runs `code` with the object description `object` on `mem`; the variables.
+    fn react(code: &[(Op, i64)], object: &[i64], vars: usize, mem: &FlatMemory) -> Vec<i64> {
+        let ins = code.iter().map(|&(op, arg)| Ins { op, arg }).collect();
+        let mut vm = Vm::new(ins, vec![], vec![], vars, 0, &[object.to_vec()]).unwrap();
+        let (mut log, mut sid) = (Vec::new(), Vec::new());
+        let mut hook = Hook::default();
+        let mut env = Env {
+            routes: &Routes::default(),
+            mem,
+            io: false,
+            overlay: 0,
+            log: &mut log,
+            sid: &mut sid,
+            native: &mut hook,
+        };
+        vm.exec(&mut env, &[0; REGISTERS]).unwrap();
+        vm.vars.clone()
+    }
+
+    fn operands(values: &[i64], object: usize) -> Vec<(Op, i64)> {
+        let mut code: Vec<_> = values.iter().map(|&v| (Op::Konst, v)).collect();
+        code.push((Op::Obj, object as i64 | (values.len() as i64) << 24));
+        code.push((Op::Halt, 0));
+        code
+    }
+
+    #[test]
+    fn counters_wrap_up_and_down_and_flag_it() {
+        let mem = FlatMemory::new();
+        mem.set_ram(0x10, 4);
+        let up = vec![0, 0, 2, 0x10, -1, 1, 1];
+        let down = vec![0, 0, 2, 0x10, -1, 2, 2];
+        assert_eq!(react(&operands(&[4, 0], 0), &up, 1, &mem)[0], 1);
+        assert_eq!(mem.ram(0x10), 0);
+        assert_eq!(react(&operands(&[4, 9], 0), &down, 1, &mem)[0], 1);
+        assert_eq!(mem.ram(0x10), 9);
+        assert_eq!(react(&operands(&[4, 9], 0), &down, 1, &mem)[0], 0);
+        assert_eq!(mem.ram(0x10), 7);
+        assert_eq!(react(&operands(&[9, 0], 0), &up, 1, &mem)[0], 0);
+        assert_eq!(mem.ram(0x10), 8);
+    }
+
+    #[test]
+    fn owners_claim_and_release_their_own_id() {
+        let mem = FlatMemory::new();
+        let claim = vec![1, -1, 3, 0x20, -1, 0];
+        let release = vec![1, -1, 3, 0x20, -1, 1];
+        react(&operands(&[2, 0xFF, 1], 0), &claim, 0, &mem);
+        assert_eq!(mem.ram(0x20), 2);
+        react(&operands(&[3, 0xFF, 1], 0), &release, 0, &mem);
+        assert_eq!(mem.ram(0x20), 2);
+        react(&operands(&[2, 0xFF, 0], 0), &release, 0, &mem);
+        assert_eq!(mem.ram(0x20), 2);
+        react(&operands(&[2, 0xFF, 1], 0), &release, 0, &mem);
+        assert_eq!(mem.ram(0x20), 0xFF);
+    }
+
+    fn walker(reset: i64) -> Vec<i64> {
+        // two columns, rows of width 2: 0..=0x7f sweeps value 0 by column 1 (count column 0),
+        // 0x80 sets it, 0xfe jumps to column 1, anything else stops
+        let x = |c: i64| [c, 0xFF, 0, 0];
+        let none = [0, 0, 0, 0];
+        let row = |lo: i64, hi: i64, kind: i64, a: [i64; 4], b: [i64; 4], sets: Vec<i64>| {
+            let mut r = vec![lo, hi, kind, 0, 0];
+            r.extend(a);
+            r.extend(b);
+            r.extend(sets);
+            r.push(0);
+            r
+        };
+        let set = vec![1, 0, 0, 1, 0xFF, 0, 0];
+        let mut d = vec![2, -1, 3, 2, 2, 0x30, -1, 0x32, -1, 1, 0x34, -1, 4];
+        d.extend(row(0, 0x7F, 2, x(0), x(1), vec![0]));
+        d.extend(row(0x80, 0x80, 4, none, none, set));
+        d.extend(row(0xFE, 0xFE, 1, x(1), none, vec![0]));
+        d.extend(row(0xFF, 0xFF, 0, none, none, vec![0]));
+        d.push(reset);
+        d
+    }
+
+    #[test]
+    fn walkers_sweep_set_jump_and_stop() {
+        let mem = FlatMemory::new();
+        for (i, b) in [1u8, 0x10, 0x80, 0x55, 0xFE, 0, 0xFF, 0].iter().enumerate() {
+            mem.set_ram(0x2000 + i as u16, *b);
+        }
+        let d = walker(0);
+        let step = operands(&[0x2000, 0x2001, 0], 0);
+        let frame = || react(&step, &d, 0, &mem);
+        let at = || (mem.ram(0x30), mem.ram(0x32), mem.ram(0x34));
+        let seen: Vec<_> = (0..4)
+            .map(|_| {
+                frame();
+                at()
+            })
+            .collect();
+        assert_eq!(seen, [(0, 1, 16), (2, 0, 16), (4, 0, 0x55), (0, 1, 0x65)]);
+        react(&operands(&[0x2000, 0x2001, 6], 0), &walker(1), 0, &mem);
+        assert_eq!((mem.ram(0x30), mem.ram(0x32)), (6, 0));
+    }
+
+    #[test]
+    fn a_walker_that_jumps_forever_bails() {
+        let mem = FlatMemory::new();
+        mem.set_ram(0x2000, 0xFE);
+        mem.set_ram(0x2001, 2);
+        mem.set_ram(0x2002, 0xFE);
+        mem.set_ram(0x2003, 0);
+        let ins = operands(&[0x2000, 0x2001, 0], 0)
+            .iter()
+            .map(|&(op, arg)| Ins { op, arg })
+            .collect();
+        let mut vm = Vm::new(ins, vec![], vec![], 0, 0, &[walker(0)]).unwrap();
+        let (mut log, mut sid) = (Vec::new(), Vec::new());
+        let mut hook = Hook::default();
+        let mut env = Env {
+            routes: &Routes::default(),
+            mem: &mem,
+            io: false,
+            overlay: 0,
+            log: &mut log,
+            sid: &mut sid,
+            native: &mut hook,
+        };
+        assert_eq!(vm.exec(&mut env, &[0; REGISTERS]), Err(Bail::Spec));
+    }
+
+    #[test]
+    fn cursors_read_runs_and_chained_fields() {
+        let mem = FlatMemory::new();
+        for (i, b) in [0x82u8, 0x05, 0xF2, 0x03].iter().enumerate() {
+            mem.set_ram(0x2000 + i as u16, *b);
+        }
+        // run 0xF0..=0xF7 from 0xF0 into 0x41; field 0 -> 0x42 (& 0x7f), field 1 when bit 7 -> 0x43
+        let d = vec![
+            3, -1, 2, 0x40, -1, 0, 0xF0, 0xF7, 0xF0, 0x41, -1, 2, 0, 0, 1, 1, 0x42, -1, 0x7F, 0, 0,
+            0x80, 0, 0, 1, 0x43, -1, 0xFF, 0, 0, 0,
+        ];
+        let step = operands(&[0x2000, 0], 0);
+        react(&step, &d, 0, &mem);
+        assert_eq!((mem.ram(0x40), mem.ram(0x42), mem.ram(0x43)), (2, 2, 5));
+        react(&step, &d, 0, &mem);
+        assert_eq!((mem.ram(0x40), mem.ram(0x41), mem.ram(0x42)), (3, 2, 0));
+        react(&step, &d, 0, &mem);
+        assert_eq!((mem.ram(0x40), mem.ram(0x41)), (3, 1));
+        react(&step, &d, 0, &mem);
+        assert_eq!((mem.ram(0x40), mem.ram(0x41)), (3, 0));
+    }
+
+    #[test]
+    fn descriptions_and_operand_counts_are_checked() {
+        let bad = |d: Vec<i64>, n: i64| {
+            let ins = vec![Ins {
+                op: Op::Obj,
+                arg: n << 24,
+            }];
+            Vm::new(ins, vec![], vec![], 1, 0, &[d]).is_err()
+        };
+        assert!(bad(vec![0, 0, 2, 0x10, -1, 1, 1], 1));
+        assert!(bad(vec![0, 5, 2, 0x10, -1, 1, 1], 2));
+        assert!(bad(vec![9, -1, 0], 0));
+        assert!(bad(vec![0, -1, 2, 0x10, -1, 1], 2));
+        assert!(bad(vec![0, -1, 2, 0x10, -1, 1, 1, 7], 2));
+        assert!(bad(vec![0, -1, 2, 0x1_0000, -1, 1, 1], 2));
+        assert!(Step::parse(&[2, -1, 1, 1, 1, 0x30, -1, 0x31, -1, 0, 0, 0], 0).is_err());
     }
 }

@@ -10,8 +10,11 @@ from __future__ import annotations
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from dataclasses import replace
+
 from ..errors import SidError
-from .ir import K, Op, Program, Rd, V, width
+from . import emitobj
+from .ir import K, Obj, Op, Program, Rd, V, width
 from .lower import mk
 
 TYPES = {1: "bool", 8: "u8", 16: "u16"}
@@ -31,7 +34,14 @@ INFIX = {
     "land": "&&",
     "lor": "||",
 }
-CALLS = {"lo": "lo", "hi": "hi", "word": "word", "sext": "sx", "ite": "ite"}
+CALLS = {
+    "lo": "lo",
+    "hi": "hi",
+    "word": "word",
+    "sext": "sx",
+    "ite": "ite",
+    "own": "owns",
+}
 CALLS.update(slt="slt", sle="sle")
 REG_NAMES = ("freq_lo", "freq_hi", "pw_lo", "pw_hi", "ctrl", "ad", "sr")
 SONG_NAMES = ("fc_lo", "fc_hi", "res_filt", "mode_vol")
@@ -40,7 +50,8 @@ RESERVED = frozenset(
     " extend patch drop signal control step if elif else while bound for in return"
     " finish goto stream grammar assert native resumes let next mem mem16 true false"
     " lo hi word u8 u16 bool ptr sx zp neg slt sle sgt sge bit ind rol ror ite carry"
-    " borrow len member old cpu L sid".split()
+    " borrow len member old cpu L sid owns event counter owner walker cursor record fire"
+    " react".split()
 )
 
 
@@ -67,11 +78,21 @@ def _exprs(s) -> tuple:
         return (s[2],)
     if tag in ("if", "loop", "assert"):
         return (s[1],)
+    if tag == "obj":
+        return s[4]
     return ()
 
 
 def _arms(s) -> tuple:
-    return (s[2], s[3]) if s[0] == "if" else (s[2],) if s[0] == "loop" else ()
+    if s[0] == "if":
+        return (s[2], s[3])
+    return (s[2],) if s[0] in ("loop", "fire") else ()
+
+
+def _rearm(s, arms) -> tuple:
+    if s[0] == "fire":
+        return ("fire", s[1], arms[0])
+    return ("if", s[1], *arms) if s[0] == "if" else ("loop", s[1], arms[0], *s[3:])
 
 
 def _names(e, out: set) -> set:
@@ -95,6 +116,8 @@ def _occurrences(stmts, path=(), out=None) -> Dict[str, List[tuple]]:
             _names(e, found)
         if s[0] == "set":
             found.add(s[1])
+        if s[0] == "obj" and s[3]:
+            found.add(s[3])
         for name in found:
             out.setdefault(name, []).append(here)
         for a, arm in enumerate(_arms(s)):
@@ -153,6 +176,8 @@ def _vars(body, name):
     for s in _walk(body):
         if s[0] == "set" and s[1] == name:
             yield s[2]
+        if s[0] == "obj" and s[3] == name:
+            yield K(0, 1)
         for e in _exprs(s):
             stack = [e]
             while stack:
@@ -180,7 +205,7 @@ def _insert(stmts, path, inserts) -> list:
                 _insert(arm, path + ((i, a),), inserts)
                 for a, arm in enumerate(_arms(s))
             ]
-            s = ("if", s[1], *arms) if s[0] == "if" else ("loop", s[1], arms[0], *s[3:])
+            s = _rearm(s, arms)
         out.append(s)
     return out
 
@@ -221,6 +246,20 @@ class _Writer:
         self.taken = set(RESERVED)
         self.lets: Dict[int, None] = {}
         self.widths: Dict[str, int] = {}
+        self.objects = program.objects
+        self.named: Dict[str, str] = {}
+
+    def declarations(self) -> List[str]:
+        """The cells and declarations of the objects the body reacts."""
+        out: List[str] = []
+        for oid, name in self.named.items():
+            obj = self.objects[oid]
+            cells = {}
+            for role, loc in obj.locs.items():
+                cells[role] = self.fresh(f"{name}_{role}")
+                out.append(emitobj.cell(cells[role], loc))
+            out += emitobj.declare(obj, cells, name) + [""]
+        return out
 
     def fresh(self, stem: str) -> str:
         """``stem``, suffixed until unused."""
@@ -365,6 +404,14 @@ class _Writer:
                 out.append(f"{pad}assert {self.ex(s[1])};")
             elif tag == "finish":
                 out.append(f"{pad}finish;")
+            elif tag == "fire":
+                out.append(f"{pad}fire {s[1]} {{")
+                out += self.block(s[2], depth + 1) + [f"{pad}}}"]
+            elif tag == "obj":
+                name = self.named.setdefault(s[1], self.fresh(s[1]))
+                ops = ", ".join(self.ex(o) for o in s[4])
+                flag = f" -> {self.var(s[3])}" if s[3] else ""
+                out.append(f"{pad}react {name} on {s[2]}({ops}){flag};")
             else:
                 raise EmitError(f"no source form for a {tag} statement")
         return out
@@ -407,6 +454,7 @@ def emit(program: Program, name: Optional[str] = None, base: int = 0xD400) -> st
     writer.lets = _lets(body)
     writer.taken.add(name)
     lines = writer.block(body, 2)
+    objects = writer.declarations()
     head = [f"spec {name};", ""]
     head += [
         f"const {k} = {v};"
@@ -430,6 +478,7 @@ def emit(program: Program, name: Optional[str] = None, base: int = 0xD400) -> st
         head.append(
             f"cell {cname}: {typ} @ {cell.place[0]:#06x}{''.join(' ' + a for a in attrs)};"
         )
+    head += objects
     return "\n".join(
         head
         + ["", f"machine {name} {{", "  step {"]
@@ -438,11 +487,19 @@ def emit(program: Program, name: Optional[str] = None, base: int = 0xD400) -> st
     )
 
 
-def isomorphic(a, b) -> Optional[str]:
+def _alike(x: Obj, y: Obj) -> bool:
+    """Whether two objects are the same up to name, owner, source line and grammar."""
+    blank = {"name": "", "owner": "", "line": 0, "grammar": None}
+    return replace(x, **blank) == replace(y, **blank)
+
+
+def isomorphic(a, b, objects=None) -> Optional[str]:
     """None if statement lists ``a`` and ``b`` are equal up to a one-to-one renaming of
-    variables, assert messages and loop lines; else the first difference."""
+    variables and objects, assert messages and loop lines; else the first difference.
+    ``objects`` is the pair of tables of the objects the statements react."""
     names: Dict[str, str] = {}
     back: Dict[str, str] = {}
+    units: Dict[str, str] = {}
 
     def same_name(x: str, y: str) -> bool:
         if names.setdefault(x, y) != y or back.setdefault(y, x) != x:
@@ -474,6 +531,16 @@ def isomorphic(a, b) -> Optional[str]:
                 return f"{here}: {s[0]} against {t[0]}"
             if s[0] == "set" and not same_name(s[1], t[1]):
                 return f"{here}: assigns {s[1]} against {t[1]}"
+            if s[0] == "fire" and s[1] != t[1]:
+                return f"{here}: fires {s[1]} against {t[1]}"
+            if s[0] == "obj":
+                same_flag = (s[3] is None) == (t[3] is None) and (
+                    s[3] is None or same_name(s[3], t[3])
+                )
+                if units.setdefault(s[1], t[1]) != t[1] or not same_flag:
+                    return f"{here}: reacts {s[1]} against {t[1]}"
+                if (s[2], s[5:], len(s[4])) != (t[2], t[5:], len(t[4])):
+                    return f"{here}: {s[1:3]} against {t[1:3]}"
             if not all(map(same, _exprs(s), _exprs(t))):
                 return f"{here}: {s} against {t}"
             if s[0] == "loop" and s[3] != t[3]:
@@ -484,7 +551,13 @@ def isomorphic(a, b) -> Optional[str]:
                     return found
         return None
 
-    return stmts(a, b, "body")
+    found = stmts(a, b, "body")
+    if found or objects is None:
+        return found
+    for mine, theirs in units.items():
+        if not _alike(objects[0][mine], objects[1][theirs]):
+            return f"object {mine} against {theirs}"
+    return None
 
 
 __all__ = ["EmitError", "declared", "emit", "isomorphic", "normal"]

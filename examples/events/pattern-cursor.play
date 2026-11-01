@@ -1,0 +1,31 @@
+// An orderlist cursor chooses the pattern a second cursor reads; a pattern ends at a 0x7F note.
+spec pattern_cursor;
+layout { w, orderlist, ptn_lo, ptn_hi: addr; }
+cell ptn_lo: u8[16] @ L.ptn_lo ro;
+cell ptn_hi: u8[16] @ L.ptn_hi ro;
+cell ordpos: u8 @ L.w;
+cell curptn: u8 @ L.w + 1;
+cell ptnpos: u8 @ L.w + 2;
+cell gap: u8 @ L.w + 3;
+cell curnote: u8 @ L.w + 4;
+cell curinst: u8 @ L.w + 5;
+cell curfx: u8 @ L.w + 6;
+event pattern_end: tick;
+
+cursor orderlist @ L.orderlist pos ordpos {
+  on pattern_end next;
+  field pattern -> curptn = pattern;
+}
+
+cursor pattern @ word(ptn_lo[curptn], ptn_hi[curptn]) pos ptnpos {
+  on row next; on pattern_end reset;
+  run 0xF0..0xF7 base 0xF0 -> gap;
+  field note -> curnote = note & 0x7F;
+  field inst when neg(note) -> curinst = inst & 0x7F;
+  field fx when neg(inst) -> curfx = fx;
+}
+
+handler last_row on row { if curnote == 0x7F { fire pattern_end; } }
+
+machine player { step { fire row; } }
+schedule { player; }

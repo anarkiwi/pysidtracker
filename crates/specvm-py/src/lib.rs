@@ -70,8 +70,9 @@ impl Core {
 
     /// Adds the program of modelled entry `entry` under port setting `bits`: `code` is
     /// little-endian `(op: u64, arg: i64)` pairs, `inputs` the `(variable, register)` of the
-    /// entry registers it reads.
-    #[pyo3(signature = (bits, entry, code, tables, inputs, variables, controls))]
+    /// entry registers it reads and `objects` the flat descriptions of the object reactions
+    /// its `Obj` instructions step.
+    #[pyo3(signature = (bits, entry, code, tables, inputs, variables, controls, objects=Vec::new()))]
     #[allow(clippy::too_many_arguments)]
     fn add(
         &mut self,
@@ -82,6 +83,7 @@ impl Core {
         inputs: Vec<(usize, usize)>,
         variables: usize,
         controls: usize,
+        objects: Vec<Vec<i64>>,
     ) -> PyResult<()> {
         let (pairs, rest) = code.as_chunks::<16>();
         if !rest.is_empty() {
@@ -97,7 +99,7 @@ impl Core {
                 .ok_or_else(|| invalid(format!("no opcode {op}")))?;
             ins.push(Ins { op, arg });
         }
-        let vm = Vm::new(ins, tables, inputs, variables, controls).map_err(invalid)?;
+        let vm = Vm::new(ins, tables, inputs, variables, controls, &objects).map_err(invalid)?;
         self.machine.add(bits, entry, vm).map_err(invalid)
     }
 

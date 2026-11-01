@@ -305,6 +305,8 @@ def stmt_exprs(s) -> tuple:
         return (s[1],)
     if tag == "native":
         return (s[1], s[3], *(v for _r, v in s[2]))
+    if tag == "obj":
+        return s[4]
     return ()
 
 
@@ -317,14 +319,20 @@ def _map_stmt(s, f):
         return (tag, s[1], f(s[2]))
     if tag in ("if", "loop", "assert"):
         return (tag, f(s[1]), *s[2:])
+    if tag == "obj":
+        return (*s[:4], tuple(f(e) for e in s[4]), *s[5:])
     return s
 
 
 def branches(s) -> tuple:
-    return (s[2], s[3]) if s[0] == "if" else (s[2],) if s[0] == "loop" else ()
+    if s[0] == "if":
+        return (s[2], s[3])
+    return (s[2],) if s[0] in ("loop", "fire") else ()
 
 
 def _with_arms(s, arms) -> tuple:
+    if s[0] == "fire":
+        return ("fire", s[1], arms[0])
     return ("if", s[1], *arms) if s[0] == "if" else ("loop", s[1], *arms, s[3], s[4])
 
 
@@ -342,6 +350,8 @@ def inline(stmts, procs: Dict[str, list]) -> list:
     for s in stmts:
         if s[0] == "call":
             out += inline(procs[s[1]], procs)
+        elif s[0] == "fire":
+            out += inline(s[2], procs)
         elif branches(s):
             out.append(_with_arms(s, [inline(a, procs) for a in branches(s)]))
         else:
@@ -449,6 +459,9 @@ class Effects:
         eff = {
             "set": lambda: Effect(frozenset((s[1],))),
             "wr": lambda: Effect(stores=(span(s[1]),)),
+            "obj": lambda: Effect(
+                frozenset(s[3:4]) - {None}, tuple((a, a) for a in s[6])
+            ),
             "finish": lambda: Effect(finishes=True),
         }.get(s[0], Effect)()
         for arm in branches(s):
@@ -506,6 +519,9 @@ def fix(
         for lo, hi in (span(s[1]) for s in statements(out) if s[0] == "wr"):
             if (lo, hi) != FULL:
                 hit[lo : hi + 1] = False
+        for s in statements(out):
+            if s[0] == "obj":
+                hit[list(s[6])] = False
         if not (table & ~hit)[list(fixed)].any():
             if proof is not None:
                 proof.extend(trace)
@@ -532,7 +548,13 @@ def frame_local(body, keep: np.ndarray) -> List[int]:
                 elif (lo, hi) != FULL:
                     livein[lo : hi + 1] = True
             tag = s[0]
-            if tag == "wr":
+            if tag == "obj":
+                for lo, hi in s[5]:
+                    livein[lo : hi + 1] = True
+                livein[list(s[6])] = True
+                if s[7]:
+                    livein[:] = True
+            elif tag == "wr":
                 lo, hi = span(s[1])
                 if (lo, hi) == FULL:
                     raise OrderError("a store through an unbounded pointer")
@@ -1100,6 +1122,8 @@ def eliminate(
             live = inner
         elif tag == "finish":
             live = end
+        elif tag == "obj":
+            live = (live - set(s[3:4])).union(*map(names, s[4]))
         else:
             live = live.union(*map(names, stmt_exprs(s)))
         out.append(s)
@@ -1192,6 +1216,9 @@ def reorder(
 
 def _reorder(program, body, slots, base, observed, known, proof) -> Reordered:
     # pylint: disable=too-many-arguments
+    for s in statements(body):
+        if s[0] == "obj" and any(base <= a < base + REGS for a in s[6]):
+            raise OrderError(f"object {s[1]} writes the SID: state it with stores")
     keep = np.zeros(0x10000, bool)
     keep[base : base + REGS] = True
     for lo, hi in observed:
@@ -1274,6 +1301,12 @@ def _logged(body, size: int, base: int, cells: Sequence[int]) -> list:
             for a in _wild(e)
             for c in cells
         ]
+        if s[0] == "obj":
+            hits += [
+                Op("ule", 1, (Op("sub", 16, (K(c, 16), s[4][i])), K(extra, 16)))
+                for i, extra in s[7]
+                for c in cells
+            ]
         return [("set", "alias", Op("lor", 1, (V("alias", 1), h))) for h in hits]
 
     def stmt(s):
@@ -1441,7 +1474,9 @@ def compare(make, order, frames: int, base: int = SID, **options) -> Tuple:
         result.text = emit(result.program, f"{program.name}_ordered", base)
         back = elaborate(parse(result.text), {}, standard=program.standard)
         result.roundtrip = isomorphic(
-            result.program.body, inline(back.body, back.procs)
+            result.program.body,
+            inline(back.body, back.procs),
+            (result.program.objects, back.objects),
         )
         result.source = (program, memory, options.get("observed", ()))
         results.append(result)
@@ -1464,8 +1499,8 @@ def compare(make, order, frames: int, base: int = SID, **options) -> Tuple:
 
 def census(result: Reordered) -> dict:
     """What a reordered program still uses: statement and expression forms, tables,
-    persistent and promoted cells, staging holds, SID registers per voice, loops and
-    self-counting cells."""
+    persistent and promoted cells, staging holds, SID registers per voice, loops,
+    self-counting cells and the object reactions by kind."""
     body, every = result.program.body, list(statements(result.program.body))
     ops = {
         n.op for s in every for e in stmt_exprs(s) for n in walk(e) if isinstance(n, Op)
@@ -1504,6 +1539,14 @@ def census(result: Reordered) -> dict:
         "song_registers": [r for r in sid if r >= 21],
         "loops": [s[3] for s in every if s[0] == "loop"],
         "counters": len(counters),
+        "objects": {
+            k: sum(
+                result.program.objects[s[1]].kind == k for s in every if s[0] == "obj"
+            )
+            for k in sorted(
+                {result.program.objects[s[1]].kind for s in every if s[0] == "obj"}
+            )
+        },
         "finish": any(s[0] == "finish" for s in every),
     }
 
