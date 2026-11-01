@@ -8,7 +8,7 @@ cells, plus its toolchain:
 |---|---|---|
 | Parse (Lark, `playspec.lark`), derive variants | `parse(text, resolve)`, `load(path)`, `derive` | |
 | Static checks + bind + lower to IR | `elaborate(spec, binding)` | `check SPEC [--binding JSON]` |
-| Concrete execution (compiled Python) | `compile_program`, `run`, `SpecPlayer` | `python`, `run TUNE --binder mod:attr` |
+| Concrete execution (compiled Python, or [native](native-spec.md)) | `compile_program`, `run`, `SpecPlayer` | `python`, `run TUNE --binder mod:attr` |
 | SMT transition relation, bounded checking | `smt.transition`, `smt.bmc` | `bmc SPEC --binding JSON --frames N` |
 | Translation validation against 6502 code | `tv.validate`, `tv.replay` | `tv TUNE --binder ... --routine ... --pc ...` |
 | Replace `native` hooks with spec statements | `unnative`, `equivalent` | `unnative SPEC TUNE --binder ... -o OUT` |

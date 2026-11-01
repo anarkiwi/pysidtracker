@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/specvm-core", "crates/specvm-py"]
+resolver = "2"
+
+[workspace.package]
+version = "0.55.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Josh Bailey <josh@overlyspecific.com>"]
+repository = "https://github.com/anarkiwi/pysidtracker"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
