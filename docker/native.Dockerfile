@@ -35,7 +35,8 @@ FROM pydeps AS test
 COPY --from=build /wheels /wheels
 RUN pip install --no-cache-dir --no-deps /wheels/*.whl \
     && python -c "from pysidtracker.playspec import native; assert native.available()"
-# Only the tests are copied, so imports resolve to the installed wheel.
+# Only the tests and the examples they read are copied, so imports resolve to the installed wheel.
 COPY pyproject.toml strain-baseline.json ./
 COPY tests tests
+COPY examples examples
 CMD ["pytest", "tests", "-n", "auto", "-q", "--cov=pysidtracker", "--cov-fail-under=85"]
