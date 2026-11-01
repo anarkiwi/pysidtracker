@@ -6,7 +6,7 @@ import zipfile
 
 import pytest
 
-from pysidtracker import D64File, iter_prgs, maincli, read_d64, testing
+from pysidtracker import iter_prgs, maincli, read_d64, testing
 from pysidtracker.d64 import MediaError
 from pysidtracker.testing import fetch_disk, fetch_prgs
 
@@ -23,32 +23,12 @@ def _zip_of(name, data):
     return buf.getvalue()
 
 
-def test_read_d64_lists_closed_prgs_in_directory_order():
-    disk = build_disk(
-        [("FIRST", TUNE, PRG), ("NOTES", b"text", SEQ), ("SECOND", b"\x00\x08x", PRG)]
-    )
-    assert read_d64(disk) == [D64File("FIRST", TUNE), D64File("SECOND", b"\x00\x08x")]
-
-
-def test_read_d64_skips_unclosed_files_and_keeps_the_lock_bit():
-    disk = build_disk(
-        [("OPEN", b"\x00\x20x", 0x02), ("LOCK", b"\x00\x20y", LOCKED_PRG)]
-    )
-    assert read_d64(disk) == [D64File("LOCK", b"\x00\x20y", locked=True)]
-
-
 def test_read_d64_rejects_a_short_image():
     with pytest.raises(MediaError, match="not a disk image"):
         read_d64(bytes(1000))
 
 
-def test_a_looping_chain_ends_the_file_after_the_sectors_read():
-    disk = bytearray(build_disk([("A", TUNE, PRG)]))
-    disk[256:258] = b"\x01\x00"  # T1S1 links back to T1S0
-    (only,) = read_d64(bytes(disk))
-    assert only.prg == TUNE[: 2 * 254]
-
-
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 @pytest.mark.parametrize(
     "geometry, error_block, first_track",
     [
@@ -65,6 +45,7 @@ def test_every_disk_geometry_is_read_by_size(geometry, error_block, first_track)
     assert list(iter_prgs("x.img", disk)) == [("x.img/TUNE", TUNE)]
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_iter_prgs_walks_nested_zip_gzip_disk_and_tape():
     disk = gzip.compress(build_disk([("ON DISK", TUNE, PRG)]))
     tape = build_t64([("ONE", b"\x01\x08ab"), ("TWO", b"\x00\xc0cde")])

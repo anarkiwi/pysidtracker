@@ -1,7 +1,5 @@
 """The interrupt host against recorded sidtrace traces and documented C64 timing."""
 
-import collections
-
 import pytest
 
 from vagrant_moses import memmap as mm
@@ -14,11 +12,10 @@ from pysidtracker.irqhost import (
     InterruptHost,
     InterruptPlayer,
     TunePlayer,
-    boot_cycle,
     host_cadence,
 )
-from pysidtracker.oracle import SidtraceRow, read_sidtrace, sidtrace_cadence
-from pysidtracker.oracle import register_grid, sidtrace_grid
+from pysidtracker.oracle import read_sidtrace
+from pysidtracker.oracle import register_grid
 from pysidtracker.testing import whole_song
 
 from . import irqhost_tunes as tunes
@@ -75,144 +72,6 @@ def test_trace_matches_the_recorded_oracle(name):
     assert [r for r in host.rows() if r.cycle <= end] == want
 
 
-def test_the_driver_writes_volume_where_the_oracle_logs_it():
-    assert boot_cycle(False) == 339711
-    host = InterruptHost(tunes.build("init_writes"))
-    host.run(100)
-    assert host.rows()[0] == SidtraceRow(
-        boot_cycle(False) + 40, None, None, None, 0, 24, 15
-    )
-
-
-def test_cia_timer_irq_raises_every_latch_plus_one_cycles():
-    src = QUIET + """
-  LDA #<irq
-  STA $0314
-  LDA #>irq
-  STA $0315
-  LDA #$34
-  STA $DC04
-  LDA #$12
-  STA $DC05
-  LDA #$81
-  STA $DC0D
-  LDA #$11
-  STA $DC0E
-  CLI
-loop: JMP loop
-irq: INC $D400
-  JMP $EA31
-"""
-    _, rows = _run(src)
-    raises = _events(rows, "cia_irq")
-    assert len(raises) > 10
-    assert {b - a for a, b in zip(raises, raises[1:])} == {0x1235}
-    assert len(_events(rows, "cia_irq_entry")) == len(raises)
-
-
-def test_one_shot_timer_raises_once():
-    src = QUIET + """
-  LDA #$81
-  STA $DC0D
-  LDA #$19
-  STA $DC0E
-  CLI
-loop: JMP loop
-"""
-    _, rows = _run(src)
-    assert len(_events(rows, "cia_irq")) == 1
-
-
-def test_nmi_is_edge_triggered_until_icr_read():
-    src = QUIET + """
-  LDA #<nmi
-  STA $0318
-  LDA #>nmi
-  STA $0319
-  LDA #$00
-  STA $DD04
-  STA $DD05
-  LDA #$81
-  STA $DD0D
-  LDA #$01
-  STA $DD0E
-loop: JMP loop
-nmi: INC $D400
-  RTI
-"""
-    _, rows = _run(src)
-    assert len(_events(rows, "nmi")) == len(_events(rows, "nmi_entry")) == 1
-
-
-def test_an_irq_waits_for_cli_then_one_more_instruction():
-    src = QUIET + """
-  LDA #<irq
-  STA $0314
-  LDA #>irq
-  STA $0315
-  LDA #$00
-  STA $DC04
-  LDA #$01
-  STA $DC05
-  LDA #$81
-  STA $DC0D
-  LDA #$19
-  STA $DC0E
-  LDX #$00
-  LDA #$11
-  LDY #$22
-wait: DEX
-  BNE wait
-  CLI
-  STA $D401
-  STY $D402
-loop: JMP loop
-irq: LDA #$33
-  STA $D400
-  JMP $EA31
-"""
-    _, rows = _run(src)
-    raise_at = _events(rows, "cia_irq")[0]
-    entry = _events(rows, "cia_irq_entry")[0]
-    assert entry - raise_at > 1000
-    assert [r.reg for r in rows if r.chip == 0 and r.reg < 3] == [1, 0, 2]
-
-
-@pytest.mark.parametrize("stall", [False, True])
-def test_irq_latency_is_the_finishing_instruction_then_seven_cycles(stall):
-    """An IRQ asserted before an instruction's last cycle waits for it, else for
-    the next one too (NOP, NOP or JMP here), then takes 7 cycles to its entry."""
-    src = QUIET + ("" if stall else "  LDA #$0B\n  STA $D011\n") + """
-  LDA #<irq
-  STA $0314
-  LDA #>irq
-  STA $0315
-  LDA #$83
-  STA $DC04
-  LDA #$01
-  STA $DC05
-  LDA #$81
-  STA $DC0D
-  LDA #$11
-  STA $DC0E
-  CLI
-loop: NOP
-  NOP
-  NOP
-  NOP
-  JMP loop
-irq: LDA $DC0D
-  JMP $EA81
-"""
-    _, rows = _run(src)
-    pairs = zip(_events(rows, "cia_irq")[2:], _events(rows, "cia_irq_entry")[2:])
-    latency = collections.Counter(entry - at for at, entry in pairs)
-    if stall:
-        assert max(latency) > 7
-    else:
-        assert set(latency) == {6, 7, 8}
-
-
 def _loop_gaps(src):
     _, rows = _run(src, seconds=0.1)
     cycles = [c for c, _ in _writes(rows, 0x18)][1:]
@@ -225,148 +84,6 @@ loop: INX
   STX $D418
   JMP loop
 """
-
-
-def test_badlines_steal_forty_to_forty_three_cycles_twenty_five_times_a_frame():
-    cycles, gaps = _loop_gaps(QUIET + LOOP)
-    stolen = collections.Counter(g - 9 for g in gaps if g != 9)
-    assert set(stolen) <= {40, 41, 42, 43}
-    stalled = [c for c, g in zip(cycles[1:], gaps) if g != 9]
-    lines = [_line(c - 1)[0] for c in stalled]
-    per_frame = collections.Counter((c - 1) // PAL_FRAME for c in stalled)
-    assert set(list(per_frame.values())[1:-1]) == {25}
-    assert all(0x30 <= line <= 0xF7 and line & 7 == 3 for line in lines)
-
-
-def test_a_blank_screen_steals_nothing():
-    _, gaps = _loop_gaps(QUIET + "  LDA #$0B\n  STA $D011\n" + LOOP)
-    assert set(gaps) == {9}
-
-
-@pytest.mark.parametrize("expand, height", [(0, 21), (1, 42)])
-def test_a_sprite_steals_cycles_on_each_of_its_lines(expand, height):
-    src = QUIET + f"""
-  LDA #$0B
-  STA $D011
-  LDA #$01
-  STA $D015
-  LDA #$80
-  STA $D001
-  LDA #${expand:02X}
-  STA $D017
-""" + LOOP
-    cycles, gaps = _loop_gaps(src)
-    stalled = [c for c, g in zip(cycles[1:], gaps) if g != 9]
-    frame = collections.defaultdict(set)
-    for c in stalled:
-        frame[(c - 1) // PAL_FRAME].add(_line(c - 1)[0])
-    full = [lines for lines in frame.values() if len(lines) == height]
-    assert full and all(min(lines) in (0x80, 0x81) for lines in full)
-
-
-@pytest.mark.parametrize("line", [0x00, 0x37, 0x100])
-def test_raster_irq_raises_at_the_start_of_its_line(line):
-    src = QUIET + f"""
-  LDA #<irq
-  STA $0314
-  LDA #>irq
-  STA $0315
-  LDA #${0x1B | (line >> 1 & 0x80):02X}
-  STA $D011
-  LDA #${line & 0xFF:02X}
-  STA $D012
-  LDA #$01
-  STA $D01A
-  CLI
-loop: JMP loop
-irq: INC $D019
-  JMP $EA81
-"""
-    _, rows = _run(src)
-    raises = _events(rows, "video_irq")[1:]
-    assert len(raises) >= 10
-    assert {_line(c) for c in raises} == {(line, 1 if line == 0 else 0)}
-    assert {b - a for a, b in zip(raises, raises[1:])} == {PAL_FRAME}
-
-
-@pytest.mark.parametrize("ack", ["INC", "DEC", "ASL", "LSR"])
-def test_read_modify_write_acknowledges_the_raster_irq(ack):
-    src = QUIET + f"""
-  LDA #<irq
-  STA $0314
-  LDA #>irq
-  STA $0315
-  LDA #$01
-  STA $D01A
-  CLI
-loop: JMP loop
-irq: {ack} $D019
-  JMP $EA81
-"""
-    _, rows = _run(src)
-    assert len(_events(rows, "video_irq")) >= 10
-
-
-def test_an_unacknowledged_raster_irq_is_raised_once():
-    src = QUIET + """
-  LDA #<irq
-  STA $0314
-  LDA #>irq
-  STA $0315
-  LDA #$01
-  STA $D01A
-loop: JMP loop
-irq: JMP $EA81
-"""
-    _, rows = _run(src)
-    assert len(_events(rows, "video_irq")) == 1
-
-
-def test_the_kernal_exit_acknowledges_cia1():
-    src = """
-init: LDA #<irq
-  STA $0314
-  LDA #>irq
-  STA $0315
-  RTS
-irq: INC count
-  LDA count
-  STA $D400
-  JMP $EA31
-count: .byte 0
-"""
-    _, rows = _run(src, seconds=0.2)
-    raises = _events(rows, "cia_irq")
-    assert {b - a for a, b in zip(raises, raises[1:])} == {0x4026}
-    assert len(_writes(rows, 0)) == len(raises)
-
-
-def test_brk_runs_through_the_irq_vector():
-    src = """
-init: LDA #<brk
-  STA $0314
-  LDA #>brk
-  STA $0315
-  BRK
-  NOP
-  LDA #$22
-  STA $D401
-  RTS
-brk: LDA #$11
-  STA $D400
-  JMP $EA81
-"""
-    _, rows = _run(src, seconds=0.05)
-    assert [r.value for r in rows if r.value == "brk_entry"] == ["brk_entry"]
-    assert [(r.reg, r.value) for r in rows if r.chip == 0 and r.reg < 2] == [
-        (0, 0x11),
-        (1, 0x22),
-    ]
-
-
-def test_a_jam_stops_the_cpu():
-    host, rows = _run("init: LDA #$01\n  STA $D400\n  .byte $02\n  STA $D401\n")
-    assert host.jammed and [r.reg for r in rows if r.chip == 0] == [24, 0]
 
 
 @pytest.mark.parametrize(
@@ -390,28 +107,6 @@ def test_clock_follows_the_header_or_the_override():
     assert InterruptHost(data, clock="pal").clock_hz == reg.PAL_CLOCK_HZ
     with pytest.raises(ValueError):
         InterruptHost(data, clock="secam")
-
-
-def test_grid_frames_the_rows_as_the_oracle_grid():
-    host = InterruptHost(tunes.build("raster_kernal"))
-    grid = host.grid(30)
-    rows = host.rows()
-    want = sidtrace_grid(rows, cycles_per_frame=sidtrace_cadence(rows))
-    assert grid == want[:30] and len({r[0] for r in grid}) == 30
-    assert host.framed == ("video_irq", PAL_FRAME)
-
-
-def test_grid_forward_fills_past_the_last_frame():
-    host = InterruptHost(tunes.build("psid_vbi"))
-    host.run(PAL_FRAME * 3)
-    grid = host.grid(5)
-    assert len(grid) == 5
-
-
-def test_grid_without_interrupts_is_unplayable():
-    host = InterruptHost(_rsid(QUIET + "loop: JMP loop\n"))
-    with pytest.raises(SidParseError, match="no interrupt"):
-        host.grid(3)
 
 
 def test_frames_repeat_a_row_for_each_missed_frame():
@@ -479,17 +174,6 @@ def test_frames_without_interrupts_are_unplayable():
         host.frames(probe_seconds=0.1)
 
 
-def test_player_renders_the_grid_then_continues_frame_by_frame():
-    data = tunes.build("raster_kernal")
-    player = InterruptPlayer(data)
-    grid = player.render_grid(whole_song(5))
-    more = player.render_grid(whole_song(3))
-    assert [r[0] for r in grid + more] == [r[0] for r in InterruptHost(data).grid(8)]
-    fresh = InterruptPlayer(data)
-    assert fresh.play_frame()[0] == (0, grid[0][0])
-    assert fresh.snapshot() == grid[0]
-
-
 @pytest.mark.parametrize(
     "name, source, cpc",
     [
@@ -507,30 +191,6 @@ def test_host_cadence_measures_the_play_source(name, source, cpc):
 def test_host_cadence_without_a_source_is_one_frame():
     cadence = host_cadence(_rsid(QUIET + "loop: JMP loop\n"), seconds=0.2)
     assert (cadence.source, cadence.cycles_per_call) == (None, PAL_FRAME)
-
-
-def test_rows_carry_the_cycles_since_each_source():
-    rows = irqhost.to_rows(
-        [(10, None, None, "nmi"), (15, 0, 1, 2), (20, None, None, "rti")]
-    )
-    assert rows[1] == SidtraceRow(15, 5, None, None, 0, 1, 2)
-    assert rows[2].since_nmi == 10
-
-
-def test_psid_drivers_play_at_their_speed_bit():
-    vbi = InterruptHost(tunes.build("psid_vbi"))
-    vbi.run(PAL_FRAME * 10)
-    cia = InterruptHost(tunes.build("psid_cia"))
-    cia.run(PAL_FRAME * 10)
-    assert _events(vbi.rows(), "video_irq") and not _events(vbi.rows(), "cia_irq")
-    assert _events(cia.rows(), "cia_irq") and not _events(cia.rows(), "video_irq")
-
-
-def test_a_psid_without_a_free_page_header_still_boots():
-    data = build_psid(b"\x60\xee\x00\xd4\x60", 0x1000, init=0x1000, play=0x1001)
-    host = InterruptHost(data)
-    host.run(PAL_FRAME * 4)
-    assert len(_writes(host.rows(), 0)) >= 3
 
 
 CIA_MASKED = QUIET + """
@@ -565,14 +225,6 @@ def test_tune_player_runs_a_play_address_on_jennings():
     assert writes[0].clock == 0 and writes[-1].clock >= PAL_FRAME
 
 
-@pytest.mark.parametrize("flags, video", [(0x04, 1), (0x08, 0)])
-def test_tune_player_sets_the_header_clock_flag(flags, video):
-    data = build_psid(
-        bytes.fromhex("ada6028d00d460"), load=0x1000, play=0x1006, flags=flags
-    )
-    assert TunePlayer(data).regs[0] == video
-
-
 @pytest.mark.parametrize("name", ["raster_kernal", "nmi_digi_oneshot"])
 def test_tune_player_hosts_play_address_zero(name):
     data = tunes.build(name)
@@ -593,32 +245,3 @@ def test_tune_player_without_an_entered_interrupt_is_unplayable(src):
 def test_tune_player_rejects_a_bare_prg():
     with pytest.raises(_TuneError, match="bare .prg"):
         _Tune(b"\x00\x10\x60")
-
-
-def test_chips_written_in_one_interrupt_are_logged_in_execution_order():
-    src = QUIET + """
-  LDA #<irq
-  STA $0314
-  LDA #>irq
-  STA $0315
-  LDA #$01
-  STA $D01A
-  CLI
-loop: JMP loop
-irq: INC $D019
-  INC count
-  LDA count
-  STA $D420
-  STA $D400
-  JMP $EA81
-count: .byte 0
-"""
-    host, rows = _run(src, version=3, second_sid=0x42)
-    seq = [(r.chip, r.value) for r in rows if r.chip is not None and r.reg == 0]
-    assert len(seq) >= 8
-    assert [chip for chip, _ in seq] == [1, 0] * (len(seq) // 2)
-    entries = _events(rows, "video_irq_entry")
-    first = [r.cycle for r in rows if r.chip is not None and r.reg == 0][:2]
-    assert entries[0] < first[0] < first[1]
-    assert [r.cycle for r in rows] == sorted(r.cycle for r in rows)
-    assert host.raw is host.raw

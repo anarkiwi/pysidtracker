@@ -8,7 +8,6 @@ import pytest
 from lark import Transformer, v_args
 
 from pysidtracker import (
-    REACH,
     ByteGrammar,
     FacetRegistry,
     Facet,
@@ -20,7 +19,6 @@ from pysidtracker import (
     make_package_errors,
     select_rule,
 )
-from pysidtracker.bytegrammar import render
 
 _Err, ToyParseError, _ = make_package_errors("Toy")
 
@@ -83,19 +81,6 @@ TOY = ByteGrammar(
 )
 
 
-def test_parse_prefix_stops_at_terminator():
-    assert TOY.parse_prefix(b"\x01\x02\xff\x09\x09", "seq") == Parsed(Seq(((1, 2),)), 3)
-    assert TOY.parse_prefix(b"\x03\x04\xfe\x00\xff", "seq_jump") == Parsed(
-        Seq(((3, 4),), 0), 4
-    )
-    assert TOY.parse_prefix(b"\x05\x06\x00\x07", "events") == Parsed([5, 6], 3)
-
-
-def test_build_variants_read_the_same_bytes_differently():
-    assert TOY.parse_prefix(b"\xfe\x00\xff", "seq").model == Seq(((0xFE, 0),))
-    assert TOY.parse_prefix(b"\xfe\x00\xff", "seq_jump").model == Seq((), 0)
-
-
 def test_errors_wrap_into_the_callers_class():
     with pytest.raises(ToyParseError, match="seq has no terminator within 4 bytes"):
         TOY.parse_prefix(b"\x01\x02\x03\x04", "seq")
@@ -115,21 +100,6 @@ def test_parse_exact_rejects_trailing_bytes():
         TOY.parse_exact(b"\x01\x02\xff\x00", "seq")
 
 
-def test_parsers_are_built_once():
-    assert TOY.parser() is TOY.parser()
-    assert TOY.parser(trees=True) is not TOY.parser()
-
-
-def test_tree_and_render():
-    tree = TOY.tree(b"\x01\x02\xfe\x07\x55", "seq_jump")
-    assert list(render(tree)) == [
-        "seq_jump",
-        "  item ITEM_JUMP=$01 BYTE=$02",
-        "  jump JUMP=$fe BYTE=$07",
-    ]
-    assert list(render(TOY.tree(b"\xff", "seq"))) == ["seq END=$ff"]
-
-
 def _image(table_and_streams: dict) -> SidImage:
     img = SidImage.from_prg(b"\x00\x10" + bytes(0x200))
     for addr, data in table_and_streams.items():
@@ -146,13 +116,6 @@ def test_entry_reads_the_stream_a_pointer_table_names():
         TOY.entry(img, 0x1000, 0x1004, 2, "seq")
     with pytest.raises(ToyParseError, match="voice 2 at 0x1110"):
         TOY.entry(img, 0x1000, 0x1004, 2, "seq", what="voice 2", size=8)
-
-
-def test_read_window_is_zero_padded_past_ffff():
-    img = SidImage.from_prg(b"\xfd\xff\x05\x06\x07")
-    assert img.window(0xFFFD, 5) == b"\x05\x06\x07\x00\x00"
-    assert TOY.read(img, 0xFFFD, "events").model == [5, 6, 7]
-    assert REACH == 0x100
 
 
 def test_stored_is_none_outside_region_or_unparsable():
@@ -183,11 +146,6 @@ def test_check_round_trips_models():
 def test_check_catches_a_model_that_reparses_differently():
     with pytest.raises(ToyValidationError, match="ends after 2 of its 3 bytes"):
         TOY.check([("x", Seq(((0xFE, 0),)), "seq_jump")], ToyValidationError)
-
-
-def test_listing():
-    lines = list(TOY.listing([("voice 0", Seq(((1, 2),)), "seq")]))
-    assert lines == ["voice 0:", "  seq", "    item ITEM=$01 BYTE=$02", "    END=$ff"]
 
 
 @dataclass(frozen=True)

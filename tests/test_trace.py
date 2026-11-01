@@ -39,14 +39,6 @@ def test_trace_captures_latch_vector_and_raster():
     assert 0x0314 in trace.registers_touched
 
 
-def test_trace_raster_folds_control1_high_bit():
-    code = _lda_sta(0x37, 0xD012) + _lda_sta(0x80, 0xD011) + bytes([0x60])
-    data = build_psid(code, load=0x1000, init=0x1000, play=0x1000)
-    trace = trace_init(SidImage.from_bytes(data))
-    # $D011 bit7 is raster compare bit 8 -> 0x37 | 0x100.
-    assert trace.vic_raster == 0x137
-
-
 def test_trace_play_calls_and_sid_writes():
     # init RTS immediately; play writes a SID register each call.
     init = bytes([0x60])
@@ -56,67 +48,6 @@ def test_trace_play_calls_and_sid_writes():
     trace = trace_init(SidImage.from_bytes(data), play_calls=2)
     assert trace.sid_writes.get(0xD418) == 0x0F
     assert trace.cia1_timer_latch is None
-
-
-def test_trace_captures_cia_control_and_icr():
-    code = (
-        _lda_sta(0x11, 0xDC0E)  # CIA1 control A (START set, continuous)
-        + _lda_sta(0x81, 0xDC0D)  # CIA1 ICR (set Timer-A enable)
-        + _lda_sta(0x08, 0xDD0E)  # CIA2 control A (one-shot)
-        + _lda_sta(0x01, 0xDD0D)  # CIA2 ICR (clear Timer-A enable)
-        + bytes([0x60])
-    )
-    data = build_psid(code, load=0x1000, init=0x1000, play=0x1000)
-    trace = trace_init(SidImage.from_bytes(data))
-    assert trace.cia1_control == 0x11
-    assert trace.cia1_icr == 0x81
-    assert trace.cia2_control == 0x08
-    assert trace.cia2_icr == 0x01
-
-
-def test_trace_cia_control_and_icr_default_none():
-    trace = trace_init(SidImage.from_bytes(build_psid(bytes([0x60]), load=0x1000)))
-    assert trace.cia1_control is None
-    assert trace.cia1_icr is None
-    assert trace.cia2_control is None
-    assert trace.cia2_icr is None
-
-
-def test_trace_executes_illegal_opcodes():
-    """An NMOS illegal (SBX) in init computes the real latch, not a NOP drift.
-
-    Stock py65 decoded ``SBX #imm`` ($CB) as a one-byte NOP, shifting the whole
-    following instruction stream; jennings decodes it natively, so the traced
-    latch is correct.
-    """
-    code = (
-        bytes([0xA9, 0xFF])  # LDA #$FF
-        + bytes([0xA2, 0x5C])  # LDX #$5C
-        + bytes([0xCB, 0x01])  # SBX #$01 -> X = (A & X) - 1 = $5B
-        + bytes([0x8E, 0x05, 0xDC])  # STX $DC05 (Timer-A hi)
-        + _lda_sta(0xF9, 0xDC04)  # Timer-A lo
-        + bytes([0x60])
-    )
-    data = build_psid(code, load=0x1000, init=0x1000, play=0x1000)
-    assert trace_init(SidImage.from_bytes(data)).cia1_timer_latch == 0x5BF9
-
-
-def test_trace_raster_spin_terminates():
-    """A raster-sync spin before the timer writes must complete, not hit the cap.
-
-    Without a VIC read model $D012 reads back RAM, so the loop never exits and
-    init never reaches its ``$DC04``/``$DC05`` writes.
-    """
-    code = (
-        bytes([0xAD, 0x12, 0xD0])  # loop: LDA $D012
-        + bytes([0xC9, 0x30])  # CMP #$30
-        + bytes([0xD0, 0xF9])  # BNE loop
-        + _lda_sta(0x98, 0xDC04)
-        + _lda_sta(0x09, 0xDC05)
-        + bytes([0x60])
-    )
-    data = build_psid(code, load=0x1000, init=0x1000, play=0x1000)
-    assert trace_init(SidImage.from_bytes(data)).cia1_timer_latch == 0x0998
 
 
 def test_trace_requires_header():

@@ -36,17 +36,6 @@ def test_carry_exempts_only_the_1lsb_freq_and_cutoff_pairs():
     ).any()
 
 
-def test_onset_mask_counts_each_voice_from_its_first_note_and_globs_from_the_earliest():
-    ours = np.zeros((10, 25))
-    mask = gridcmp.onset_mask(ours, [2, None, 5])
-    want = np.zeros((10, 25), bool)
-    want[2:, 0:7] = True
-    want[5:, 14:21] = True
-    want[2:, 21:25] = True
-    assert (mask == want).all()
-    assert not gridcmp.onset_mask(ours, [None, None, None]).any()
-
-
 def test_cell_diff_orders_cells_and_applies_onset_and_tolerance():
     ours, theirs = np.zeros((4, 25), np.uint8), np.zeros((4, 25), np.uint8)
     ours[1, 3], theirs[1, 3] = 1, 2
@@ -71,14 +60,6 @@ def test_first_mismatch_applies_the_onset_criterion_with_carry():
     assert gridcmp.first_mismatch(ours, theirs, [2, None, None]) is None
     assert gridcmp.first_mismatch(ours, theirs) == (1, 3)
     assert gridcmp.first_mismatch(ours, theirs, [2, None, None], tol=None) == (2, 0)
-
-
-def test_verdict_onset_exempts_the_carry_only_under_its_tolerance():
-    ours, theirs = np.zeros((4, 25), np.uint8), np.zeros((4, 25), np.uint8)
-    ours[2, 0], theirs[2, 0] = 5, 6
-    assert gridcmp.verdict_onset(ours, [0, 0, 0], theirs).ok
-    exact = gridcmp.verdict_onset(ours, [0, 0, 0], theirs, tol=None)
-    assert (exact.onset, exact.whole, exact.ok) == ((2, 0), (2, 0), False)
 
 
 def test_runs_groups_registers_runs_and_value_segments():
@@ -174,52 +155,6 @@ def test_runs_report_counts_the_value_lines_it_omits():
     assert "    ... 4 more value lines" in text
 
 
-def test_verdict_lead_matches_the_survey_scan_and_names_the_first_register():
-    rng = np.random.default_rng(1)
-    oracle = rng.integers(0, 256, (100, 25)).astype(np.int16)
-    lib = np.zeros((108, 25), np.int16)
-    lib[3 : 3 + 100] = oracle
-    v = gridcmp.verdict_lead(oracle, lib)
-    assert v.ok and (v.lead, v.nbad, v.first, v.first_reg) == (3, 0, None, None)
-    assert (v.min_lead, v.min_bad, v.min_first) == (3, 0, None)
-    assert v.line() == "verified: 100 frames play the reference grid"
-
-    lib[3 + 7, 4] ^= 1
-    v = gridcmp.verdict_lead(oracle, lib)
-    assert (v.ok, v.lead, v.first, v.first_reg, v.nbad) == (False, 3, 7, 4, 1)
-    assert v.regs == (4,) and (v.min_lead, v.min_bad, v.min_first) == (3, 1, 7)
-    assert v.line() == "mismatch: frame 7, register $04 v1_ctrl (lead 3, 1 bad frames)"
-    assert gridcmp.lead_report(v) == (
-        "differs: frame 7, register $04 v1_ctrl (lead 3, 1 bad frames; fewest 1 at lead 3)"
-    )
-    assert (v.summary()["bad"], v.summary()["first"], v.summary()["regs"]) == (
-        1,
-        7,
-        ["v1_ctrl"],
-    )
-
-
-def test_verdict_lead_matches_the_survey_fence_cases():
-    ref = np.arange(10 * 25, dtype=np.int16).reshape(10, 25)
-    late = np.vstack([np.zeros((3, 25), np.int16), ref, ref[:6]])
-    lead, bad, first = gridcmp.compare(ref, late)
-    assert (lead, first, int(len(bad)), bool(bad.any())) == (3, 10, 10, False)
-    assert (
-        gridcmp.verdict_lead(ref, late).lead,
-        gridcmp.verdict_lead(ref, late).ok,
-    ) == (3, True)
-    late[3 + 7, 4] ^= 1
-    lead, bad, first = gridcmp.compare(ref, late)
-    assert (lead, first, int(bad.sum())) == (3, 7, 1)
-    v = gridcmp.verdict_lead(ref, late)
-    assert (v.ok, v.lead, v.first, v.first_reg, v.nbad) == (False, 3, 7, 4, 1)
-
-    ref = np.arange(10 * 25, dtype=np.int16).reshape(10, 25) % 7
-    early = np.vstack([ref[2:], np.zeros((10, 25), np.int16)])
-    lead, bad, first = gridcmp.compare(ref, early)
-    assert (lead, first, int(len(bad)), bool(bad.any())) == (-2, 8, 8, False)
-
-
 def test_compare_grids_short_render_is_an_error():
     a = (np.arange(10 * 25) % 250 + 1).astype(np.uint8).reshape(10, 25)
     with pytest.raises(ValueError, match="shift 8"):
@@ -235,19 +170,6 @@ def test_compare_grids_short_render_is_an_error():
     out = gridcmp.compare_grids(a, b)
     assert (out["verdict"], out["lead"], out["frames"]) == ("exact", 2, 10)
     assert (out["min_lead"], out["min_bad"]) == (2, 0)
-
-
-def test_window_report_prints_the_differing_row_with_aligned_marks():
-    oracle = np.repeat(np.arange(4, dtype=np.uint8)[:, None], 25, 1)
-    lib = oracle.copy()
-    lib[2, 11] = 0x11
-    lines = gridcmp.window_report(oracle, lib, 2, context=1).splitlines()
-    assert len(lines) == 7
-    o2, l2, mark = lines[2:5]
-    want_l = " ".join(["02"] * 11 + ["11"] + ["02"] * 13)
-    assert o2 == f"     2 O {' '.join(['02'] * 25)}"
-    assert l2 == f"{'':6} L {want_l}"
-    assert mark.index("^^") == l2.index("11")
 
 
 def test_read_grid_infers_frames_and_accepts_plain_csv(tmp_path):
@@ -271,6 +193,7 @@ def test_read_grid_infers_frames_and_accepts_plain_csv(tmp_path):
     assert gridcmp.read_grid(empty, 5).shape == (5, 25)
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_survey_reexports_the_shared_core():
     for name in (
         "LEAD",

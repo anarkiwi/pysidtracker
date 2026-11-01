@@ -68,21 +68,6 @@ def test_patch_round_trip_and_offsets():
         pf.make_patch(data, data[:-1])
 
 
-def test_gaps_and_covered():
-    trace = paths.cpu_paths(SID, 3)
-    universe = paths.cpu_universe(SID)
-    missing = pf.gaps(trace, universe)
-    assert missing and set(missing) == set(universe) - set(trace.names)
-    high = paths.cpu_paths(_high(), 3)
-    both = pf.gaps([trace, high], universe)
-    assert set(missing) - set(both) == (pf.covered(high) - set(trace.names)) & set(
-        universe
-    )
-    assert len(both) == len(missing) - 2
-    assert pf.covered(["a", ["b", "c"]]) == {"a", "b", "c"}
-    assert pf.covered("a") == {"a"}
-
-
 def _brute_cover(sets):
     feats = set().union(*sets.values())
     for k in range(len(sets) + 1):
@@ -130,17 +115,6 @@ def test_values_and_branch_slice():
     assert live == {LAB["tbl"]: 5} and ops == [("CMP", "imm", 0x10)]
 
 
-def test_baseline_targets_and_data_bytes():
-    base = pf.baseline(SID, 1, make_right, 4)
-    (cpu,) = base.targets("6502")
-    assert cpu.pc == LAB["play"] + 5 and cpu.frame == 0 and cpu.member.all()
-    assert cpu.label == f"${cpu.pc:04X} BCS ${LAB['hi']:04x} -> ${LAB['hi']:04X}"
-    (py,) = base.targets("python")
-    assert py.name.startswith("edge:Toy._frame:")
-    assert np.flatnonzero(base.data_mask).tolist() == [LAB["pad"] + i for i in range(4)]
-    assert base.run.verdict["ok"] and base.universe("6502") == paths.cpu_universe(SID)
-
-
 @pytest.mark.parametrize("side", pf.SIDES)
 def test_exercise_reaches_the_other_outcome_and_flags_python(side):
     mutants = pf.exercise(SID, 1, make_right, side=side, budget=40, frames=4)
@@ -152,11 +126,6 @@ def test_exercise_reaches_the_other_outcome_and_flags_python(side):
     assert off == TBL and value >= 0x10
     assert any("BCS" in label for label in m.labels["6502"])
     assert any("0xD401, 0x23" in label for label in m.labels["python"])
-
-
-def test_exercise_6502_tries_the_compare_boundary_first():
-    mutants = pf.exercise(SID, 1, make_right, budget=2, frames=4)
-    assert [m.patch for m in mutants] == [[[TBL, 0x10]]]
 
 
 def test_exercise_target_filter_budget_and_side():

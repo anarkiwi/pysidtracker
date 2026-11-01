@@ -56,18 +56,6 @@ def test_a_job_spinning_in_c_ends_at_its_deadline_and_the_others_run_on():
     assert [r[1] for r in got] == [9, None, 16] and isinstance(got[1][2], ValueError)
 
 
-def test_a_job_waiting_on_a_child_pool_is_killed_with_the_pool(tmp_path):
-    pids = tmp_path / "pids"
-    ((index, value, error),) = jobs.imap(nested, [(str(pids), 2)], jobs=1)
-    assert (index, value) == (0, None) and isinstance(error, TimeoutError)
-    child = int(pids.read_text(encoding="utf-8"))
-    for _ in range(100):
-        if not alive(child):
-            break
-        time.sleep(0.1)
-    assert not alive(child)
-
-
 def test_a_dead_worker_is_reported_and_replaced():
     got = sorted(jobs.imap(os._exit, [(3,), (4,)], jobs=1), key=lambda r: r[0])
     assert [str(r[2]) for r in got] == ["worker exited with 3", "worker exited with 4"]

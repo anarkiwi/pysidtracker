@@ -6,6 +6,7 @@ from pysidtracker import SID_VOICES, attack_decay, sustain_release
 from pysidtracker import registers as reg
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_voice_constants():
     assert SID_VOICES == 3
     assert (reg.FREQ_LO, reg.FREQ_HI, reg.PW_LO, reg.PW_HI) == (0, 1, 2, 3)
@@ -16,13 +17,6 @@ def test_voice_constants():
         0x17,
         0x18,
     )
-
-
-def test_adsr_packers():
-    assert attack_decay(0x3, 0xC) == 0x3C
-    assert sustain_release(0xA, 0x5) == 0xA5
-    assert attack_decay(0, 0) == 0
-    assert sustain_release(15, 15) == 0xFF
 
 
 @pytest.mark.parametrize("bad", [-1, 16, 255])

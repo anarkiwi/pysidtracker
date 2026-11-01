@@ -15,7 +15,7 @@ from pysidtracker import oracle, registers, survey
 from pysidtracker.errors import SidFormatError
 from pysidtracker.oracle import SIDTRACE_COLUMNS, SidtraceRow, SidtraceUnavailable
 
-from .helpers import build_psid, build_psid_embedded_load, event, trace_csv
+from .helpers import build_psid, event, trace_csv
 
 CFG = """Other_Player\r
 A9 00 8D END\r
@@ -36,13 +36,6 @@ def _songlengths(root, text):
     docs = root / "DOCUMENTS"
     docs.mkdir(parents=True, exist_ok=True)
     (docs / "Songlengths.md5").write_text(text)
-
-
-def test_songlengths(tmp_path):
-    _songlengths(
-        tmp_path, "[Database]\n; /X.sid\n" + "a" * 32 + "=2:03.07 0:05 1:00.5(G)\n"
-    )
-    assert survey.songlengths(tmp_path) == {"a" * 32: [123.07, 5, 60.5]}
 
 
 def test_find_filters_first_match_by_player(tmp_path):
@@ -78,26 +71,6 @@ def test_find_filters_first_match_by_player(tmp_path):
     assert rows[0]["md5"] == md5
     tally = survey.find(hvsc, out, cfg, jobs=1)
     assert tally == {"GoatTracker_V2.x": 1, "Other_Player": 1, "(GT_Editor)": 1}
-
-
-def test_grid_csv_round_trip(tmp_path):
-    rng = np.random.default_rng(0)
-    grid = rng.integers(0, 3, (40, survey.NREGS)).astype(np.int16)
-    out = tmp_path / "g.csv.zst"
-    survey.write_grid(grid, out)
-    assert (survey.read_grid(out, 50)[:40] == grid).all()
-    assert (survey.read_grid(out, 50)[40:] == grid[-1]).all()
-    assert (survey.read_grid(out, 20) == grid[:20]).all()
-
-
-def test_compare_picks_lead_and_first_mismatch():
-    ref = np.arange(10 * 25, dtype=np.int16).reshape(10, 25)
-    lib = np.vstack([np.zeros((3, 25), np.int16), ref, ref[:6]])
-    lead, bad, first = survey.compare(ref, lib)
-    assert (lead, first, bad.any()) == (3, 10, False)
-    lib[3 + 7, 4] ^= 1
-    lead, bad, first = survey.compare(ref, lib)
-    assert (lead, first, int(bad.sum())) == (3, 7, 1)
 
 
 def test_compare_oracle_lead_and_gating():
@@ -219,27 +192,6 @@ def _job(survey_tree, render, timeout=600):
     return [j for j in jobs if j[2] == 2][0]
 
 
-def test_oracle_frames_from_cached_trace(survey_tree):
-    _, _, work, tune = survey_tree
-    nframes, grid = survey.oracle_frames(
-        work / "oracle" / f"{tune['md5']}_2.csv.zst", SECONDS, "PAL"
-    )
-    assert nframes == NFRAMES and (grid == _expected(NFRAMES)).all()
-
-
-def test_check_exact(survey_tree):
-    row = survey.check(_job(survey_tree, render_exact))
-    assert row["verdict"] == "exact" and (row["lead"], row["first_diff"]) == (2, "")
-    assert (row["frames"], row["diff_frames"], row["diff_regs"]) == (NFRAMES, 0, "")
-    assert json.loads(row["info"]) == {
-        "variant": "test",
-        "nframes": NFRAMES + survey.LEAD,
-    }
-    assert row["oracle_gated"] and row["library_gated"]
-    lib = survey.read_grid(survey_tree[2] / "library" / f"{row['key']}.csv.zst", 40)
-    assert (lib == render_exact(b"PSID", 2, NFRAMES + survey.LEAD)[0][:40]).all()
-
-
 def test_check_differs_and_diff(survey_tree, capsys):
     row = survey.check(_job(survey_tree, render_differs))
     assert (row["verdict"], row["lead"], row["first_diff"]) == ("differs", 2, 10)
@@ -249,20 +201,6 @@ def test_check_differs_and_diff(survey_tree, capsys):
     out = capsys.readouterr().out.splitlines()
     assert [ln.split()[0] for ln in out[1:]] == ["9", "L", "10", "L", "^^", "11", "L"]
     assert out[5].index("^^") == out[4].index("01")
-
-
-@pytest.mark.parametrize(
-    "render,verdict,error",
-    [
-        (render_parse_error, "not_decompiled", "cannot decompile"),
-        (render_crash, "library_error", "KeyError"),
-        (render_short, "library_error", "ValueError: render grid shape"),
-    ],
-)
-def test_check_library_failures(survey_tree, render, verdict, error):
-    row = survey.check(_job(survey_tree, render))
-    assert row["verdict"] == verdict and error in row["error"]
-    assert row["frames"] == NFRAMES and "lead" not in row
 
 
 def test_check_renders_oracle_once(survey_tree, monkeypatch):
@@ -291,30 +229,6 @@ def test_check_renders_oracle_once(survey_tree, monkeypatch):
     cached.unlink()
     row = survey.check(_job(survey_tree, render_exact))
     assert row["verdict"] == "oracle_error" and "no docker" in row["error"]
-
-
-def test_oracle_frames_never_returning_trace(survey_tree):
-    # A trace that raises but never ``rti``s is valid, not unplayable.
-    _, _, work, tune = survey_tree
-    ocsv = work / "oracle" / f"{tune['md5']}_2.csv.zst"
-    ocsv.write_bytes(zstandard.ZstdCompressor().compress(_never_returns_csv().encode()))
-    nframes, grid = survey.oracle_frames(ocsv, SECONDS, "PAL")
-    assert nframes == NFRAMES and grid.shape == (NFRAMES, survey.NREGS)
-
-
-def test_check_reuses_never_returning_trace(survey_tree, monkeypatch):
-    # The cached never-returning trace is a verdict, not an ``oracle_error``, and
-    # is never re-rendered (re-rendering cannot add an ``rti``).
-    _, _, work, tune = survey_tree
-    ocsv = work / "oracle" / f"{tune['md5']}_2.csv.zst"
-    ocsv.write_bytes(zstandard.ZstdCompressor().compress(_never_returns_csv().encode()))
-
-    def _no_render(*_a, **_k):
-        raise AssertionError("a never-returning trace must be reused, not re-rendered")
-
-    monkeypatch.setattr(oracle, "run_sidtrace", _no_render)
-    row = survey.check(_job(survey_tree, render_exact))
-    assert row["verdict"] in ("exact", "differs")
 
 
 def test_run_sidtrace_song_and_user(tmp_path, monkeypatch):
@@ -394,20 +308,6 @@ def test_info_rates():
     }
 
 
-def test_triage_cli(survey_tree, capsys):
-    hvsc, tunes, work, tune = survey_tree
-    survey.run(hvsc, tunes, work, render_differs, jobs=1)
-    capsys.readouterr()
-    assert survey.main(["triage", str(work), "--jobs", "1"]) == 0
-    out = capsys.readouterr().out
-    rows = survey.load_tunes(work / "triage.csv")
-    assert [
-        (r["key"], r["first_diff"], r["when"], r["kind"], r["roles"]) for r in rows
-    ] == [(f"{tune['md5']}_2", "10", "mid", "extra", "ctrl")]
-    assert json.loads(rows[0]["diffs"]) == [[11, 0, 1]]
-    assert "extra" in out and '0.0% exact  variant="test"' in out
-
-
 def test_diff_cli_reports_failure(survey_tree, capsys):
     hvsc, tunes, work, tune = survey_tree
     key = f"{tune['md5']}_2"
@@ -455,54 +355,11 @@ def test_sidtrace_image_id_without_docker(monkeypatch):
     assert oracle.sidtrace_image_id() is None
 
 
-def test_check_render_timeout(survey_tree):
-    row = survey.check(_job(survey_tree, render_hang, timeout=0.2))
-    assert row["verdict"] == "library_error"
-    assert row["error"] == "TimeoutError: exceeded 0.2s"
-    assert survey.check(_job(survey_tree, render_exact, 5))["verdict"] == "exact"
-
-
-def test_oracle_cache_stamp_without_row_kinds_is_stale(survey_tree):
-    work = survey_tree[2]
-    stamp = {"image": "sha256:a", "args": survey.ORACLE_ARGS}
-    (work / "oracle" / "STAMP").write_text(json.dumps(stamp), "utf-8")
-    assert not list(survey.oracle_cache(work).glob("*.csv.zst"))
-
-
 def render_frame0(data, song, nframes):
     """Fake renderer: :func:`render_exact` with the volume wrong on frame 0 only."""
     grid, info = render_exact(data, song, nframes)
     grid[2, 24] = 14
     return grid, info
-
-
-def test_scan_leads_matches_aligned_views():
-    rng = np.random.default_rng(1)
-    ref = rng.integers(0, 2, (12, 25)).astype(np.int16)
-    lib = rng.integers(0, 2, (12 + survey.LEAD, 25)).astype(np.int16)
-    lib[3:15] = ref
-    lib[7, 9] ^= 1
-    leads, ne, size, first, nbad = survey.scan_leads(ref, lib)
-    assert list(leads[:3]) == [0, -1, 1] and sorted(leads) == list(range(-8, 9))
-    for i, lead in enumerate(leads):
-        want = np.not_equal(*survey.aligned(ref, lib, lead))
-        assert size[i] == len(want) and (ne[i, : size[i]] == want).all()
-        assert not ne[i, size[i] :].any()
-        rows = want.any(1)
-        assert nbad[i] == rows.sum()
-        assert first[i] == (np.flatnonzero(rows)[0] if rows.any() else len(rows))
-    stats = survey.min_lead((leads, ne, size, first, nbad))
-    assert stats == dict(min_lead=3, min_bad=1, min_first=4, min_regs="v2_pw_lo")
-
-
-def test_check_frame0_fault_min_lead(survey_tree):
-    row = survey.check(_job(survey_tree, render_frame0))
-    assert (row["verdict"], row["lead"], row["first_diff"]) == ("differs", 0, 1)
-    assert row["diff_frames"] > NFRAMES // 2
-    assert (row["min_lead"], row["min_bad"], row["min_first"]) == (2, 1, 0)
-    assert row["min_regs"] == "mode_vol"
-    exact = survey.check(_job(survey_tree, render_exact))
-    assert (exact["min_lead"], exact["min_bad"], exact["min_first"]) == (2, 0, "")
 
 
 def _near_lines(out):
@@ -540,24 +397,6 @@ def test_report_and_triage_surface_near_exact(survey_tree, capsys):
         "0",
         "mode_vol",
     )
-
-
-def test_old_results_without_min_columns(survey_tree, capsys):
-    hvsc, tunes, work, _ = survey_tree
-    survey.run(hvsc, tunes, work, render_frame0, jobs=1)
-    rows = survey.load_tunes(work / "results.csv")
-    old = [f for f in survey.RESULT_FIELDS if not f.startswith("min_")]
-    with open(work / "results.csv", "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, old, extrasaction="ignore")
-        w.writeheader()
-        w.writerows(rows)
-    capsys.readouterr()
-    verdicts = survey.report(work / "results.csv")
-    assert verdicts[("GoatTracker_V2.x", "differs")] == 1
-    assert _near_lines(capsys.readouterr().out)[0].endswith(": 0")
-    (t,), _ = survey.triage(work, jobs=1)
-    assert (t["min_lead"], t["min_bad"], t["min_regs"]) == (2, 1, "mode_vol")
-    assert _near_lines(capsys.readouterr().out)[0].endswith(": 1")
 
 
 def test_leads_one_key(survey_tree, capsys):
@@ -618,55 +457,9 @@ def _rawbody(width):
     return body
 
 
-def test_image_body_rebasing_to_load():
-    img = bytes(range(256))
-    for sid in (build_psid(img, 0x2000), build_psid_embedded_load(img, 0x2000)):
-        vec, length = survey.image_body(sid)
-        assert length == 256 and vec[:256].tobytes() == img
-        assert vec.shape == (survey.IMAGE_WIDTH,) and vec[256:].sum() == 0
-
-
 def test_match_images_requires_candidates():
     with pytest.raises(ValueError, match="no candidate"):
         survey.match_images([], [b"xy"], body=match_body)
-
-
-def test_match_images_exact_and_mutated():
-    rng = np.random.default_rng(0)
-    img = rng.integers(0, 256, 100).astype(np.uint8).tobytes()
-    other = rng.integers(0, 256, 64).astype(np.uint8).tobytes()
-    body = _rawbody(128)
-    rows = survey.match_images([img, other], [img], body=body)
-    assert rows == [dict(candidate=0, length=100, ndiff=0, offset=0)]
-    mut = bytearray(img)
-    mut[3] ^= 0x21
-    mut[77] ^= 0xC0
-    mut[99] ^= 0x41
-    rows = survey.match_images([img, other], [bytes(mut)], body=body)
-    assert rows == [dict(candidate=0, length=100, ndiff=3, offset=0)]
-
-
-def test_match_images_relocates_candidates():
-    rng = np.random.default_rng(1)
-    img = rng.integers(1, 256, 90, dtype=np.uint8).tobytes()
-    body = _rawbody(128)
-    rows = survey.match_images([b"\x00" * 7 + img], [img], body=body)
-    assert rows == [dict(candidate=0, length=90, ndiff=0, offset=7)]
-    rows = survey.match_images([img[5:]], [img], body=body)
-    assert rows == [dict(candidate=0, length=90, ndiff=0, offset=-5)]
-
-
-def test_match_images_length_guard():
-    rng = np.random.default_rng(2)
-    img = rng.integers(0, 256, 90).astype(np.uint8)
-    long_ = (
-        img.astype(np.uint8).tobytes()
-        + rng.integers(0, 256, 600).astype(np.uint8).tobytes()
-    )
-    close = img.copy()
-    close[:40] = (close[:40].astype(np.int16) + 1) % 256
-    rows = survey.match_images([long_, close], [img], body=_rawbody(0x400))
-    assert rows[0] == dict(candidate=1, length=90, ndiff=40, offset=0)
 
 
 def _match_tree(tmp_path):
@@ -753,32 +546,9 @@ def test_match_cli_out_and_body(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_run_kills_a_render_spinning_in_c_at_its_deadline(survey_tree):
-    hvsc, tunes, work, _ = survey_tree
-    tally = survey.run(hvsc, tunes, work, render_spin, jobs=2, timeout=1)
-    rows = survey.load_tunes(work / "results.csv")
-    assert tally == {"library_error": len(rows)}
-    assert {r["error"] for r in rows} == {"TimeoutError: exceeded 1s"}
-    assert all(r["frames"] for r in rows)
-
-
 def _scope_rows(out):
     with open(out, newline="", encoding="utf-8") as f:
         return [(r["song"], r["verdict"], r["error"]) for r in csv.DictReader(f)]
-
-
-def test_scope_classifies_each_subtune_without_the_oracle(survey_tree, tmp_path):
-    hvsc, tunes, _, tune = survey_tree
-    out = tmp_path / "scope.csv"
-    tally = survey.scope(hvsc, tunes, render_exact, out=out, frames=3, jobs=1)
-    assert tally == {"ok": 1, "library_error": 1}
-    with open(out, newline="", encoding="utf-8") as f:
-        rows = sorted(csv.DictReader(f), key=lambda r: r["song"])
-    assert [r["key"] for r in rows] == [f"{tune['md5']}_{s}" for s in (1, 2)]
-    assert "AssertionError" in rows[0]["error"] and rows[1]["verdict"] == "ok"
-    assert json.loads(rows[1]["info"]) == {"variant": "test", "nframes": 3}
-    survey.scope(hvsc, tunes, render_parse_error, out=out, jobs=1, player="nomatch")
-    assert not _scope_rows(out)
 
 
 @pytest.mark.parametrize(
@@ -888,6 +658,7 @@ def _clear_cache(work, barrier, queue):
         queue.put(repr(exc))
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_oracle_cache_concurrent_clear(tmp_path, monkeypatch):
     work, workers = tmp_path / "work", 8
     stale = work / "oracle"

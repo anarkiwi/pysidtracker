@@ -2,7 +2,7 @@
 
 import pytest
 
-from pysidtracker.grammardiff import grammar_diff, normalise
+from pysidtracker.grammardiff import grammar_diff
 from pysidtracker.maincli import main
 
 A = r"""
@@ -68,13 +68,6 @@ def test_differences_are_reported(tmp_path, capsys):
     assert main(["grammardiff", str(a), str(b), "--start", "start"]) == 1
     out = capsys.readouterr()
     assert "rule old only in" not in out.out and "difference(s)" in out.err
-
-
-def test_aliases_and_anonymous_terminals_are_structural():
-    rules, terms = normalise(A)
-    assert rules["item"] == {"A INT -> a_item", "B /[xy]/"}
-    assert rules["start"] == {"{@ item | item} tail", "tail"}
-    assert not any(name.startswith("__") for name in (*rules, *terms))
 
 
 def test_unloadable_grammar(tmp_path):

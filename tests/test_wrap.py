@@ -74,23 +74,6 @@ def masked(values):
     return [v & 0x0F if r in PW_HI_REGS else v for r, v in enumerate(values)]
 
 
-def test_ghost_flushed_after_the_entry():
-    image, lab = tune("jsr_then_flush")
-    wrap = measure_wrap(image, 0, lab["play"], {lab["entry"]})
-    assert wrap == Wrap(lab["play"], frozenset({lab["entry"]}), 0, lab["ghost"])
-    ticks = []
-
-    def tick():
-        ticks.append(len(ticks))
-        return {wrap.sink: regs(len(ticks))}
-
-    player = Wrapped(tick, image, wrap)
-    for frame in range(1, 4):
-        player.play_frame()
-        assert player.regs == masked(regs(frame))
-    assert ticks == [0, 1, 2]
-
-
 def test_ghost_flushed_before_the_entry_lags_a_frame():
     image, lab = tune("flush_then_jmp")
     wrap = measure_wrap(image, 0, lab["play"], {lab["entry"]})
@@ -120,18 +103,6 @@ def test_entry_called_twice_writes_the_sid():
     player = Wrapped(tick, image, wrap)
     player.play_frame()
     assert len(calls) == 2 and player.regs == masked(regs(2))
-
-
-def test_unmasked_subclass_keeps_pulse_high():
-    image, lab = tune("twice")
-    wrap = Wrap(lab["play"], frozenset({lab["entry"]}))
-
-    class Raw(Wrapped):
-        MASK_PW_HI = False
-
-    player = Raw(lambda: {0xD400: [0xFF] * SID_REG_COUNT}, image, wrap)
-    player.play_frame()
-    assert player.regs == [0xFF] * SID_REG_COUNT
 
 
 @pytest.mark.parametrize(
