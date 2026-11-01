@@ -195,6 +195,10 @@ What goes where:
 - **A variant:** what a build does differently. Other statements, procs or schedule, rather than an `L.flag` guarding both code paths in one spec.
 - **`native`:** code the spec has not stated yet. [`unnative`](#removing-native-hooks) states it as a variant.
 
+## SID writes
+
+`SpecPlayer.writes` lists the SID writes `(register, value)` the spec's stores made in the last frame, in order: every play call of the frame, every write (one of the value the register holds too). A `native` block's and the tune's own code's writes are not among them.
+
 ## Volatile inputs
 
 A `volatile` cell is an input of the call. The k-th read of volatile cells in a call

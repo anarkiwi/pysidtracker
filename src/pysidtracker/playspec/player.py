@@ -36,6 +36,7 @@ _CPU_FIELDS = ("pc", "sp", "a", "x", "y", "p", "processorCycles")
 _FLAGS = {"c": 0x01, "z": 0x02, "i": 0x04, "d": 0x08, "v": 0x40, "n": 0x80}
 Binder = Callable[[bytes, int], Union[dict, Tuple[Spec, dict]]]
 _HEADER = 0x7C
+SID_BASE, SID_REGS = 0xD400, 25
 
 
 def _container(image: bytes, load: int, init: int, psid: bool) -> bytes:
@@ -95,6 +96,11 @@ class SpecPlayer(EmuPlayer):
     ``transform(program, view)`` maps each lowered program before it is compiled, given
     the memory it is bound in (e.g. :func:`~pysidtracker.playspec.outorder.reorder`).
 
+    ``writes`` lists the SID writes ``(register, value)`` the spec's stores made in the last
+    frame, in order, those of every play call of the frame and every write of a register (a
+    write of the value it holds included); a write by a ``native`` block or the tune's own code
+    is not among them.
+
     A spec call advances no cycles, so with ``cycles_per_frame`` scheduling the
     player plays a call the real routine would have overrun and had dropped, and runs
     one call ahead from there.
@@ -131,6 +137,7 @@ class SpecPlayer(EmuPlayer):
         self.validator = StreamValidator() if validate else None
         self._native_state: Optional[dict] = None
         self._in_call = False
+        self.writes: List[Tuple[int, int]] = []
         self.entry: Optional[int] = None
         self._hosted: Optional[InterruptPlayer] = None
         self._stepper = None
@@ -324,6 +331,8 @@ class SpecPlayer(EmuPlayer):
 
     def _store(self, addr: int, value: int) -> None:
         """A spec store: RAM (the SID band included), and the bank port on the bus."""
+        if SID_BASE <= addr < SID_BASE + SID_REGS:
+            self.writes.append((addr - SID_BASE, value & 0xFF))
         if self._hosted is not None:
             bus = self._bus
             if bus.io and addr >> 12 == 0xD:
@@ -362,6 +371,7 @@ class SpecPlayer(EmuPlayer):
             )
 
     def _frame(self) -> None:
+        self.writes = []
         if self._hosted is not None:
             self._hosted.play_frame()
             self._require_entry()
