@@ -133,7 +133,7 @@ def _tunes(paths) -> list:
 
 def _reorder(args) -> None:
     tunes = _tunes(args.tunes)
-    tasks = [(t, args.order, args.frames, args.subtune) for t in tunes]
+    tasks = [(t, args.order, args.frames, args.subtune, args.prove) for t in tunes]
     report, failed = {}, 0
     for index, value, error in tqdm(
         imap(survey, tasks, args.jobs), total=len(tasks), desc="tunes", unit="tune"
@@ -147,8 +147,34 @@ def _reorder(args) -> None:
         f"{len(tunes) - failed}/{len(tunes)} tunes the same over {args.frames} frames"
     )
     print("staged:", dict(staged.most_common()))
+    proofs = [
+        p["proof"]["holds"]
+        for r in report.values()
+        for p in r.get("programs", ())
+        if "proof" in p
+    ]
+    if proofs:
+        print(f"{sum(proofs)}/{len(proofs)} programs proved")
+    if args.emit:
+        _emit(report, Path(args.emit))
     if args.out:
         Path(args.out).write_text(json.dumps(report, indent=1))
+
+
+def _emit(report: dict, out: Path) -> None:
+    """Write each emitted spec: to ``out`` itself for one ``.play``, else under it."""
+    texts = [
+        (Path(tune), r["format"], i, p["text"])
+        for tune, r in report.items()
+        for i, p in enumerate(r.get("programs", ()))
+    ]
+    if out.suffix == ".play" and len(texts) == 1:
+        out.write_text(texts[0][3])
+        return
+    for tune, fmt, index, text in texts:
+        path = out / fmt / f"{tune.stem}{f'_{index}' if index else ''}.play"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
 
 
 def add_playspec_commands(parser) -> None:
@@ -164,6 +190,10 @@ def add_playspec_commands(parser) -> None:
     cmd.add_argument("--subtune", type=int, default=None)
     cmd.add_argument("--jobs", type=int, default=None)
     cmd.add_argument("--out", help="JSON report per tune")
+    cmd.add_argument("--emit", help="a .play file (one program) or a directory of them")
+    cmd.add_argument(
+        "--prove", type=int, default=0, help="prove each call, per-query timeout in ms"
+    )
     cmd.set_defaults(func=_reorder)
 
     def spec_cmd(name, func, text, binding=True):

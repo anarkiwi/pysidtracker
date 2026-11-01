@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from contextvars import ContextVar
+from functools import partial
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
@@ -19,8 +20,10 @@ from tqdm import tqdm
 
 from ..errors import SidError
 from . import smt
+from .emit import declared, emit, isomorphic, normal
 from .ir import K, Op, Program, Rd, V, width
-from .lower import mk
+from .lower import elaborate, mk
+from .syntax import parse
 
 SID = 0xD400
 REGS = 25
@@ -150,8 +153,8 @@ def span(e) -> Tuple[int, int]:
 
 
 def ranges(body, unknown: Iterable[str]) -> Dict[str, Tuple[int, int]]:
-    """An interval holding every value each variable ``body`` assigns takes (``unknown``:
-    variables that also hold values from outside, left out)."""
+    """An interval holding 0 and every value each variable ``body`` assigns takes
+    (``unknown``: variables that also hold values from outside, left out)."""
     unknown = frozenset(unknown)
     assigns = [
         (s[1], s[2]) for s in statements(body) if s[0] == "set" and s[1] not in unknown
@@ -162,7 +165,7 @@ def ranges(body, unknown: Iterable[str]) -> Dict[str, Tuple[int, int]]:
         new: Dict[str, Tuple[int, int]] = {}
         for name, value in assigns:
             lo, hi = span(value)
-            old = new.get(name, (lo, hi))
+            old = new.get(name, (0, 0))
             new[name] = (min(lo, old[0]), max(hi, old[1]))
         RANGES.reset(token)
         if new == table:
@@ -210,7 +213,7 @@ def fold(op: str, w: int, args: tuple):
     return mk(op, w, *args)
 
 
-def _stmt_exprs(s) -> tuple:
+def stmt_exprs(s) -> tuple:
     tag = s[0]
     if tag == "wr":
         return (s[1], s[2])
@@ -235,7 +238,7 @@ def _map_stmt(s, f):
     return s
 
 
-def _arms(s) -> tuple:
+def branches(s) -> tuple:
     return (s[2], s[3]) if s[0] == "if" else (s[2],) if s[0] == "loop" else ()
 
 
@@ -247,7 +250,7 @@ def statements(stmts) -> Iterable[tuple]:
     """Every statement in ``stmts``, nested ones included."""
     for s in stmts:
         yield s
-        for arm in _arms(s):
+        for arm in branches(s):
             yield from statements(arm)
 
 
@@ -257,8 +260,8 @@ def inline(stmts, procs: Dict[str, list]) -> list:
     for s in stmts:
         if s[0] == "call":
             out += inline(procs[s[1]], procs)
-        elif _arms(s):
-            out.append(_with_arms(s, [inline(a, procs) for a in _arms(s)]))
+        elif branches(s):
+            out.append(_with_arms(s, [inline(a, procs) for a in branches(s)]))
         else:
             out.append(s)
     return out
@@ -303,8 +306,8 @@ def nest(stmts) -> list:
     arm moved into its other arm (a lowered ``return``'s guard), recursively."""
     out: list = []
     for s in stmts:
-        if _arms(s):
-            s = _with_arms(s, [nest(a) for a in _arms(s)])
+        if branches(s):
+            s = _with_arms(s, [nest(a) for a in branches(s)])
         prev = out[-1] if out else None
         if s[0] == "if" and not s[3] and prev is not None and prev[0] == "if":
             skip = [_skipped(arm, s[1]) for arm in prev[2:]]
@@ -325,8 +328,8 @@ def rewrite(stmts, expr, stmt=None) -> list:
     out = []
     for s in stmts:
         s = _map_stmt(s, expr)
-        if _arms(s):
-            s = _with_arms(s, [rewrite(a, expr, stmt) for a in _arms(s)])
+        if branches(s):
+            s = _with_arms(s, [rewrite(a, expr, stmt) for a in branches(s)])
         got = stmt(s) if stmt else None
         out += [s] if got is None else got
     return out
@@ -366,7 +369,7 @@ class Effects:
             "wr": lambda: Effect(stores=(span(s[1]),)),
             "finish": lambda: Effect(finishes=True),
         }.get(s[0], Effect)()
-        for arm in _arms(s):
+        for arm in branches(s):
             eff = eff | self.seq(arm)
         self.memo[id(s)] = (s, eff)
         return eff
@@ -386,31 +389,44 @@ def _overlap(spans, intervals) -> bool:
 # ---- promotion -----------------------------------------------------------------------
 
 
-def fix(body, program: Program, memory: Optional[bytes]) -> Tuple[list, Dict[int, int]]:
-    """``(body, fixed)``: ``body`` with each fixed-address read of a ``ro`` or ``operand``
-    cell's byte that no bounded store reaches, once those are fixed, replaced by its
-    byte in ``memory`` (none without), ``fixed`` those bytes."""
-    if memory is None:
-        return body, {}
+def _lookup(memory, mask, seen: dict, addr: int) -> Optional[int]:
+    """The byte at ``addr`` where ``mask`` holds it fixed (recorded in ``seen``)."""
+    if not mask[addr]:
+        return None
+    seen[addr] = memory[addr]
+    return memory[addr]
+
+
+def fix(
+    body, program: Program, memory: Optional[bytes], observed=(), proof=None
+) -> tuple:
+    """``(body, fixed)``: ``body`` forwarded (:func:`forward`) with each fixed-address
+    read of a declared byte replaced by its byte in ``memory``, once no bounded store of
+    the result reaches any byte so replaced; ``fixed`` those bytes. Without ``memory``
+    nothing is fixed; a non-``ro`` byte in an ``observed`` interval never is."""
     table = np.zeros(0x10000, bool)
-    for cell in program.cells:
-        if cell.attrs & {"ro", "operand"}:
-            table[cell.extent()] = True
+    if memory is not None:
+        for cell in program.cells:
+            if "volatile" not in cell.attrs:
+                table[cell.extent()] = True
+        for lo, hi in observed:
+            table[lo : hi + 1] = False
+        for cell in program.cells:
+            if "ro" in cell.attrs:
+                table[cell.extent()] = True
     while True:
         fixed: Dict[int, int] = {}
 
-        def leaf(e):
-            if isinstance(e, Rd) and isinstance(e.a, K) and table[e.a.v]:
-                fixed[e.a.v] = memory[e.a.v]
-                return K(memory[e.a.v], 8)
-            return None
-
-        out = rewrite(body, lambda e: rebuild(e, leaf))
+        constant = partial(_lookup, memory, table, fixed)
+        trace: list = []
+        out = forward(body, constant, trace)
         hit = table.copy()
         for lo, hi in (span(s[1]) for s in statements(out) if s[0] == "wr"):
             if (lo, hi) != FULL:
                 hit[lo : hi + 1] = False
-        if (hit == table).all():
+        if not (table & ~hit)[list(fixed)].any():
+            if proof is not None:
+                proof.extend(trace)
             return out, fixed
         table = hit
 
@@ -428,7 +444,7 @@ def frame_local(body, keep: np.ndarray) -> List[int]:
 
     def run(stmts, written):
         for s in stmts:
-            for lo, hi in (r for e in _stmt_exprs(s) for r in reads(e)):
+            for lo, hi in (r for e in stmt_exprs(s) for r in reads(e)):
                 if lo == hi:
                     livein[lo] |= not written[lo]
                 elif (lo, hi) != FULL:
@@ -492,9 +508,49 @@ def staging(name: str) -> bool:
     return re.fullmatch(r"[oh][12]_\d+", name) is not None
 
 
+def split(body, base: int = SID) -> list:
+    """``body`` with each bounded non-constant access that may reach the SID taken
+    apart into one constant-address access per SID register it may reach, and the
+    access as before where it may reach none."""
+    band = (base, base + REGS - 1)
+    count = [0]
+
+    def cases(addr) -> list:
+        lo, hi = span(addr)
+        if lo == hi or (lo, hi) == FULL or hi < band[0] or lo > band[1]:
+            return []
+        return list(range(max(lo, band[0]), min(hi, band[1]) + 1))
+
+    def leaf(e):
+        if not isinstance(e, Rd) or not cases(e.a):
+            return None
+        out = Rd(rebuild(e.a, leaf))
+        for c in reversed(cases(e.a)):
+            hit = Op("eq", 1, (e.a, K(c, 16)))
+            out = Op("ite", 8, (hit, Rd(K(c, 16)), out))
+        return out
+
+    def stmt(s):
+        if s[0] != "wr" or not cases(s[1]):
+            return None
+        count[0] += 1
+        at, value = f"sa_{count[0]}", f"sv_{count[0]}"
+        RANGES.get()[at] = span(s[1])
+        lo, hi = span(s[1])
+        inside = band[0] <= lo and hi <= band[1]
+        out = [] if inside else [("wr", V(at, 16), V(value, 8))]
+        for c in reversed(cases(s[1])):
+            hit = Op("eq", 1, (V(at, 16), K(c, 16)))
+            out = [("if", hit, [("wr", K(c, 16), V(value, 8))], out)]
+        return [("set", at, s[1]), ("set", value, s[2])] + out
+
+    return rewrite(body, lambda e: rebuild(e, leaf), stmt)
+
+
 def instrument(body, slots: Sequence[Slot], base: int = SID) -> list:
     """``body`` with SID stores and reads through the slots' output variables (the flags
-    cleared first) and no SID store left."""
+    cleared first) and no SID store left; a store through a :func:`split` address
+    variable has missed every SID register."""
     second = {r for r, k in slots if k == 2}
     band = [(base, base + REGS - 1)]
 
@@ -510,7 +566,9 @@ def instrument(body, slots: Sequence[Slot], base: int = SID) -> list:
         return None
 
     def stmt(s):
-        if s[0] != "wr" or not _overlap(band, [span(s[1])]):
+        if s[0] != "wr" or isinstance(s[1], V) and s[1].n.startswith("sa_"):
+            return None
+        if not _overlap(band, [span(s[1])]):
             return None
         lo, hi = span(s[1])
         if lo != hi:
@@ -525,8 +583,8 @@ def instrument(body, slots: Sequence[Slot], base: int = SID) -> list:
             ("set", flag_var(one).n, TRUE),
         ]
 
-    head = [("set", flag_var(s).n, FALSE) for s in slots]
-    head += [("set", out_var(s).n, K(0, 8)) for s in slots]
+    head = [("set", out_var(s).n, K(0, 8)) for s in slots]
+    head += [("set", flag_var(s).n, FALSE) for s in slots]
     return head + rewrite(body, lambda e: rebuild(e, leaf), stmt)
 
 
@@ -637,22 +695,28 @@ class _Forward:
     """Constant, copy and single-use propagation under the conditions known to hold,
     merging arms at joins into an ``ite`` on a snapshot of the condition."""
 
-    def __init__(self, body):
+    def __init__(self, body, constant=lambda addr: None, proof=None):
         self.effects = Effects()
         self.counts: Dict[str, int] = {}
         self.guards = 0
+        self.constant = constant
+        self.proof = proof
         for s in statements(body):
-            for e in _stmt_exprs(s):
+            for e in stmt_exprs(s):
                 for n in names(e):
                     self.counts[n] = self.counts.get(n, 0) + 1
+        assigned = {s[1] for s in statements(body) if s[0] == "set"}
+        self.guards = max(
+            (int(n[2:]) for n in assigned if re.fullmatch(r"g_\d+", n)), default=0
+        )
 
     def free(self, name: str) -> bool:
         """Whether any expression may be forwarded into ``name``'s uses."""
         return staging(name) or self.counts.get(name, 0) <= 1
 
-    @staticmethod
-    def sub(e, env: dict):
-        """``e`` with known variables and conditions replaced."""
+    def sub(self, e, env: dict):
+        """``e`` with known variables and conditions replaced, and reads of fixed
+        bytes by their values."""
 
         def leaf(n):
             fact = env.get(n)
@@ -660,7 +724,18 @@ class _Forward:
                 fact = env.get(n.n)
             return None if fact is None else fact.expr
 
-        return rebuild(e, leaf)
+        def known(n):
+            if isinstance(n, Rd) and isinstance(n.a, K):
+                value = self.constant(n.a.v)
+                return None if value is None else K(value, 8)
+            return None
+
+        e = rebuild(e, leaf)
+        while True:
+            folded = rebuild(e, known)
+            if folded == e:
+                return e
+            e = folded
 
     @staticmethod
     def kill(env: dict, eff: Effect) -> None:
@@ -691,6 +766,11 @@ class _Forward:
             out[cond.a[0]] = _Fact(FALSE if truth else TRUE, fact.uses, fact.spans)
         return out
 
+    def note(self, *obligation) -> None:
+        """Record a proof obligation (see :func:`discharge`)."""
+        if self.proof is not None:
+            self.proof.append(obligation)
+
     def seq(self, stmts, env: dict) -> list:
         """``stmts`` rewritten under the facts ``env`` (updated in place)."""
         out: list = []
@@ -699,18 +779,33 @@ class _Forward:
                 out += self.branch(s, env)
                 continue
             if s[0] == "loop":
+                bound = s[3]
+                test = self.sub(s[1], env)
+                while test == TRUE and bound > 1:
+                    self.note("cond", dict(env), s[1], TRUE)
+                    out += self.seq(s[2], env)
+                    bound -= 1
+                    test = self.sub(s[1], env)
+                self.note("cond", dict(env), s[1], test)
+                if test == FALSE:
+                    continue
+                s = ("loop", s[1], s[2], bound, s[4])
                 self.kill(env, self.effects(s))
                 inner = dict(env)
-                out.append(
-                    ("loop", self.sub(s[1], inner), self.seq(s[2], inner), *s[3:])
-                )
+                test = self.sub(s[1], inner)
+                self.note("cond", dict(inner), s[1], test)
+                body = self.seq(s[2], inner)
+                self.note("join", inner, None, None, dict(env))
+                out.append(("loop", test, body, *s[3:]))
                 continue
-            s = _map_stmt(s, lambda e: self.sub(e, env))
-            out.append(s)
-            self.kill(env, self.effects(s))
-            if s[0] == "set":
-                self.learn(env, s[1], s[2])
-            if s[0] == "finish":
+            pre = dict(env) if self.proof is not None else None
+            new = _map_stmt(s, lambda e: self.sub(e, env))
+            out.append(new)
+            self.kill(env, self.effects(new))
+            if new[0] == "set":
+                self.learn(env, new[1], new[2])
+            self.note("step", pre, s, new, dict(env))
+            if new[0] == "finish":
                 break
         return out
 
@@ -725,9 +820,12 @@ class _Forward:
     def branch(self, s, env: dict) -> list:
         """An ``if``: a known condition picks its arm, else both arms run and merge."""
         cond = self.sub(s[1], env)
+        self.note("cond", dict(env), s[1], cond)
         if isinstance(cond, K) and cond.v is not None:
             return self.seq(s[2] if cond.v else s[3], env)
         then_env, else_env = self.assume(env, cond, True), self.assume(env, cond, False)
+        self.note("entry", dict(env), cond, TRUE, dict(then_env))
+        self.note("entry", dict(env), cond, FALSE, dict(else_env))
         then = self.seq(s[2], then_env)
         other = self.seq(s[3], else_env)
         eff = self.effects(s)
@@ -750,6 +848,9 @@ class _Forward:
         for name, (a, b) in merged.items():
             if test is not None:
                 self.learn(env, name, fold("ite", width(a), (test, a, b)))
+        held = test if merged else None
+        self.note("join", then_env, held, TRUE, dict(env))
+        self.note("join", else_env, held, FALSE, dict(env))
         if not then and not other and not volatile(cond):
             return out
         if not then:
@@ -757,9 +858,11 @@ class _Forward:
         return out + [("if", cond, then, other)]
 
 
-def forward(body) -> list:
-    """``body`` with values forwarded to their uses (see :class:`_Forward`)."""
-    return _Forward(body).seq(body, {})
+def forward(body, constant=lambda addr: None, proof=None) -> list:
+    """``body`` with values forwarded to their uses and each loop whose condition is
+    known unrolled (see :class:`_Forward`); ``constant`` gives fixed bytes, and
+    ``proof`` (a list) collects the obligations that justify the result."""
+    return _Forward(body, constant, proof).seq(body, {})
 
 
 def eliminate(
@@ -779,7 +882,11 @@ def eliminate(
             other, b = eliminate(s[3], live, end)
             if not then and not other and not volatile(s[1]):
                 continue
-            s = ("if", s[1], then, other)
+            s = (
+                ("if", s[1], then, other)
+                if then
+                else ("if", fold("lnot", 1, (s[1],)), other, [])
+            )
             live = a | b | names(s[1])
         elif tag == "loop":
             inner = live | names(s[1])
@@ -793,7 +900,7 @@ def eliminate(
         elif tag == "finish":
             live = end
         else:
-            live = live.union(*map(names, _stmt_exprs(s)))
+            live = live.union(*map(names, stmt_exprs(s)))
         out.append(s)
     out.reverse()
     return out, live
@@ -845,6 +952,9 @@ class Reordered:
     paths: FrozenSet[tuple] = field(default_factory=frozenset)
     ranges: Dict[str, Tuple[int, int]] = field(default_factory=dict)
     fixed: Dict[int, int] = field(default_factory=dict)
+    text: str = ""
+    roundtrip: Optional[str] = None
+    source: Optional[tuple] = None
 
 
 def reorder(
@@ -854,23 +964,30 @@ def reorder(
     base: int = SID,
     observed: Iterable[Tuple[int, int]] = (),
     memory: Optional[bytes] = None,
+    proof: Optional[dict] = None,
 ) -> Reordered:
     """``program`` rescheduled to write the kept writes of ``order`` (text or slots) in
     order; ``observed`` lists address intervals other code reads, never promoted;
-    reads of ``ro`` cells at fixed addresses take their values from ``memory``."""
+    reads of declared bytes no store reaches take their values from ``memory``;
+    ``proof`` (a dict) collects each stage and the obligations of :func:`prove`."""
     slots = parse_order(order) if isinstance(order, str) else tuple(order)
-    body, fixed = fix(nest(inline(program.body, program.procs)), program, memory)
+    proof = {} if proof is None else proof
+    proof["nested"] = nest(inline(program.body, program.procs))
+    proof["fix"] = []
+    body, fixed = fix(proof["nested"], program, memory, observed, proof["fix"])
+    proof["fixed_body"] = body
     known = ranges(body, [n for n, _w, _d in program.controls] + list(program.inputs))
     token = RANGES.set(known)
     try:
         return replace(
-            _reorder(program, body, slots, base, observed, known), fixed=fixed
+            _reorder(program, body, slots, base, observed, known, proof), fixed=fixed
         )
     finally:
         RANGES.reset(token)
 
 
-def _reorder(program, body, slots, base, observed, known) -> Reordered:
+def _reorder(program, body, slots, base, observed, known, proof) -> Reordered:
+    # pylint: disable=too-many-arguments
     keep = np.zeros(0x10000, bool)
     keep[base : base + REGS] = True
     for lo, hi in observed:
@@ -879,12 +996,20 @@ def _reorder(program, body, slots, base, observed, known) -> Reordered:
         if "volatile" in cell.attrs:
             keep[cell.extent()] = True
     cells = frame_local(body, keep)
-    placed = place(instrument(promote(body, cells), slots, base), slots, base)
+    placed = place(
+        instrument(split(promote(body, cells), base), slots, base), slots, base
+    )
     paths = flush_order(placed, slots)
     if paths != {slots}:
         raise OrderError("a path flushes the slots out of order")
     end = frozenset(n for n, _w, _d in program.controls)
-    out = eliminate(forward(placed), end, end)[0]
+    proof["placed"], proof["forward"] = placed, []
+    proof["forwarded"] = forward(placed, proof=proof["forward"])
+    out = eliminate(proof["forwarded"], end, end)[0]
+    out = declared(
+        rewrite(out, normal, lambda s: [] if s[0] == "hook" else None),
+        [*end, *program.inputs],
+    )
     staged = sorted({s[1] for s in statements(out) if s[0] == "set" and staging(s[1])})
     every = program.body + [s for p in program.procs.values() for s in p]
     return Reordered(
@@ -893,7 +1018,7 @@ def _reorder(program, body, slots, base, observed, known) -> Reordered:
         cells,
         staged,
         counts(every, base),
-        counts(body, base),
+        counts(inline(program.body, program.procs), base),
         counts(out, base),
         paths,
         known,
@@ -929,7 +1054,7 @@ def _logged(body, slots: Sequence[Slot], base: int, cells: Sequence[int]) -> lis
     def alias(s) -> list:
         hits = [
             Op("eq", 1, (a, K(c, 16)))
-            for e in _stmt_exprs(s)
+            for e in stmt_exprs(s)
             for a in _wild(e)
             for c in cells
         ]
@@ -970,13 +1095,38 @@ def check(
 
 
 def _check(original, result, base, timeout_ms, progress) -> Optional[tuple]:
-    slots, cells = result.slots, result.promoted
-    flushes = [flush(s, base) for s in slots]
+    flushes = [flush(s, base) for s in result.slots]
     reference = rewrite(
-        instrument(inline(original.body, original.procs), slots, base) + [("finish",)],
+        instrument(
+            split(inline(original.body, original.procs), base), result.slots, base
+        )
+        + [("finish",)],
         lambda e: e,
         lambda s: flushes + [s] if s[0] == "finish" else None,
     )
+    return equal(
+        original,
+        (reference, result.program.body),
+        result,
+        base=base,
+        timeout_ms=timeout_ms,
+        progress=progress,
+    )
+
+
+def equal(
+    original: Program,
+    bodies: tuple,
+    result: Reordered,
+    *,
+    base: int = SID,
+    timeout_ms: int = 0,
+    progress: bool = False,
+) -> Optional[tuple]:
+    """None if the two instrumented ``bodies`` log the same SID writes and leave the
+    same memory and controls outside the SID and ``result``'s promoted cells, under
+    ``result``'s premises; else ``(what differs, z3 model or None)``."""
+    slots, cells = result.slots, result.promoted
     memo: dict = {}
     a, b = (
         smt.step(
@@ -988,7 +1138,7 @@ def _check(original, result, base, timeout_ms, progress) -> Optional[tuple]:
             smt.symbolic_memory("pre"),
             smt.initial_env(original, "pre_"),
         )
-        for body in (reference, result.program.body)
+        for body in bodies
     )
     runs = (a, b)
     stored = {x for st in runs for x in st.writes}
@@ -1056,7 +1206,9 @@ def compare(make, order, frames: int, base: int = SID, **options) -> Tuple:
     """``(verdict, results)``: ``verdict`` None if the player ``make(transform)`` builds
     plays the same grid rescheduled to ``order`` as without (``make(None)``), each call
     writing exactly the original's kept writes in order, else where they first differ;
-    ``results`` the :class:`Reordered` of each program. ``options`` go to :func:`reorder`;
+    ``results`` the :class:`Reordered` of each program. The player plays each program as
+    its emitted spec (:attr:`Reordered.text`) elaborated again, which must be the
+    reordered program up to names. ``options`` go to :func:`reorder`;
     where the tune's own 6502 code runs around the spec, no cell is promoted.
     """
     slots = parse_order(order) if isinstance(order, str) else tuple(order)
@@ -1067,10 +1219,20 @@ def compare(make, order, frames: int, base: int = SID, **options) -> Tuple:
         options.setdefault("observed", [(0, 0xFFFF)])
 
     def transform(program: Program, memory: bytes) -> Program:
-        results.append(reorder(program, slots, base=base, memory=memory, **options))
-        return results[-1].program
+        result = reorder(program, slots, base=base, memory=memory, **options)
+        result.text = emit(result.program, f"{program.name}_ordered", base)
+        back = elaborate(parse(result.text), {}, standard=program.standard)
+        result.roundtrip = isomorphic(
+            result.program.body, inline(back.body, back.procs)
+        )
+        result.source = (program, memory, options.get("observed", ()))
+        results.append(result)
+        return back
 
     new_grid, new_writes = played(make(transform), frames, base)
+    for result in results:
+        if result.roundtrip is not None:
+            return f"emitted spec differs: {result.roundtrip}", results
     for frame, (old, new) in enumerate(zip(writes, new_writes)):
         if kept(old, slots) != new:
             return f"frame {frame}: writes {new}, keeps {kept(old, slots)}", results
@@ -1078,11 +1240,61 @@ def compare(make, order, frames: int, base: int = SID, **options) -> Tuple:
     return (f"frame {rows[0]}: grid differs" if len(rows) else None), results
 
 
-def survey(path: str, order, frames: int, subtune: Optional[int] = None) -> dict:
+def census(result: Reordered) -> dict:
+    """What a reordered program still uses: statement and expression forms, tables,
+    persistent and promoted cells, staging holds, SID registers per voice, loops and
+    self-counting cells."""
+    body, every = result.program.body, list(statements(result.program.body))
+    ops = {
+        n.op for s in every for e in stmt_exprs(s) for n in walk(e) if isinstance(n, Op)
+    }
+    ops |= {
+        "read"
+        for s in every
+        for e in stmt_exprs(s)
+        for n in walk(e)
+        if isinstance(n, Rd)
+    }
+    stores = [span(s[1]) for s in every if s[0] == "wr"]
+    sid = sorted({lo - SID for lo, hi in stores if lo == hi and SID <= lo < SID + REGS})
+    counters = {
+        s[1]
+        for s in every
+        if s[0] == "wr"
+        and isinstance(s[2], Op)
+        and s[2].op in ("add", "sub")
+        and s[2].a[0] == Rd(s[1])
+        and isinstance(s[2].a[1], K)
+    }
+    tables = re.findall(r"^cell (\w+): u8\[(\d+)\]", result.text, re.M)
+    del body
+    return {
+        "statements": {
+            k: sum(s[0] == k for s in every) for k in sorted({s[0] for s in every})
+        },
+        "operators": sorted(ops),
+        "tables": [name for name, _n in tables if name != "sid"],
+        "persistent_cells": result.after.cells,
+        "promoted_cells": len(result.promoted),
+        "fixed_bytes": len(result.fixed),
+        "staged": result.staged,
+        "voices": sorted({r // 7 for r in sid if r < 21}),
+        "song_registers": [r for r in sid if r >= 21],
+        "loops": [s[3] for s in every if s[0] == "loop"],
+        "counters": len(counters),
+        "finish": any(s[0] == "finish" for s in every),
+    }
+
+
+def survey(
+    path: str, order, frames: int, subtune: Optional[int] = None, prove_ms: int = 0
+) -> dict:
     """:func:`compare` on a tune an installed format plays with a spec: the format, the
-    verdict, and per program its staged variables, promoted cells and counts inlined
-    and after."""
+    verdict, and per program its staged variables, counts inlined and after, emitted
+    spec, :func:`census` and, with ``prove_ms`` (a per-query timeout), whole-call proof.
+    """
     from ..formats import find_format  # pylint: disable=import-outside-toplevel
+    from .outproof import prove  # pylint: disable=import-outside-toplevel
 
     data = Path(path).read_bytes()
     fmt = find_format(data)
@@ -1090,19 +1302,30 @@ def survey(path: str, order, frames: int, subtune: Optional[int] = None) -> dict
     verdict, results = compare(
         lambda transform: fmt.spec_player(model, transform=transform), order, frames
     )
-    return {
-        "format": fmt.name,
-        "verdict": verdict,
-        "programs": [
-            {
-                "staged": r.staged,
-                "promoted": len(r.promoted),
-                "inlined": asdict(r.inlined),
-                "after": asdict(r.after),
+    programs = []
+    for r in results:
+        entry = {
+            "staged": r.staged,
+            "promoted": len(r.promoted),
+            "inlined": asdict(r.inlined),
+            "after": asdict(r.after),
+            "census": census(r),
+            "text": r.text,
+        }
+        if prove_ms:
+            program, memory, observed = r.source
+            proof = prove(
+                program, order, memory=memory, observed=observed, timeout_ms=prove_ms
+            )
+            entry["proof"] = {
+                "holds": proof.holds,
+                "open": proof.open[:5],
+                "obligations": {k: d.total for k, d in proof.passes.items()},
+                "seconds": round(proof.seconds, 1),
+                "peak_mb": proof.peak_mb,
             }
-            for r in results
-        ],
-    }
+        programs.append(entry)
+    return {"format": fmt.name, "verdict": verdict, "programs": programs}
 
 
 __all__ = [
@@ -1110,6 +1333,7 @@ __all__ = [
     "Counts",
     "OrderError",
     "Reordered",
+    "census",
     "check",
     "compare",
     "kept",

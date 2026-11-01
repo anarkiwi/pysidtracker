@@ -212,8 +212,6 @@ def test_kept_takes_the_last_writes_in_slot_order():
 @pytest.mark.parametrize(
     "stmts, message",
     [
-        ("mem[L.sid + u16(tick)] := 1;", "may reach the SID"),
-        ("tick := mem[L.sid + u16(tick)];", "may read the SID"),
         ("mem[mem16[L.w]] := 1;", "unbounded pointer"),
         ("native 0x1000() resumes 0x1003;", "opaque"),
     ],
@@ -303,3 +301,14 @@ def test_survey_and_cli(tmp_path, monkeypatch):
     )
     args.func(args)
     assert set(json.loads(out.read_text())) == {str(tune)}
+
+
+def test_a_store_at_a_variable_sid_offset_is_split():
+    text = (
+        HEAD
+        + "machine m { step { mem[L.sid + u16(tick & 7)] := tick; tick := mem[L.sid + 2]; } }\nschedule { m; }\n"
+    )
+    original = program(text)
+    result = O.reorder(original, ORDER)
+    assert result.after.sid_writes == 8
+    assert O.check(original, result) is None
