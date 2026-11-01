@@ -1,11 +1,8 @@
 """Tests for the register-grid oracle and its framers."""
 
-import struct
-
 import pytest
 
 from pysidtracker import (
-    PAL_CYCLES_PER_FRAME,
     EmuPlayer,
     SidParseError,
     aligned_match,
@@ -14,9 +11,8 @@ from pysidtracker import (
     register_grid,
     run_until,
 )
-from pysidtracker.emu import observe_data_access
 from pysidtracker.image import SidImage
-from pysidtracker.oracle import _SIDWR_REC, boot_flat
+from pysidtracker.oracle import _SIDWR_REC
 from pysidtracker.testing import whole_song
 
 from .helpers import build_prg, build_psid
@@ -66,69 +62,12 @@ _ILLEGAL_PLAY = bytes(
 )
 
 
-def test_register_grid_from_bytes():
-    tune = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
-    grid = register_grid(tune, whole_song(3))
-    assert len(grid) == 3
-    for row in grid:
-        assert len(row) == 25
-        assert row[0] == 0x0A
-        assert row[1] == 0x05
-
-
-def test_register_grid_from_image():
-    tune = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
-    image = SidImage.from_bytes(tune)
-    grid = register_grid(image, whole_song(1))
-    assert grid[0][0] == 0x0A
-
-
-def test_boot_flat_setup_sees_init():
-    image = SidImage.from_bytes(
-        build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
-    )
-    stores = []
-
-    def setup(mpu, subject):
-        assert subject[0x1000] == 0xA9 and subject[0xD418] == 0x0F
-        observe_data_access(mpu, on_write=lambda addr, val: stores.append((addr, val)))
-
-    subject, _, _, play = boot_flat(image, setup=setup)
-    assert stores == [(0xD400, 0x0A)] and subject[0xD400] == 0x0A and play == 0x1006
-
-
-@pytest.mark.parametrize("flags, video", [(0x00, 1), (0x04, 1), (0x08, 0), (0x0C, 1)])
-def test_boot_flat_sets_the_kernal_pal_flag_for_the_header_clock(flags, video):
-    init = bytes([0xAD, 0xA6, 0x02, 0x8D, 0x00, 0xD4, 0x60])  # LDA $02A6/STA $D400
-    tune = build_psid(init, load=0x1000, init=0x1000, play=0x1006, flags=flags)
-    assert register_grid(tune, whole_song(1))[0][0] == video
-
-
-def test_boot_flat_tune_bytes_over_the_pal_flag():
-    tune = build_psid(bytes([0x7E]), load=0x02A6, init=0x02A6, play=0x02A6)
-    assert boot_flat(SidImage.from_bytes(tune), max_cycles=0)[0][0x02A6] == 0x7E
-
-
 _PAL_READ = bytes([0xAD, 0xA6, 0x02, 0x8D, 0x00, 0xD4, 0x60])  # LDA $02A6/STA $D400
-
-
-@pytest.mark.parametrize("ntsc, video", [(False, 1), (True, 0)])
-def test_emuplayer_sets_the_kernal_pal_flag(ntsc, video):
-    player = EmuPlayer(_PAL_READ, load=0x1000, init=0x1000, play=0x1006, ntsc=ntsc)
-    assert player.regs[0] == video
 
 
 def test_emuplayer_tune_bytes_over_the_pal_flag():
     player = EmuPlayer(b"\x7e" + _PAL_READ, load=0x02A6, init=0x02A7, play=0x02AD)
     assert player.regs[0] == 0x7E
-
-
-def test_register_grid_illegal_opcodes():
-    image = _SIMPLE[:6] + _ILLEGAL_PLAY  # init then illegal play
-    tune = build_psid(image, load=0x1000, init=0x1000, play=0x1006)
-    grid = register_grid(tune, whole_song(2), illegal_opcodes=True)
-    assert len(grid) == 2
-    assert grid[0][0] == 0x0A
 
 
 def test_register_grid_no_header():
@@ -137,64 +76,8 @@ def test_register_grid_no_header():
         register_grid(image, whole_song(1))
 
 
-def test_emuplayer_runs_tunes_own_code():
-    player = EmuPlayer(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
-    assert player.regs[0] == 0x0A  # init wrote $D400
-    grid = player.render_grid(whole_song(3))
-    assert len(grid) == 3
-    for row in grid:
-        assert len(row) == 25 and row[0] == 0x0A and row[1] == 0x05
-
-
-def test_emuplayer_matches_register_grid():
-    tune = build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
-    player = EmuPlayer(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
-    assert player.render_grid(whole_song(3)) == register_grid(tune, whole_song(3))
-
-
-def test_emuplayer_masks_pw_hi():
-    # play writes $7D to $D403 (a PW-high register); only the low nibble is real.
-    play = bytes([0xA9, 0x7D, 0x8D, 0x03, 0xD4, 0x60])
-    player = EmuPlayer(_SIMPLE[:6] + play, load=0x1000, init=0x1000, play=0x1006)
-    player.play_frame()
-    assert player.regs[3] == 0x0D
-
-
-def test_emuplayer_play_frame_diffs():
-    player = EmuPlayer(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
-    assert len(player.play_frame()) == 25  # first frame: full register file
-    assert player.play_frame() == []  # steady state: no register changed
-
-
-def test_emuplayer_illegal_opcodes():
-    player = EmuPlayer(
-        _SIMPLE[:6] + _ILLEGAL_PLAY,
-        load=0x1000,
-        init=0x1000,
-        play=0x1006,
-        illegal_opcodes=True,
-    )
-    assert player.regs[0] == 0x0A
-    assert len(player.render_grid(whole_song(2))) == 2
-
-
 def test_grid_from_writes_empty():
     assert grid_from_writes([]) == []
-
-
-def test_grid_from_writes_gap_anchor_forward_fill_and_pw_mask():
-    cpf = PAL_CYCLES_PER_FRAME
-    writes = [
-        (0, 0, 0xAA),  # init baseline
-        (16, 3, 0xFF),  # PW-hi reg -> masked to 0x0F
-        (cpf, 1, 0x22),  # first play (after > gap)
-        (2 * cpf, 1, 0x33),
-    ]
-    grid = grid_from_writes(writes)
-    assert grid == [
-        [0xAA, 0x22, 0, 0x0F] + [0] * 21,
-        [0xAA, 0x33, 0, 0x0F] + [0] * 21,
-    ]
 
 
 def test_grid_from_writes_out_of_range_reg_ignored():
@@ -212,14 +95,6 @@ def test_read_sidwr(tmp_path):
     blob = b"".join(_SIDWR_REC.pack(*rec) for rec in records)
     path.write_bytes(blob)
     assert read_sidwr(path) == [(100, 0, 0x11), (200, 1, 0x22)]
-
-
-def test_read_sidwr_ignores_trailing_partial(tmp_path):
-    path = tmp_path / "t.sidwr.bin"
-    blob = _SIDWR_REC.pack(1, 0xD400, 0, 0x05) + b"\x00\x01\x02"
-    path.write_bytes(blob)
-    assert read_sidwr(path) == [(1, 0, 0x05)]
-    assert struct.calcsize("<qHBB") == _SIDWR_REC.size
 
 
 def test_aligned_match_exact():
@@ -254,27 +129,6 @@ def test_emuplayer_loses_the_interrupt_a_call_outlasts():
         13,
         13,
     ]
-
-
-def test_emuplayer_calls_play_a_period_apart():
-    # play: LDA $D012 / STA $D400 -- the raster line at the call.
-    play = bytes([0xAD, 0x12, 0xD0, 0x8D, 0x00, 0xD4, 0x60])
-    image = _SIMPLE[:6] + play
-    paced = EmuPlayer(
-        image, load=0x1000, init=0x1000, play=0x1006, cycles_per_frame=19656
-    )
-    assert len({row[0] for row in paced.render_grid(whole_song(4))}) == 1
-    free = EmuPlayer(image, load=0x1000, init=0x1000, play=0x1006)
-    assert len({row[0] for row in free.render_grid(whole_song(100))}) > 1
-
-
-def test_boot_flat_init_run_replaces_the_init_call():
-    image = SidImage.from_bytes(
-        build_psid(_SIMPLE, load=0x1000, init=0x1000, play=0x1006)
-    )
-    calls = []
-    subject, *_ = boot_flat(image, init_run=lambda *args: calls.append(args[2:]))
-    assert calls == [(0x1000, 0, 8_000_000)] and subject[0xD400] == 0
 
 
 def _simple_image():

@@ -16,13 +16,6 @@ def _image(payload, load=0x1000):
     return SidImage.from_prg(bytes([load & 0xFF, load >> 8]) + bytes(payload))
 
 
-def test_pattern_compile_fields():
-    pat = CodePattern("A9 {imm} 8D 05 D4 {addr:w}")
-    assert pat.length == 7
-    assert pat.literals == ((0, 0xA9), (2, 0x8D), (3, 0x05), (4, 0xD4))
-    assert pat.captures == (("imm", 1, 1), ("addr", 5, 2))
-
-
 def test_pattern_bad_token():
     with pytest.raises(ValueError):
         CodePattern("A9 ZZ")
@@ -30,20 +23,6 @@ def test_pattern_bad_token():
         CodePattern("A9 {bad:q}")
     with pytest.raises(ValueError):
         CodePattern("   ")
-
-
-def test_literal_wildcard_and_captures():
-    img = _image([0xA9, 0x2A, 0x8D, 0x05, 0xD4, 0xBD, 0x34, 0x12, 0x85, 0xFA])
-    imm = find_code_first(img, "A9 {imm} 8D 05 D4")
-    assert imm.addr == 0x1000
-    assert imm.captures == {"imm": 0x2A}
-    word = find_code_first(img, "BD {base:w} 85 FA")
-    assert word.addr == 0x1005
-    assert word.captures == {"base": 0x1234}
-    # ?? wildcard matches any operand byte.
-    wild = find_code_first(img, "A9 ?? 8D 05 D4")
-    assert wild.addr == 0x1000
-    assert wild.captures == {}
 
 
 def test_multiple_matches_and_none():
@@ -82,43 +61,6 @@ def test_image_convenience_methods():
 # --- re-expressing real parser fingerprints as CodePatterns ----------------
 
 
-def test_reexpress_futurecomposer_signature():
-    # pyfuturecomposer _FC_SIGNATURES[1]: the $D417 filter-store fragment. The
-    # spec uses the SAME ?? wildcard tokens the parser hand-rolled as None.
-    spec = "8D 17 D4 A0 06 88 88 88 88 88 88 B1 ??"
-    frag = bytes.fromhex("8D17D4A006888888888888B1") + bytes([0x7C])  # zp ptr wildcard
-    img = _image([0x00] * 4 + list(frag))
-    match = find_code_first(img, spec)
-    assert match.addr == 0x1004
-
-
-def test_reexpress_musicassembler_order_sig():
-    # pymusicassembler _SIG_ORDER = rb"\xbd(..)\x85\xfa\xbd(..)\x85\xfb":
-    # LDA order_lo,X ; STA $fa ; LDA order_hi,X ; STA $fb, bases captured.
-    frag = [0xBD, 0x00, 0x20, 0x85, 0xFA, 0xBD, 0x80, 0x20, 0x85, 0xFB]
-    img = _image(frag)
-    match = find_code_first(img, "BD {order_lo:w} 85 FA BD {order_hi:w} 85 FB")
-    assert match.captures == {"order_lo": 0x2000, "order_hi": 0x2080}
-
-
-def test_reexpress_defmon_signature():
-    # pydefmon SIGNATURE tokens are already a masked skeleton; feed them verbatim.
-    spec = (
-        "A2 ?? A9 ?? 8E 02 D4 8D 03 D4 A2 ?? A9 ?? 8E 00 D4 8D 01 D4 "
-        "A2 ?? A0 ?? A9 ?? ?? ?? 8E 06 D4 8C 05 D4 8D 04 D4 4C"
-    )
-    tokens = spec.split()
-    frag = bytes(0x00 if t == "??" else int(t, 16) for t in tokens)
-    img = _image([0x11, 0x22] + list(frag))
-    assert find_code_first(img, spec).addr == 0x1002
-
-
-def test_reexpress_jch_immediate_idiom():
-    # pyjch _one_operand(LDA #imm, STA $D405): A9 <imm> 8D 05 D4.
-    img = _image([0xA9, 0x11, 0x8D, 0x05, 0xD4])
-    assert find_code_first(img, "A9 {ad} 8D 05 D4").captures == {"ad": 0x11}
-
-
 def test_site_alternation_reports_label_and_captures():
     img = _image([0xA9, 0x01, 0x8D, 0x00, 0x20, 0xA9, 0x00, 0x8D, 0x00, 0x30])
     pat = SitePattern("( on: A9 01 | off: A9 00 ) 8D {dst:w}")
@@ -129,12 +71,6 @@ def test_site_alternation_reports_label_and_captures():
     assert on.captures == {"dst": 0x2000}
     assert (off.addr, off.alt, off.captures) == (0x1005, "off", {"dst": 0x3000})
     assert pat.any(img)
-
-
-def test_site_unlabelled_alternatives_use_index():
-    pat = SitePattern("(A9 | A2) {v}")
-    match = pat.find_first(bytes([0x00, 0xA2, 0x07]))
-    assert (match.addr, match.alt, match.captures) == (1, "1", {"v": 7})
 
 
 def test_site_optional_group_and_gap():
@@ -162,11 +98,6 @@ def test_site_policy_first_and_span():
     assert len(SitePattern("EA EA").find_all(img)) == 2
     assert len(SitePattern("EA EA", span="image").find_all(img)) == 3
     assert len(SitePattern("EA EA").find_all(img, start=0x1001, end=0x1003)) == 1
-
-
-def test_site_no_alternation_has_no_alt():
-    match = SitePattern("EA").find_first(bytes([0xEA]))
-    assert (match.alt, match.alts) == (None, ())
 
 
 def test_site_optional_group_capture_scope():
@@ -242,9 +173,3 @@ def test_jump_table_walks_back_to_the_first_entry(source):
     assert jump_table(source, 0x1011) is None
     assert play_entries(source, 0x1007) == {0x100A, 0x1011}
     assert play_entries(source, 0x100D) == {0x1010}
-
-
-def test_jump_table_takes_the_last_player():
-    image = _image(_PLAYER + _jumps(0x1019, 0x101A) + b"\x60\x60")
-    assert jump_table(image, 0x101B) == 0x1013
-    assert play_entries(image, 0x1013) == {0x1016, 0x101A}

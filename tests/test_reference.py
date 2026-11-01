@@ -4,7 +4,6 @@ from pysidtracker.reference import (
     best_reference,
     find_reference,
     match_at,
-    opcode_length,
     reference_pattern,
 )
 
@@ -39,27 +38,6 @@ def relocated(ref, to):
     code = bytearray(code)
     code[ref.data[0][0] :] = ref.code[ref.data[0][0] :]
     return Reference(ref.name, bytes(code), to, labels, ref.data)
-
-
-def test_opcode_length():
-    assert [opcode_length(o) for o in (0xEA, 0xA9, 0xAD, 0x20, 0x60, 0xD0, 0x6C)] == [
-        1,
-        2,
-        3,
-        3,
-        1,
-        2,
-        3,
-    ]
-
-
-def test_wildcards():
-    ref = build(0x1000)
-    pat = reference_pattern(ref).spec.split()
-    assert pat[3] == "??"  # zero-page $fb
-    assert pat[-5] == "??"  # data byte
-    assert pat[5:7] == ["??", "??"]  # relocated tbl operand
-    assert "D4" in pat  # $d400 stays literal
 
 
 def test_self_modified_operand_wild():

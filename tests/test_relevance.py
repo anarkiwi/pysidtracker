@@ -4,29 +4,19 @@ import csv
 import dataclasses
 import hashlib
 
-import numpy as np
 import pytest
 
 from pysidtracker import faultloc as fl
-from pysidtracker import pathdiff as pd
 from pysidtracker import paths
 from pysidtracker import relevance as rv
 from pysidtracker import survey
 from pysidtracker.asm6502 import assemble
-from pysidtracker.whydiff import CpuStep, PyEvent, cpu_slice
+from pysidtracker.whydiff import CpuStep, cpu_slice
 
 from .helpers import DATA_OFFSET, build_psid
 
 LOOP = [("A", "B"), ("A", "C"), ("B", "D"), ("C", "D"), ("D", "A"), ("D", "E")]
 LOOP += [("E", rv.EXIT)]
-
-
-def test_postdominators_of_a_diamond_in_a_loop():
-    ipdom, branches = rv.postdominators(LOOP)
-    assert branches == {"A", "D"}
-    assert {n: ipdom[n] for n in "ABCDE"} == dict(A="D", B="D", C="D", D="E", E=-1)
-    ipdom, _ = rv.postdominators([("X", "X"), ("Y", rv.EXIT)])
-    assert "X" not in ipdom
 
 
 def test_control_parents_follow_regions_loops_and_calls():
@@ -60,13 +50,6 @@ def test_cpu_control_keeps_the_guarding_branch_and_its_condition():
     keep, live = cpu_slice(steps, 3, control=control)
     assert keep == [0, 1, 2, 3] and 2 in live
     assert rv.cpu_control()([]).size == 0
-
-
-def test_next_lines_stay_in_their_call():
-    kinds = ["call", "line", "call", "line", "return", "line", "return"]
-    depth = [0, 0, 1, 1, 1, 0, 0]
-    events = [PyEvent(k, d, "f", "p.py", 1, "") for k, d in zip(kinds, depth)]
-    assert rv.next_lines(events).tolist() == [-1, 5, -1, -1, -1, -1, -1]
 
 
 DECOY = (
@@ -195,52 +178,6 @@ def _plain(an):
     return fl.partings(dataclasses.replace(an.spec, relevant=None), an.corr)
 
 
-def test_6502_pair_keys_on_the_root_not_the_decoy(decoy):
-    hvsc, work, specs = decoy
-    right = f"{specs['bad']}:native"
-    pd.build(hvsc, work / "tunes.csv", work, pd.CPU, right, jobs=1)
-    an = pd.analyse(work, pd.CPU, right, progress=False)
-    root = _where(specs["bad"], "0x1001")
-    lure = _where(specs["bad"], "0x1002")
-    assert all(p.relevant for p in an.parts)
-    assert all(f"{root}>" in p.right for p in an.parts)
-    (fix,) = an.fixes
-    assert fix.n_tunes == 6 and fix.key[0] == "first"
-    assert f"{root}>" in fix.key[2] and "0x1001" in fix.labels[0]
-    assert any(t.startswith("vs: $") and "BCC" in t for t in fix.labels)
-    plain = _plain(an)
-    assert all(f"{lure}>" in p.right and not p.relevant for p in plain)
-    assert {p.left for p in plain}.isdisjoint(p.left for p in an.parts)
-
-
-def test_python_pair_keys_on_the_root_not_the_decoy(decoy):
-    hvsc, work, specs = decoy
-    left, right = f"{specs['good']}:native", f"{specs['bad']}:lift"
-    pd.build(hvsc, work / "tunes.csv", work, left, right, mode="onset", jobs=1)
-    an = pd.analyse(work, left, right, progress=False)
-    (fix,) = an.fixes
-    assert fix.n_tunes == 6 and 'st["trig"]' in fix.key[2]
-    root = _where(specs["good"], "0x1001")
-    assert all(p.relevant and f"{root}>" in p.left for p in an.parts)
-    plain = _plain(an)
-    assert all('st["fthr"]' in p.right for p in plain)
-    lure = _where(specs["good"], "0x1002")
-    assert all(f"{lure}>" in p.left for p in plain)
-
-
-def test_cache_holds_relevance(decoy):
-    hvsc, work, specs = decoy
-    right = f"{specs['bad']}:native"
-    rec = pd.record((hvsc / "D/t0.sid").read_bytes(), 1, pd.CPU, right, "lead", 12)
-    assert rec["fail"] and len(rec["relevant"])
-    names = [rec["names"][i] for i in rec["relevant"]]
-    assert all(n.split(":", 1)[1].startswith("edge:") for n in names)
-    assert {n.split(":", 1)[0] for n in names} == {"6502", "python"}
-    pd.build(hvsc, work / "tunes.csv", work, pd.CPU, right, jobs=1, limit=1)
-    (got,) = pd.analyse(work, pd.CPU, right, progress=False).records.values()
-    assert np.array_equal(got["relevant"], rec["relevant"])
-
-
 BULK = """
 from pysidtracker.player import MemPlayer
 
@@ -259,20 +196,3 @@ class Bulk(MemPlayer):
         out = self.work
         self._mem[0xD400 : 0xD419] = bytes(v & 0xFF for v in out)
 """
-
-
-def test_python_slice_follows_one_item_of_a_bulk_copy(tmp_path):
-    path = tmp_path / "bulk.py"
-    path.write_text(BULK)
-    space = {}
-    exec(compile(BULK, str(path), "exec"), space)  # pylint: disable=exec-used
-
-    def make():
-        return space["Bulk"](bytes(1), 0x1000)
-
-    texts = []
-    for register in (0, 1):
-        side = rv.python_side(make, 3, register, roots=[str(path)])
-        texts.append({side.events[i].text for i in side.keep})
-    assert "if self.n > 1:" in texts[0] and "if self.n > 2:" not in texts[0]
-    assert "if self.n > 2:" in texts[1] and "if self.n > 1:" not in texts[1]

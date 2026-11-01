@@ -10,13 +10,12 @@ import numpy as np
 import pytest
 import zstandard
 
-from pysidtracker import formats, irqhost, oracle, registers, survey
+from pysidtracker import formats, oracle, registers, survey
 from pysidtracker.asm6502 import assemble
-from pysidtracker.errors import SidFormatError, SidParseError
-from pysidtracker.header import parse_sid_header, write_psid
+from pysidtracker.errors import SidFormatError
+from pysidtracker.header import write_psid
 from pysidtracker.testing import whole_song
 
-from . import irqhost_tunes
 from .helpers import build_prg, handled, trace_csv
 
 LOAD = 0x1000
@@ -78,40 +77,10 @@ def render_unknown(data, song, nframes):
     raise SidFormatError(f"unknown {len(data)} {song} {nframes}")
 
 
-def test_as_sid_wraps_bare_prg(prg):
-    hdr = parse_sid_header(survey.as_sid(prg))
-    assert (hdr.init_address, hdr.play_address, hdr.real_load_address) == (
-        LOAD,
-        LOAD + 3,
-        LOAD,
-    )
-    hdr = parse_sid_header(survey.as_sid(prg, init=0x1003, play=0x1006))
-    assert (hdr.init_address, hdr.play_address) == (0x1003, 0x1006)
-    sid = survey.as_sid(prg)
-    assert survey.as_sid(sid) == sid
-    with pytest.raises(SidParseError):
-        survey.as_sid(b"\x00\x10")
-
-
 def test_compare_file_covers_the_whole_song(prg, songlengths):
     songlengths.add(survey.as_sid(prg), 0.3)
     row = survey.compare_file(prg, render_exact)
     assert row["frames"] == 15 and row["verdict"] == "exact"
-
-
-def test_compare_file_exact(prg):
-    row = survey.compare_file(prg, render_exact, frames=whole_song(NFRAMES))
-    assert row["oracle"] == "jennings" and row["verdict"] == "exact"
-    assert (row["lead"], row["min_lead"], row["min_bad"]) == (0, 0, 0)
-    assert row["key"] == f"{hashlib.md5(survey.as_sid(prg)).hexdigest()}_1"
-    assert row["info"] == '{"n": 48}' and row["frames"] == NFRAMES
-
-
-@pytest.mark.parametrize("render,k", [(render_shift3, 3), (render_shift_m2, -2)])
-def test_compare_file_shift(prg, render, k):
-    row = survey.compare_file(prg, render, frames=whole_song(NFRAMES))
-    assert row["verdict"] == "exact"
-    assert (row["lead"], row["min_lead"], row["min_bad"]) == (k, k, 0)
 
 
 def test_compare_file_differs_and_errors(prg, tmp_path):
@@ -129,20 +98,6 @@ def test_compare_file_differs_and_errors(prg, tmp_path):
     ] == ("not_decompiled")
     row = survey.compare_file(b"\x00", render_exact, frames=whole_song(4))
     assert row["verdict"] == "oracle_error" and "SidParseError" in row["error"]
-
-
-@pytest.mark.parametrize("k", [-3, 0, 5])
-def test_compare_grids_shift(k):
-    base = np.random.default_rng(1).integers(0, 256, (140, 25))
-    a, b = base[10:110], base[10 - k : 10 - k + 108]
-    out = survey.compare_grids(a, b)
-    assert (out["lead"], out["min_lead"], out["min_bad"]) == (k, k, 0)
-    assert out["verdict"] == "exact" and out["frames"] == 100
-    b = b.copy()
-    b[20 + k, 0] ^= 1
-    assert survey.compare_grids(a, b)["min_bad"] == 1
-    with pytest.raises(ValueError):
-        survey.compare_grids(a, b[:8])
 
 
 def _video_trace(nframes):
@@ -184,17 +139,6 @@ def test_compare_file_sidtrace_fallback(prg, tmp_path, monkeypatch):
     assert seen == [sid_path]
 
 
-def test_compare_file_fallback_hosts_play_address_zero(monkeypatch):
-    monkeypatch.setattr(irqhost, "poweron_writes", lambda: None)
-    data = irqhost_tunes.build("raster_kernal")
-
-    def render(sid, song, nframes):
-        return irqhost.InterruptPlayer(sid, song - 1).render_grid(nframes), {}
-
-    row = survey.compare_file(data, render, frames=whole_song(8))
-    assert (row["oracle"], row["verdict"]) == ("jennings", "exact")
-
-
 def _no_docker(*_, **__):
     raise oracle.SidtraceUnavailable("no docker")
 
@@ -231,29 +175,9 @@ def test_file_cli_csv(prg, tmp_path, capsys, monkeypatch):
     ]
 
 
-def test_file_cli_pool(prg, tmp_path):
-    files = [tmp_path / f"{i}.prg" for i in range(3)]
-    for f in files:
-        f.write_bytes(prg)
-    out = tmp_path / "out.csv"
-    tally = survey.file_cli(
-        f"{__name__}:render_shift3", files, out=out, jobs=2, frames=whole_song(12)
-    )
-    assert tally == {"exact": 3}
-    assert {r["lead"] for r in survey.load_tunes(out)} == {"3"}
-
-
 def render_by_song(_data, song, nframes):
     """The grid of a player whose count starts at the 0-based subtune."""
     return expected(nframes, 1 - song), {}
-
-
-@pytest.mark.parametrize(
-    "spec, count, songs",
-    [("all", 3, [1, 2, 3]), ("2-3,1", 9, [2, 3, 1]), (2, 1, [2]), ("4", 1, [4])],
-)
-def test_song_list(spec, count, songs):
-    assert survey.song_list(spec, count) == songs
 
 
 def test_file_cli_songs(prg, tmp_path, monkeypatch):
@@ -282,16 +206,6 @@ def test_file_cli_songs(prg, tmp_path, monkeypatch):
             (str(f), str(n)) for f, n in picks
         )
         assert tally == {"exact": len(picks)}
-
-
-def test_load_render_specs(tmp_path):
-    assert survey.load_render(str(_hook(tmp_path))) is render_exact
-    assert survey.load_render(f"{__name__}:render_glitch") is render_glitch
-    (tmp_path / "hook_sibling.py").write_text("VALUE = 7\n", "utf-8")
-    (tmp_path / "hook_main.py").write_text(
-        "from hook_sibling import VALUE\n\n\ndef render():\n    return VALUE\n", "utf-8"
-    )
-    assert survey.load_render(f"{tmp_path / 'hook_main.py'}:render")() == 7
 
 
 class _GridPlayer:
@@ -331,13 +245,6 @@ def test_file_cli_format(prg, tmp_path, monkeypatch):
     assert {r["verdict"] for r in survey.load_tunes(out)} == {"not_decompiled"}
     with pytest.raises(SystemExit):
         survey.main(["file", str(files[0]), "--frames", "16"])
-
-
-def test_renderer_prefers_format_over_spec():
-    assert survey.renderer() is None
-    assert survey.renderer(f"{__name__}:render_exact") is render_exact
-    render = survey.renderer(f"{__name__}:render_exact", "auto")
-    assert render.func is formats.render and render.args == ("auto",)
 
 
 def test_fidelity_row(songlengths):

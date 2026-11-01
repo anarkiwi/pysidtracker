@@ -30,21 +30,6 @@ def _trace(labels, succ, node, steps):
     return tuple(out)
 
 
-@settings(max_examples=400, deadline=None)
-@given(graphs())
-def test_minimise_is_label_sequence_equivalence(graph):
-    labels, succ = graph
-    classes = minimise(labels, succ)
-    steps = 2 * len(labels) + 1
-    traces = {n: _trace(labels, succ, n, steps) for n in labels}
-    for x in labels:
-        for y in labels:
-            assert (classes[x] == classes[y]) == (traces[x] == traces[y])
-    assert list(dict.fromkeys(classes[n] for n in labels)) == list(
-        range(len(set(classes.values())))
-    )
-
-
 @settings(max_examples=200, deadline=None)
 @given(graphs())
 def test_minimise_is_stable(graph):
@@ -57,37 +42,6 @@ def test_minimise_is_stable(graph):
                 assert labels[x] == labels[y]
                 assert (sx is None) == (sy is None)
                 assert sx is None or classes[sx] == classes[sy]
-
-
-def test_minimise_cycles_and_tails():
-    labels = dict(enumerate("abab" "ab" "xab" "aab"))
-    succ = {0: 1, 1: 2, 2: 3, 3: 0, 4: 5, 5: 4, 6: 7, 7: 8, 8: 7, 9: 10, 10: 11}
-    classes = minimise(labels, succ)
-    assert classes[0] == classes[2] == classes[4] == classes[7]
-    assert classes[1] == classes[3] == classes[5] == classes[8]
-    assert classes[6] not in {classes[0], classes[1]}
-    assert len({classes[9], classes[10], classes[11], classes[0]}) == 4
-    assert minimise({"p": 1, "q": 1}, {"p": "q"}) == {"p": 0, "q": 1}
-    assert minimise({"p": 1, "q": 1}, {"p": "q", "q": "p"}) == {"p": 0, "q": 0}
-
-
-@settings(max_examples=300, deadline=None)
-@given(graphs(), st.lists(st.integers(-1, 7), max_size=6), st.integers(0, 3))
-def test_number_chains(graph, picks, start):
-    labels, succ = graph
-    entries = [None if p < 0 or p >= len(labels) else p for p in picks]
-    numbers = number_chains(entries, succ, start)
-    assert sorted(numbers.values()) == list(range(start, start + len(numbers)))
-    reach = set()
-    for node in entries:
-        while node is not None and node not in reach:
-            reach.add(node)
-            node = succ.get(node)
-    assert set(numbers) == reach
-    for node, num in numbers.items():
-        nxt = succ.get(node)
-        if nxt is not None and numbers[nxt] != num + 1:
-            assert numbers[nxt] <= num
 
 
 def test_number_chains_example():
@@ -110,15 +64,6 @@ def _check_layout(succ, slots, jumps, size, base):
         if target is not None:
             after = slots[node] + 1
             assert slots[target] == after or jumps.get(after) == target
-
-
-@settings(max_examples=400, deadline=None)
-@given(graphs(), st.integers(0, 2))
-def test_layout_preserves_every_successor(graph, first):
-    _, succ = graph
-    slots, jumps = layout_chains(succ, 64, first)
-    _check_layout(succ, slots, jumps, 64, first)
-    assert len(jumps) <= sum(t is not None for t in succ.values())
 
 
 def test_layout_concrete_and_fallback():

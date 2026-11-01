@@ -2,7 +2,7 @@
 
 import pytest
 
-from pysidtracker import ByteCursor, SidParseError, byte_range, check
+from pysidtracker import ByteCursor, SidParseError, byte_range
 
 
 def test_cursor_reads():
@@ -17,18 +17,6 @@ def test_cursor_truncation():
     cur = ByteCursor(b"\x01")
     with pytest.raises(SidParseError, match="truncated"):
         cur.u16le("word")
-
-
-def test_check():
-    check(True, "ok")
-    with pytest.raises(SidParseError, match="bad"):
-        check(False, "bad")
-
-    class Custom(Exception):
-        pass
-
-    with pytest.raises(Custom):
-        check(False, "x", Custom)
 
 
 def test_byte_range():

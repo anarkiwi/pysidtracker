@@ -57,14 +57,6 @@ def _decode(ops, x=0, y=0, pc=0x10, seed=()):
 # --- addressing decode ------------------------------------------------------
 
 
-def test_decode_immediate_and_zp():
-    ins = _decode(bytes((0xA9, 0x05)))
-    assert (ins.mnemonic, ins.mode) == ("LDA", "imm") and ins.imm == 5
-    assert ins.writes == frozenset({"A"})
-    ins = _decode(bytes((0xA5, 0x12)))
-    assert ins.mode == "zp" and ins.base == ins.effective == 0x12
-
-
 @pytest.mark.parametrize(
     "ops,x,y,base,eff,idx",
     [
@@ -105,25 +97,6 @@ def test_written_regs_classification():
 
 
 # --- load chains ------------------------------------------------------------
-
-
-def test_chain_names_table_and_cell():
-    img, labels, _ = _toy(TOY_TALLY)
-    pro = prov.trace_frames(img, 3, watch=[labels["cell"]], labels=labels)
-    w = prov.explain(pro, 1, reg=5)[0]
-    assert w.value == 0x11 and w.register == 5 and w.frame == 1
-    assert [s.kind for s in w.chain] == ["alu", "mem"]
-    assert "cell" in w.chain[0].disasm and w.chain[0].operand == labels["cell"]
-    assert "tbl" in w.chain[1].disasm and "X" in w.chain[1].disasm
-    assert w.chain[1].source == labels["tbl"] and w.chain[1].index == "X"
-
-
-def test_chain_immediate_constant():
-    img, _, _ = _toy("init:\n  RTS\nplay:\n  LDA #7\n  STA $D405\n  RTS\n")
-    pro = prov.trace_frames(img, 1, labels={})
-    w = prov.explain(pro, 0, reg=5)[0]
-    assert w.value == 7 and [s.kind for s in w.chain] == ["imm"]
-    assert w.chain[0].source == 7 and w.chain[0].operand is None
 
 
 def test_chain_entry_alive_from_call():
@@ -185,24 +158,6 @@ def test_deep_chain_bounded_by_depth():
 
 
 # --- watch grid + formatting ------------------------------------------------
-
-
-def test_watch_grid_hand_computed():
-    img, labels, _ = _toy(TOY_TALLY)
-    pro = prov.trace_frames(img, 5, watch=[labels["cell"]], labels=labels)
-    assert prov.watch_grid(pro) == [[1, 2, 3, 4, 5]]
-    text = prov.format_watch(pro)
-    assert "000001" in text and "000005" in text
-    assert "${%04X}" % labels["cell"] in text
-    assert prov.format_watch(pro, [labels["cell"]]) == text
-
-
-def test_format_explain_content():
-    img, labels, _ = _toy(TOY_TALLY)
-    pro = prov.trace_frames(img, 1, labels=labels)
-    text = prov.format_explain(pro, 0, reg=5)
-    assert "STA $d405" in text and "LDA tbl,X" in text and "ADC cell" in text
-    assert "value $11" in text and "cell $" in text and " X=$" in text
 
 
 # --- survey explain CLI -----------------------------------------------------

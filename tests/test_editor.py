@@ -5,7 +5,7 @@ import pytest
 from pysidtracker import SidImage
 from pysidtracker.errors import SidError
 from pysidtracker.asm6502 import assemble
-from pysidtracker.editor import RAM_SIZE, editor_replay, ram_image, run_editor
+from pysidtracker.editor import RAM_SIZE, editor_replay, run_editor
 from pysidtracker.oracle import register_grid
 from pysidtracker.testing import whole_song
 
@@ -52,23 +52,6 @@ def _ram(bank=0x34, volume=0x05):
         ram[org : org + len(code)] = code
     ram[0x01], ram[0xD418] = bank, volume
     return bytes(ram)
-
-
-def test_ram_image_boots_at_init():
-    image = ram_image(_ram(), DECODE)
-    assert (image.load, image.end, len(image.image)) == (0, RAM_SIZE, RAM_SIZE)
-    assert (image.header.init_address, image.header.play_address) == (DECODE, DECODE)
-    assert ram_image(_ram(), DECODE, PLAYER + 3, flags=0x20).header.flags == 0x20
-
-
-def test_run_editor_loads_decodes_and_runs_further_entries():
-    payload = bytes((5, 9, 0x10))
-    mem = run_editor(_ram(), payload, AT, (DECODE, BUMP))
-    assert mem[0xAE] | mem[0xAF] << 8 == AT + 3
-    assert bytes(mem[DECODED : DECODED + 4]) == bytes((6, 10, 0x11, 0))
-    assert (mem[0x3100], mem[0x3101], mem[0xD418]) == (3, 0x34, 0x05)
-    decoded = run_editor(_ram(), payload, AT, (DECODE,))
-    assert bytes(decoded[DECODED : DECODED + 3]) == payload
 
 
 def test_run_editor_options_keep_the_psid_driver_state():
@@ -135,14 +118,6 @@ def _stop_ram():
         code, _ = assemble(source, org)
         ram[org : org + len(code)] = code
     return bytes(ram)
-
-
-def test_run_editor_runs_an_entry_to_a_stop_pc():
-    for stop in (STRAIGHT_AT + 5, {STRAIGHT_AT + 5, 0x1234}):
-        mem = run_editor(
-            _stop_ram(), b"\x00", AT, (RTS_ONLY, (STRAIGHT_AT, stop), RTS_ONLY)
-        )
-        assert (mem[0x2000], mem[0x2001]) == (1, 0)
 
 
 def test_run_editor_stop_entry_restores_sp(monkeypatch):

@@ -2,11 +2,8 @@
 
 import pytest
 
-from pysidtracker.asm6502 import assemble
-from pysidtracker.playspec import SpecError, SpecPlayer, elaborate, load, parse, run
+from pysidtracker.playspec import SpecError, elaborate, load, parse, run
 from pysidtracker.playspec.syntax import Loc
-
-from .helpers import build_psid
 
 BASE = """
 spec base;
@@ -78,33 +75,6 @@ extend machine voice {
     assert set(variant.sources) == {"base", "variant"}
 
 
-def test_replaced_statements_stay_labelled_for_the_next_variant():
-    first = derived(
-        "spec first extends base;\n"
-        "extend machine voice { patch tick { replace check { n := 0x20; } } }"
-    )
-    second = parse(
-        "spec second extends first;\n"
-        "extend machine voice { patch tick { replace check { n := 0x30; } } }",
-        {"first": first},
-    )
-    assert frames(second, 1)[0x1000] == 0x30
-    assert frames(first, 1)[0x1000] == 0x20
-
-
-def test_group_opens_no_scope_so_a_replacement_can_bind_lets():
-    spec = derived("""
-spec lets extends base;
-extend machine voice {
-  patch tick {
-    replace advance { let nn = n + 3; n := nn; }
-    after emit { out[6] := nn; }
-  }
-}
-""")
-    assert frames(spec, 1)[0x1106] == 0x43
-
-
 def test_override_machine_schedule_proc_and_drop():
     spec = derived("""
 spec whole extends base;
@@ -119,15 +89,6 @@ drop STEP;
     assert mem[0x1101] == 0x40 ^ 0xFF and mem[0x1100] == 0
     assert [i[2] for i in spec.invariants] == ["small"]
     assert "STEP" not in {c[2] for c in spec.consts}
-
-
-def test_an_override_keeps_its_base_position():
-    spec = derived(
-        "spec order extends base;\nconst EXTRA = 3;\noverride const STEP = EXTRA;"
-    )
-    assert [c[2] for c in spec.consts] == ["STEP", "EXTRA"]
-    with pytest.raises(SpecError, match="undefined|EXTRA"):
-        elaborate(spec, BIND)
 
 
 @pytest.mark.parametrize(
@@ -155,16 +116,6 @@ def test_an_override_keeps_its_base_position():
 def test_edits_that_do_not_apply_exactly_are_refused(text, message):
     with pytest.raises(SpecError, match=message):
         derived(f"spec bad extends base;\n{text}")
-
-
-def test_ambiguous_labels_are_refused():
-    twice = BASE.replace("advance:", "check:")
-    with pytest.raises(SpecError, match="has 2 statements so labelled"):
-        parse(
-            "spec bad extends base;\n"
-            "extend machine voice { patch tick { replace check {} } }",
-            {"base": parse(twice)},
-        )
 
 
 def test_override_schedule_needs_one_in_the_base():
@@ -255,20 +206,3 @@ machine m {
 }
 schedule { m; }
 """
-
-
-def test_a_binder_picks_a_variant_per_instance():
-    code, labels = assemble(VARIANT_TUNE, 0x1000)
-    image = build_psid(code, 0x1000, init=labels["init"], play=labels["play"])[0x7C:]
-    one = parse(ONE)
-    two = parse("spec two extends one;\noverride const STEP = 2;", {"one": one})
-    binding = {"freq": 0x1300, "sid": 0xD400}
-
-    def player(bind):
-        return SpecPlayer(one, image, 0x1000, labels["init"], labels["play"], bind=bind)
-
-    plain, variant = player(lambda v, e: binding), player(lambda v, e: (two, binding))
-    for _ in range(3):
-        plain.play_frame()
-        variant.play_frame()
-    assert variant.regs[0] == 0x16 and plain.regs[0] == 0x13

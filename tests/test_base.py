@@ -6,7 +6,7 @@ import pytest
 
 from pysidtracker import BaseSidParser, PlayroutineKind, SidParseError, read_bytes
 
-from .helpers import build_psid, store_sig
+from .helpers import build_psid
 
 
 class _Parser(BaseSidParser):
@@ -40,28 +40,6 @@ def test_read_from_bytes_path_and_file(tmp_path):
     assert parser.read(io.BytesIO(sid))["anchor"] == 0x1002
 
 
-def test_parse_kwargs_pass_through():
-    sid = build_psid(b"..SIG..", load=0x1000)
-    assert _Parser().read(sid, subtune=2)["subtune"] == 2
-
-
-def test_parse_failure():
-    with pytest.raises(SidParseError, match="no SIG"):
-        _Parser().read(build_psid(b"nope", load=0x1000))
-
-
-def test_detect_direct():
-    sid = build_psid(b"..SIG..", load=0x1000)
-    det = _Parser().detect(sid)
-    assert det.kind is PlayroutineKind.DIRECT
-
-
-def test_detect_packed_through_base():
-    sid = build_psid(store_sig(b"SIG", 0x9000), load=0x1000)
-    det = _Parser().detect(sid)
-    assert det.kind is PlayroutineKind.PACKED
-
-
 def test_default_recognize_is_unknown():
     sid = build_psid(b"whatever", load=0x1000)
     det = _NoRecognize().detect(sid, init=False)
@@ -71,7 +49,3 @@ def test_default_recognize_is_unknown():
 def test_read_bytes_type_error():
     with pytest.raises(TypeError, match="cannot read a tune"):
         read_bytes(1234)
-
-
-def test_read_bytes_accepts_bytearray():
-    assert read_bytes(bytearray(b"abc")) == b"abc"

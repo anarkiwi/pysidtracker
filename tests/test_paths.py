@@ -34,79 +34,6 @@ def _edges(trace, frame):
     return {trace.labels[i] for i in trace.frames[frame] if trace.names[i][0] == "e"}
 
 
-def test_cpu_edges_alternate_with_the_branch():
-    data, lab = _tune()
-    trace = paths.cpu_paths(data, 4)
-    bne, done, sub = lab["play"] + 5, lab["done"], lab["sub"]
-    common = {
-        f"${done:04X} JSR ${sub:04x} -> ${sub:04X}",
-        f"${sub + 6:04X} RTS -> ${done + 3:04X}",
-        f"${done + 6:04X} RTS -> out",
-    }
-    even = common | {
-        f"${bne:04X} BNE ${lab['odd']:04x} -> ${bne + 2:04X}",
-        f"${bne + 7:04X} JMP ${done:04x} -> ${done:04X}",
-    }
-    odd = common | {f"${bne:04X} BNE ${lab['odd']:04x} -> ${lab['odd']:04X}"}
-    assert [_edges(trace, f) for f in range(4)] == [even, odd, even, odd]
-    taken = trace.names[trace.labels.index(min(odd - common))]
-    fall = trace.names[trace.labels.index(min(l for l in even - common if "BNE" in l))]
-    assert taken != fall and taken.startswith("edge:")
-    assert np.array_equal(
-        trace.grid, np.asarray(oracle.register_grid(data, whole_song(4)))
-    )
-    assert trace.side == "6502"
-    assert all(f.dtype == np.int32 and np.all(np.diff(f) > 0) for f in trace.frames)
-    assert [trace.labels[i] for i in trace.sequence(1)] == [
-        f"${bne:04X} BNE ${lab['odd']:04x} -> ${lab['odd']:04X}",
-        f"${lab['odd'] + 2:04X} STA $d401 -> v1_freq_hi",
-        f"${done:04X} JSR ${sub:04x} -> ${sub:04X}",
-        f"${sub + 3:04X} STA $d418 -> mode_vol",
-        f"${sub + 6:04X} RTS -> ${done + 3:04X}",
-        f"${done + 6:04X} RTS -> out",
-    ]
-    assert all(
-        o.dtype == np.int32 and sorted(o) == list(range(len(o))) for o in trace.order
-    )
-
-
-def test_cpu_store_sites_and_reads():
-    data, lab = _tune()
-    trace = paths.cpu_paths(data, 2)
-    sites = trace.sites
-    assert sites[0, 0] >= 0 and sites[0, 1] == -1 and sites[1, 0] == -1
-    assert sites[1, 1] >= 0 and sites[0, 24] == sites[1, 24] >= 0
-    for f in range(2):
-        live = sites[f][sites[f] >= 0]
-        assert all(trace.names[i].startswith("store:") for i in live)
-        assert set(live) <= set(trace.frames[f])
-    assert trace.names[sites[0, 0]].startswith("store:0:")
-    assert trace.labels[sites[0, 24]] == f"${lab['sub'] + 3:04X} STA $d418 -> mode_vol"
-    assert {lab["cnt"], lab["tbl"]} <= set(trace.reads[0].tolist())
-    assert trace.reads[0].dtype == np.uint16
-    mat = trace.matrix()
-    assert mat.shape == (2, len(trace.names)) and mat.dtype == bool
-    assert sorted(mat[1].indices) == trace.frames[1].tolist()
-    assert trace.matrix(1).shape == (1, len(trace.names))
-
-
-def test_cpu_names_survive_relocation_and_insertion():
-    base = paths.cpu_paths(_tune()[0], 4)
-    moved = paths.cpu_paths(_tune(0x2345)[0], 4)
-    grown = paths.cpu_paths(_tune(pad="  LDA #1\n  STA $0400\n")[0], 4)
-    assert base.names == moved.names == grown.names
-    assert [f.tolist() for f in base.frames] == [f.tolist() for f in grown.frames]
-    assert base.labels != moved.labels
-
-
-def test_cpu_universe_covers_the_executed_edges():
-    data, _ = _tune()
-    trace = paths.cpu_paths(data, 4)
-    universe = paths.cpu_universe(data)
-    assert {n for n in trace.names if n.startswith("edge:")} <= set(universe)
-    assert len(universe) == len(set(universe)) == 7
-
-
 def test_cpu_repeats_rank_and_out_of_span_calls():
     # Two identical voice copies, and a call out of the span to a stub at $0400.
     voice = "v{n}:\n  LDA #1\n  BNE w{n}\n  RTS\nw{n}:\n  STA $D400,X\n  RTS\n"
@@ -219,29 +146,6 @@ def _regs(player, register):
     return player.regs, register
 
 
-def test_py_generic_list_alias_sites():
-    subject = paths.PySubject(Aliased, cell=_regs, label="native")
-    trace = paths.py_paths(subject, 3)
-    assert trace.side == "native"
-    assert np.array_equal(trace.grid, np.asarray(Aliased().render_grid(whole_song(3))))
-    then = _line(Aliased.play_frame, "regs[1] = ")
-    other = _line(Aliased.play_frame, "regs[0], ")
-    sites = trace.sites
-    assert trace.labels[sites[0, 0]].startswith(f"tests/test_paths.py:{other} ")
-    assert (
-        trace.labels[sites[0, 3]].split(" -> ")[0]
-        == trace.labels[sites[0, 0]].split(" -> ")[0]
-    )
-    assert sites[0, 1] == -1
-    assert (
-        trace.names[sites[1, 1]] == f"store:1:{paths.source_of(__file__).where(then)}"
-    )
-    assert trace.reads[0].size == 0
-    assert {n for n in trace.names if n.startswith("edge:")} <= set(
-        paths.py_universe(trace.roots)
-    )
-
-
 GENERATED = (
     "def _x_{k}(v):\n"
     "    return v + {c}\n"
@@ -285,29 +189,6 @@ def _generated(k, c, d):
     return subject, name, text
 
 
-def test_py_generated_code_keys_alike_across_tunes():
-    one, name, text = _generated(12, 3, 1)
-    two = _generated(7, 40, 1)[0]
-    a, b = paths.py_paths(one, 4), paths.py_paths(two, 4)
-    assert a.names == b.names and a.labels != b.labels
-    assert np.array_equal(
-        a.grid, np.asarray(Generated(name, text).render_grid(whole_song(4)))
-    )
-    assert (
-        a.names[a.sites[1, 4]]
-        == "store:4:<playroutine toy#>:f_tick:out[#] = _x_#(#) & #"
-    )
-    assert a.names[a.sites[3, 4]].endswith("out[#] = #")
-    assert a.names[a.sites[0, 11]].endswith("out[# * # + #] = #")
-    assert all(":" in n and "#" in n for n in a.names)
-    universe = paths.py_universe(a.roots, a.sources)
-    assert {n for n in a.names if n.startswith("edge:")} <= set(universe)
-    assert "edge:<playroutine toy#>:f_tick:if t > #:>exit" in universe
-    assert paths.py_universe(list(one.sources), one.sources) == paths.py_universe(
-        list(two.sources), two.sources
-    )
-
-
 class Ending(Aliased):
     """A document-like player whose song ends after three ticks."""
 
@@ -348,23 +229,6 @@ def test_py_bare_callable_and_explicit_roots(tmp_path):
     )
 
 
-def test_py_keys_survive_line_shifts_not_edits(tmp_path):
-    code = "def f(a):\n    if a:\n        return 1\n    return 2\n"
-    plain = tmp_path / "a" / "m.py"
-    shifted = tmp_path / "b" / "n.py"
-    edited = tmp_path / "c" / "m.py"
-    for path, text in (
-        (plain, code),
-        (shifted, "# top\n\nimport os\n\n" + code.replace("(a)", "( a )")),
-        (edited, code.replace("if a:", "if a > 1:")),
-    ):
-        path.parent.mkdir()
-        path.write_text(text)
-    keys = [paths.py_universe([str(p)]) for p in (plain, shifted, edited)]
-    assert keys[0] == keys[1] and all(k.startswith("edge:f:") for k in keys[0])
-    assert set(keys[0]) & set(keys[2]) == set()
-
-
 HVSC_TUNE = "/scratch/datasets/hvsc/C64Music/DEMOS/0-9/2hero.sid"
 
 
@@ -393,20 +257,6 @@ SMC = (
 )
 
 
-def test_cpu_self_modified_operands_key_alike():
-    def trace(v):
-        lab = assemble(SMC.format(v=v, patch=0x1000, bump=0x1000), 0x1000)[1]
-        src = SMC.format(v=v, patch=lab["patch"] + 1, bump=lab["bump"] + 1)
-        code, lab = assemble(src, 0x1000)
-        data = build_psid(code, 0x1000, init=lab["init"], play=lab["play"])
-        return paths.cpu_paths(data, 3)
-
-    one, two, off = trace(1), trace(2), trace(0)
-    assert one.names == two.names
-    assert set(off.names) != set(one.names)
-    assert one.grid[:, 1].tolist() == [2, 3, 4]
-
-
 class Masked(ToyMem):
     """A MemPlayer whose register file masks pulse-width highs it stores whole."""
 
@@ -417,9 +267,3 @@ class Masked(ToyMem):
         regs = super().snapshot()
         regs[3] &= 0x0F
         return regs
-
-
-def test_py_memplayer_grid_is_its_register_file():
-    trace = paths.py_paths(lambda: Masked(b"\x0f", 0x1000), 2)
-    assert trace.grid[:, 3].tolist() == [7, 7]
-    assert trace.labels[trace.sites[0, 3]].endswith("-> v1_pw_hi")

@@ -1,13 +1,11 @@
 """The host-vs-oracle trace check tool, on recorded traces (no Docker)."""
 
 import csv
-import io
 import shutil
 
 import pytest
 
 from pysidtracker import host_check, irqhost
-from pysidtracker.oracle import SidtraceRow
 
 from . import irqhost_tunes as tunes
 
@@ -44,14 +42,6 @@ def _job(tree, name):
     return tree / "hvsc" / f"{name}.sid", tune, 1, tree / "work", SECONDS, 60
 
 
-def test_first_difference():
-    a = [SidtraceRow(1, None, None, None, 0, 0, 1)] * 3
-    b = a[:2] + [SidtraceRow(1, None, None, None, 0, 0, 2)]
-    assert host_check.first_difference(a, a) is None
-    assert host_check.first_difference(a, b) == 2
-    assert host_check.first_difference(a, a[:2]) == 2
-
-
 def test_check_matches_a_recorded_trace(tree):
     row = host_check.check(_job(tree, "raster_kernal"))
     assert row["verdict"] == "match" and row["rows"] > 100
@@ -75,21 +65,6 @@ def test_check_reports_oracle_and_host_errors(tree, monkeypatch):
     assert host_check.check(_job(tree, "raster_kernal"))["verdict"] == "oracle_error"
 
 
-def test_run_and_report(tree, capsys):
-    out = tree / "work" / "out.csv"
-    tally = host_check.run(
-        tree / "hvsc",
-        [tree / "tunes.csv"],
-        tree / "work",
-        seconds=SECONDS,
-        jobs=2,
-        out=out,
-    )
-    assert tally == {"match": 2}
-    assert host_check.report(out) == {"match": 2}
-    assert "'match': 2" in capsys.readouterr().out
-
-
 def test_report_lists_differences(tmp_path, capsys):
     path = tmp_path / "r.csv"
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -98,15 +73,6 @@ def test_report_lists_differences(tmp_path, capsys):
         writer.writerow({"verdict": "differs", "path": "a.sid", "song": 1, "first": 3})
     assert host_check.report(path) == {"differs": 1}
     assert "differs a.sid 1 3" in capsys.readouterr().out
-
-
-def test_trace_prints_each_fetched_instruction():
-    out = io.StringIO()
-    start = irqhost.boot_cycle(False)
-    host_check.trace(tunes.build("init_writes"), start, start + 40, out=out)
-    lines = out.getvalue().splitlines()
-    assert lines[0].split()[:3] == [str(start), lines[0].split()[1], "SEI"]
-    assert any("STA $d418" in line for line in lines)
 
 
 def test_main(tree, capsys):

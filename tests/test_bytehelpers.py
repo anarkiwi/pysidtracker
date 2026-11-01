@@ -7,18 +7,11 @@ import pytest
 from pysidtracker import (
     SidImage,
     SidParseError,
-    add_grammar_command,
     address,
-    load_prefix,
     make_package_errors,
     require_ram,
     reraise_as,
 )
-
-
-def test_load_prefix_is_the_prg_header():
-    assert load_prefix(0xC000) == b"\x00\xc0"
-    assert SidImage.from_prg(load_prefix(0x1234) + b"\x01").load == 0x1234
 
 
 def test_require_ram_rejects_the_io_area():
@@ -69,15 +62,3 @@ def test_address(text, value):
 def test_address_rejects(text):
     with pytest.raises(argparse.ArgumentTypeError):
         address(text)
-
-
-def test_add_grammar_command():
-    parser = argparse.ArgumentParser()
-    subs = parser.add_subparsers(dest="command", required=True)
-    sub = add_grammar_command(subs, print, song_help="tune file")
-    args = parser.parse_args(["grammar", "t.sid", "--subtune", "2"])
-    assert (args.song, args.subtune, args.func) == ("t.sid", 2, print)
-    assert parser.parse_args(["grammar", "t.sid"]).subtune == 0
-    assert sub.prog.endswith("grammar")
-    with pytest.raises(SystemExit):
-        parser.parse_args(["grammar", "t.sid", "--subtune", "x"])

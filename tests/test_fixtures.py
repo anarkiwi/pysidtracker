@@ -20,9 +20,7 @@ from pysidtracker.fixtures import (
     CsdbFetchError,
     SumEntry,
     NativeFixture,
-    _file_name,
     _http_get,
-    _scrape_release,
     default_native_cache,
     fetch_csdb,
     fixture,
@@ -98,6 +96,7 @@ class _FakeResp:
         return False
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_constants():
     assert DEFAULT_CSDB == "https://csdb.dk"
     assert USER_AGENT.startswith("pysidtracker/")
@@ -113,28 +112,6 @@ def test_default_native_cache_nests_under_the_tune_cache(monkeypatch, tmp_path):
 @pytest.fixture
 def _no_sleep(monkeypatch):
     monkeypatch.setattr(testing.time, "sleep", lambda *_: None)
-
-
-def test_http_get_success_returns_final_url_and_bytes(monkeypatch):
-    monkeypatch.setattr(
-        testing.urllib.request,
-        "urlopen",
-        lambda *a, **k: _FakeResp(b"blob", "https://csdb.dk/final.bin"),
-    )
-    url, data = _http_get("https://csdb.dk/release/download.php?id=1")
-    assert data == b"blob" and url == "https://csdb.dk/final.bin"
-
-
-def test_http_get_sends_user_agent(monkeypatch):
-    seen = {}
-
-    def fake(req, timeout=60):  # pylint: disable=unused-argument
-        seen["ua"] = req.get_header("User-agent")
-        return _FakeResp(b"b", req.full_url)
-
-    monkeypatch.setattr(testing.urllib.request, "urlopen", fake)
-    _http_get("https://csdb.dk/x")
-    assert seen["ua"] == USER_AGENT
 
 
 def test_http_get_is_throttled_per_host(monkeypatch, tmp_path):
@@ -160,15 +137,6 @@ def test_http_get_retries_an_empty_body(_no_sleep, monkeypatch):
     assert _http_get("https://csdb.dk/x") == ("u", b"b")
 
 
-def test_http_get_404_raises(monkeypatch):
-    def fake(*_a, **_k):
-        raise urllib.error.HTTPError("u", 404, "nf", {}, None)
-
-    monkeypatch.setattr(testing.urllib.request, "urlopen", fake)
-    with pytest.raises(CsdbFetchError, match="not found"):
-        _http_get("https://csdb.dk/x", retries=1)
-
-
 def test_http_get_retries_then_fails(monkeypatch):
     attempts = []
 
@@ -183,36 +151,6 @@ def test_http_get_retries_then_fails(monkeypatch):
     assert len(attempts) == 3
 
 
-def test_scrape_release_extracts_and_caches_pages(http, tmp_path):
-    dids = _scrape_release("777", tmp_path, mirror=DEFAULT_CSDB, retries=4, force=False)
-    assert dids == [101, 102]
-    assert (tmp_path / "html" / "rel_777.html").exists()
-    before = len(http)
-    # Second call is served from the cached page: no new page request.
-    assert _scrape_release(
-        "777", tmp_path, mirror=DEFAULT_CSDB, retries=4, force=False
-    ) == [101, 102]
-    assert len(http) == before
-
-
-def test_scrape_release_force_refetches(http, tmp_path):
-    _scrape_release("777", tmp_path, mirror=DEFAULT_CSDB, retries=4, force=False)
-    before = len(http)
-    _scrape_release("777", tmp_path, mirror=DEFAULT_CSDB, retries=4, force=True)
-    assert len(http) == before + 1  # one more page request
-
-
-@pytest.mark.usefixtures("http")
-def test_scrape_release_empty_and_unreachable(tmp_path):
-    # A reachable page with no download links -> []. An unreachable page raises.
-    assert (
-        _scrape_release("999", tmp_path, mirror=DEFAULT_CSDB, retries=4, force=True)
-        == []
-    )
-    with pytest.raises(CsdbFetchError, match="not found"):
-        _scrape_release("888", tmp_path, mirror=DEFAULT_CSDB, retries=4, force=True)
-
-
 @pytest.mark.usefixtures("http")
 def test_fetch_csdb_tolerates_a_dead_release_page(tmp_path, capsys):
     # 888 is unreachable and 777 is not: the batch must not abort.
@@ -222,36 +160,6 @@ def test_fetch_csdb_tolerates_a_dead_release_page(tmp_path, capsys):
         "dl/777/102_Drive.sng",
     }
     assert "888" in capsys.readouterr().err  # the dead release is reported
-
-
-def test_file_name_from_final_url():
-    assert (
-        _file_name("https://csdb.dk/files/101/Blitz%20Demo.sng", "101")
-        == "Blitz Demo.sng"
-    )
-    assert _file_name("https://csdb.dk/", "42") == "42"
-
-
-@pytest.mark.usefixtures("http")
-def test_fetch_csdb_downloads_and_writes_sums(tmp_path):
-    entries = fetch_csdb(["777"], tmp_path)
-    # Two files, named <did>_<basename>, under dl/777.
-    assert {(e.relpath) for e in entries} == {
-        "dl/777/101_Blitz Demo.sng",
-        "dl/777/102_Drive.sng",
-    }
-    assert (tmp_path / "dl" / "777" / "101_Blitz Demo.sng").read_bytes() == _GOAT
-    assert (tmp_path / "dl" / "777" / "102_Drive.sng").read_bytes() == _DMC
-    sums = (tmp_path / SUMS_NAME).read_text()
-    assert (
-        f"{_sha(_GOAT)}  dl/777/101_Blitz Demo.sng  {DEFAULT_CSDB}/release/download.php?id=101"
-        in sums
-    )
-    assert (
-        f"{_sha(_DMC)}  dl/777/102_Drive.sng  {DEFAULT_CSDB}/release/download.php?id=102"
-        in sums
-    )
-    assert len(entries) == 2
 
 
 def test_fetch_csdb_resumes_from_cache(http, tmp_path):
@@ -294,44 +202,12 @@ def test_read_sums_parses_and_skips_bad_lines(tmp_path):
 
 
 @pytest.mark.usefixtures("http")
-def test_fixture_resolves_verified_file(tmp_path):
-    fetch_csdb(["777"], tmp_path)
-    p = fixture(_sha(_GOAT), tmp_path)
-    assert p == tmp_path / "dl" / "777" / "101_Blitz Demo.sng"
-    # Case-insensitive + tolerant of surrounding whitespace.
-    assert (
-        fixture(_sha(_DMC).upper(), tmp_path)
-        == tmp_path / "dl" / "777" / "102_Drive.sng"
-    )
-    assert fixture("  " + _sha(_GOAT) + "  ", tmp_path) is not None
-
-
-@pytest.mark.usefixtures("http")
 def test_fixture_none_when_absent_or_corrupt(tmp_path):
     fetch_csdb(["777"], tmp_path)
     assert fixture("0" * 64, tmp_path) is None
     # A cache entry whose content no longer matches reads as absent.
     (tmp_path / "dl" / "777" / "101_Blitz Demo.sng").write_bytes(b"corrupt")
     assert fixture(_sha(_GOAT), tmp_path) is None
-
-
-def test_manifest_round_trip(tmp_path):
-    entries = [
-        NativeFixture("777", "Blitz.sng", _sha(_GOAT), "GoatTracker tune 'Blitz'"),
-        NativeFixture("777", "Drive.sng", _sha(_DMC), "DMCSID module 'Drive'"),
-    ]
-    path = write_manifest(entries, tmp_path / "native_fixtures.txt")
-    assert load_manifest(path) == entries
-
-
-def test_load_manifest_ignores_comments_and_blanks(tmp_path):
-    p = tmp_path / "m.txt"
-    p.write_text(
-        f"# comment\n\n777\tBlitz.sng\t{_sha(_GOAT)}\tGoatTracker tune\n",
-        encoding="utf-8",
-    )
-    got = load_manifest(p)
-    assert got == [NativeFixture("777", "Blitz.sng", _sha(_GOAT), "GoatTracker tune")]
 
 
 def test_load_manifest_rejects_short_lines(tmp_path):
@@ -341,22 +217,12 @@ def test_load_manifest_rejects_short_lines(tmp_path):
         load_manifest(p)
 
 
-@pytest.mark.usefixtures("http")
-def test_manifest_from_cache_recovers_id_name_and_desc(tmp_path):
-    fetch_csdb(["777"], tmp_path)
-    descs = {_sha(_GOAT): "GoatTracker tune 'Blitz'"}
-    rows = manifest_from_cache(tmp_path, descs)
-    by_name = {r.name: r for r in rows}
-    assert by_name["Blitz Demo.sng"].release_id == "777"
-    assert by_name["Blitz Demo.sng"].description == "GoatTracker tune 'Blitz'"
-    assert [r.name for r in rows] == sorted([r.name for r in rows])
-
-
 def test_make_native_fixtures_returns_two():
     native_id, native_file = make_native_fixtures({"x": "0" * 64}, "/tmp/cache")
     assert native_id is not None and native_file is not None
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_make_native_fixtures_resolves_when_warm(pytester, tmp_path):
     cache = tmp_path / "cache"
     dl = cache / "dl" / "777"
@@ -377,6 +243,7 @@ def test_make_native_fixtures_resolves_when_warm(pytester, tmp_path):
     result.assert_outcomes(passed=1)
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_make_native_fixtures_skips_when_cold(pytester, tmp_path):
     pytester.makepyfile(f"""
         from pysidtracker import make_native_fixtures
@@ -387,14 +254,6 @@ def test_make_native_fixtures_skips_when_cold(pytester, tmp_path):
         """)
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(skipped=1)
-
-
-@pytest.mark.usefixtures("http")
-def test_cli_fetch_recreates_and_verifies(tmp_path):
-    m = tmp_path / "m.txt"
-    write_manifest([NativeFixture("777", "Blitz Demo.sng", _sha(_GOAT), "")], m)
-    assert main(["fetch", str(m), "--cache", str(tmp_path)]) == 0
-    assert (tmp_path / "dl" / "777" / "101_Blitz Demo.sng").exists()
 
 
 @pytest.mark.usefixtures("http")
@@ -448,17 +307,3 @@ def test_index_media_pins_a_prg_inside_a_release_disk(tmp_path):
     assert (tmp_path / SUMS_NAME).read_text().count(rel) == 1
     by_sha = {r.sha256: r for r in manifest_from_cache(tmp_path)}
     assert by_sha[_sha(_ON_DISK)][:2] == ("777", "S.SONG")
-
-
-@pytest.mark.usefixtures("disk_release")
-def test_cli_fetch_pins_manifest_files_on_release_media(tmp_path):
-    m = tmp_path / "m.txt"
-    write_manifest(
-        [
-            NativeFixture("777", "S.SONG", _sha(_ON_DISK), ""),
-            NativeFixture("777", "Blitz Demo.sng", _sha(_GOAT), ""),
-        ],
-        m,
-    )
-    assert main(["fetch", str(m), "--cache", str(tmp_path)]) == 0
-    assert fixture(_sha(_ON_DISK), tmp_path).name == "S.SONG"

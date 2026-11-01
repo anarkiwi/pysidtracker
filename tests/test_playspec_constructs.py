@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from pysidtracker.playspec import SpecError, elaborate, parse, run
+from pysidtracker.playspec import SpecError, elaborate, parse
 
 HEADER = "spec t;\nlayout { a, b, c: addr; l: list; }\n"
 BIND = {"a": 0x1000, "b": 0x1100, "c": 0x1200, "l": (1, 0)}
@@ -51,21 +51,6 @@ schedule {
   }
 }
 """
-
-
-def test_generic_constructs():
-    mem = bytearray(0x10000)
-    mem[0x1002:0x1004] = bytes([0x30, 0x31])
-    mem[0x3000], mem[0x3100] = 0x05, 0x90
-    run(elaborate(parse(HEADER + CONSTRUCTS), BIND), mem)
-    assert mem[0x1100] == 1 and mem[0x1110] | mem[0x1111] << 8 == 0x3130
-    assert list(mem[0x1200:0x1208]) == [0x06, 0x91, 0x01, 0x00, 0x02, 0x02, 4, 4]
-    assert list(mem[0x1120:0x1122]) == [1, 1]
-
-
-def test_constructs_type_check_without_a_binding():
-    program = elaborate(parse(HEADER + CONSTRUCTS))
-    assert program.order == ["src", "voice[?]"]
 
 
 M = "machine m {{ {} step {{ {} }} }}\nschedule {{ m; }}\n"

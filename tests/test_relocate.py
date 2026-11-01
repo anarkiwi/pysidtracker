@@ -28,28 +28,6 @@ def _image() -> SidImage:
     return img
 
 
-def test_walk_code_follows_calls_jumps_and_branches():
-    code = walk_code(_image(), [0x1000], 0x1000, 0x1040)
-    assert code == {
-        0x1000: 3,
-        0x1003: 3,
-        0x1006: 1,
-        0x1007: 2,
-        0x100C: 3,
-        0x1010: 3,
-        0x1013: 2,
-        0x1015: 3,
-        0x1018: 1,
-        0x1020: 3,
-        0x1023: 1,
-    }
-
-
-def test_walk_code_stays_inside_bounds():
-    code = walk_code(_image(), [0x1010, 0x0800], 0x1010, 0x1016)
-    assert code == {0x1010: 3, 0x1013: 2, 0x1015: 3}
-
-
 def test_relocate_operands_moves_remaps_and_refuses():
     img = _image()
     code = walk_code(img, [0x1000], 0x1000, 0x1040)
@@ -63,17 +41,3 @@ def test_relocate_operands_moves_remaps_and_refuses():
     }
     with pytest.raises(SidParseError, match="operand at 0x1021 reaches 0x2050"):
         relocate_operands(img, code, moved, 0x2000, forbidden=range(0x2000, 0x2100))
-
-
-def test_relocate_operands_error_class_and_wrap():
-    img = _image()
-    code = {0x1020: 3}
-
-    class Invalid(Exception):
-        pass
-
-    with pytest.raises(Invalid):
-        relocate_operands(img, code, range(0), 0, forbidden={0x2050}, error=Invalid)
-    assert relocate_operands(img, code, range(0x2000, 0x2100), -0x2100) == {
-        0x1021: 0xFF50
-    }

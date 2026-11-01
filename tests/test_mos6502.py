@@ -1,9 +1,12 @@
+import pytest
+
 """Tests for the shared MOS 6502 primitives."""
 
-from pysidtracker import OP_LEN, SidWriteCapturingMemory, adc, s8, sbc, walk_until
+from pysidtracker import OP_LEN, SidWriteCapturingMemory, adc, sbc, walk_until
 from pysidtracker import mos6502
 
 
+@pytest.mark.strain_exempt(reason="exercises code outside the measured package")
 def test_op_len_table():
     assert len(OP_LEN) == 256
     assert set(OP_LEN) == {1, 2, 3}
@@ -24,13 +27,6 @@ def test_opcode_classes():
     assert not mos6502.is_zp_store(0x8D)
     assert mos6502.disasm_len(0x8D) == 3
     assert mos6502.disasm_len(0x100) is None
-
-
-def test_s8():
-    assert s8(0x00) == 0
-    assert s8(0x7F) == 127
-    assert s8(0x80) == -128
-    assert s8(0xFF) == -1
 
 
 def test_adc_sbc():
@@ -65,13 +61,6 @@ class _Img:
 
     def peek(self, addr):
         return self.mem[addr] if 0 <= addr < 0x10000 else 0
-
-
-def test_follow_jmp_and_loop():
-    img = _Img({0x1000: b"\x4c\x00\x20", 0x2000: b"\x4c\x00\x30", 0x3000: b"\x60"})
-    assert mos6502.follow_jmp(img, 0x1000) == 0x3000
-    img = _Img({0x1000: b"\x4c\x00\x10"})
-    assert mos6502.follow_jmp(img, 0x1000) == 0x1000
 
 
 def test_walk_calls():

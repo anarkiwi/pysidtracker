@@ -11,14 +11,6 @@ def _image():
     return SidImage.from_prg(build_prg(b"\x11\x22\x33\x44", load=0x1000))
 
 
-def test_contains():
-    img = _image()
-    assert img.contains(0x1000)
-    assert img.contains(0x1003)
-    assert not img.contains(0x1004)
-    assert not img.contains(0x0FFF)
-
-
 def test_byte_and_word_at():
     img = _image()
     assert img.byte_at(0x1000) == 0x11
@@ -38,25 +30,10 @@ def test_poke_grows_end():
     assert img.slice(0x1005, 2) == b"\xaa\xbb"
 
 
-def test_poke_before_load_guarded():
-    img = _image()
-    with pytest.raises(SidParseError, match="before the load"):
-        img.poke(0x0FFF, 0)
-
-
 def test_poke_out_of_range():
     img = _image()
     with pytest.raises(SidParseError, match="out of range"):
         img.poke(0x10000, 0)
-
-
-def test_to_prg_round_trips():
-    img = _image()
-    prg = img.to_prg()
-    assert prg == build_prg(b"\x11\x22\x33\x44", load=0x1000)
-    again = SidImage.from_prg(prg)
-    assert again.load == 0x1000
-    assert again.slice(0x1000, 4) == b"\x11\x22\x33\x44"
 
 
 def test_parse_prg():

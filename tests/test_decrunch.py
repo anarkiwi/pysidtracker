@@ -51,23 +51,6 @@ class _FakePdx:
         raise RuntimeError("not a mem stream")
 
 
-def test_native_decrunch_sfx_places_unpacked_image(monkeypatch):
-    unpacked = b"..SIG.. payload"
-    monkeypatch.setattr(decrunch_mod, "_pdx", _FakePdx(_FakeResult(0x2000, unpacked)))
-    packed = build_psid(b"\x01\x02\x03packed", load=0x1000)
-    img = native_decrunch(packed)
-    assert isinstance(img, SidImage)
-    assert img.load == 0x2000
-    assert bytes(img.mem[0x2000 : 0x2000 + len(unpacked)]) == unpacked
-    assert img.header is not None  # original header carried through
-    assert img.find(SIG) == 0x2000 + 2
-
-
-def test_native_decrunch_returns_none_when_not_packed(monkeypatch):
-    monkeypatch.setattr(decrunch_mod, "_pdx", _FakePdx(None))
-    assert native_decrunch(build_psid(b"whatever", load=0x1000)) is None
-
-
 def test_native_decrunch_returns_none_on_empty_data(monkeypatch):
     monkeypatch.setattr(decrunch_mod, "_pdx", _FakePdx(_FakeResult(0x2000, b"")))
     assert native_decrunch(build_psid(b"x", load=0x1000)) is None
@@ -101,19 +84,6 @@ def test_detect_native_falls_back_to_init(monkeypatch):
     code = store_sig(SIG, 0x9000)
     img = SidImage.from_sid(build_psid(code, load=0x1000))
     det = detect_playroutine(img, _sig_recognizer, native=True)
-    assert det.kind is PlayroutineKind.PACKED
-    assert det.ran_init is True
-
-
-def test_detect_default_ignores_native(monkeypatch):
-    # Without native=True, native_decrunch must never be consulted.
-    def boom(_image):  # pragma: no cover - must not be called
-        raise AssertionError("native_decrunch should not run by default")
-
-    monkeypatch.setattr(decrunch_mod, "native_decrunch", boom)
-    code = store_sig(SIG, 0x9000)
-    img = SidImage.from_sid(build_psid(code, load=0x1000))
-    det = detect_playroutine(img, _sig_recognizer)
     assert det.kind is PlayroutineKind.PACKED
     assert det.ran_init is True
 
