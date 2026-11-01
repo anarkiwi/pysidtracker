@@ -669,6 +669,9 @@ and fixed bytes once per pass. Obligations are independent, so `--proof-jobs N` 
 its own z3 context; `tools/proofprofile.py` splits a proof's time between term
 construction and `check`, and `tools/proofbench.py` times whole tunes.
 
+`tools/spec_compare.py` plays tunes with two specs (and the tune's own 6502 with `--oracle`) call by call
+and reports the first difference in writes, registers or memory, or with `--bench` the time per call.
+
 ## Proof tooling
 
 - **Transition relation (`smt.transition`).** The IR executes over z3: memory is
