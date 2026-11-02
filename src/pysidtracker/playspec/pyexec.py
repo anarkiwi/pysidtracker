@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 from ..errors import SidError
 from ..notes import table
@@ -52,12 +52,23 @@ _FINISH = "return True"
 _VAR = re.compile(r"\bv_\w+")
 
 
+class Rows(dict):
+    """``{index: item}`` of a ``lut`` table or the slots of an ``aget``'s elements; an index
+    past them is a :class:`~.objects.SpecRuntimeError`."""
+
+    def __missing__(self, index):
+        raise SpecRuntimeError(
+            f"index {index} is past the {len(self)} items of a table"
+        )
+
+
 class _Gen:
     """Python source for one program."""
 
     def __init__(self, program: Program, slots: Dict[str, int]):
         self.helpers: List[List[str]] = []
         self.tables: Dict[tuple, str] = {}
+        self.rows: Dict[tuple, str] = {}
         self.reactions: Dict[tuple, str] = {}
         self.procs = program.procs
         self.names = {
@@ -87,6 +98,8 @@ class _Gen:
             key = (*(k.v for k in e.a[:3]), 1 << max(8, width(e.a[3])))
             name = self.tables.setdefault(key, f"T{len(self.tables)}")
             return f"{name}[{self.ex(e.a[3])}]"
+        if e.op in ("lut", "aget"):
+            return self.indexed(e)
         args = [self.ex(a) for a in e.a]
         mask = (1 << e.w) - 1
         if e.op in _BIN:
@@ -100,6 +113,18 @@ class _Gen:
             cmp = "<" if e.op == "slt" else "<="
             return f"(({args[0]} ^ {sign}) {cmp} ({args[1]} ^ {sign}))"
         raise SidError(f"no concrete form for {e.op}")
+
+    def indexed(self, e) -> str:
+        """``lut`` and ``aget``: a lookup in a table of items or of the slots of variables."""
+        if e.op == "lut":
+            key, index = e.a[0].v, e.a[1]
+            return f"{self.table(key)}[{self.ex(index)}]"
+        key = tuple(self.controls[v.n] for v in e.a[1:])
+        return f"C[{self.table(key)}[{self.ex(e.a[0])}]]"
+
+    def table(self, items: tuple) -> str:
+        """The name of the :class:`Rows` of ``items``."""
+        return self.rows.setdefault(items, f"X{len(self.rows)}")
 
     def block(self, stmts) -> List[str]:
         """The lines of ``stmts``; a block over :data:`CHUNK` lines is split into helpers."""
@@ -214,12 +239,10 @@ def indent(lines: List[str]) -> List[str]:
     return ["    " + line for line in lines]
 
 
-def _generate(
-    program: Program, slots: Dict[str, int]
-) -> Tuple[str, Dict[str, tuple], Dict[tuple, str]]:
-    """``(source, tables, reactions)``: the frame function, the ``table`` arguments of the
-    note tables (``T0``, ...) it reads and the ``(object, event)`` of each reaction
-    function (``OB0``, ...) it calls.
+def _generate(program: Program, slots: Dict[str, int]):
+    """``(source, tables, reactions, rows)``: the frame function, the ``table`` arguments of the
+    note tables (``T0``, ...) it reads, the ``(object, event)`` of each reaction
+    function (``OB0``, ...) it calls and the items of each :class:`Rows` (``X0``, ...).
 
     Each proc is a function (``_p0_...``), and long blocks become helper functions
     (``_f0`` ...) so no code object is large; a
@@ -249,14 +272,13 @@ def _generate(
     text = text.replace("N=None):\n", f"N=None):\n    V = [0] * {len(shared)}\n")
     last = text.rindex("def frame(")
     text = text[:last] + text[last:].replace(_FINISH, "return")
-    return text, {n: k for k, n in gen.tables.items()}, gen.reactions
+    return text, {n: k for k, n in gen.tables.items()}, gen.reactions, gen.rows
 
 
 def source(program: Program) -> str:
     """The Python source of ``program``'s frame function."""
-    return _generate(program, {n: i for i, (n, _w, _d) in enumerate(program.controls)})[
-        0
-    ]
+    slots = {n: i for i, (n, _w, _d) in enumerate(program.controls)}
+    return _generate(program, slots)[0]
 
 
 def _own(R, W, C):
@@ -281,8 +303,9 @@ def compile_program(
     control ``n`` is ``C[slots[n]]`` (default: its place in ``program.controls``)."""
     if slots is None:
         slots = {n: i for i, (n, _w, _d) in enumerate(program.controls)}
-    text, tables, reactions = _generate(program, slots)
+    text, tables, reactions, rows = _generate(program, slots)
     namespace = {"SpecRuntimeError": SpecRuntimeError, "OWN": _own}
+    namespace.update((name, Rows(enumerate(items))) for items, name in rows.items())
     namespace.update((name, table(*key)) for name, key in tables.items())
     lanes = {
         name: dataclasses.replace(

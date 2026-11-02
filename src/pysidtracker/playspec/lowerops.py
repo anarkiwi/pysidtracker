@@ -10,6 +10,8 @@ def mk(op: str, w: int, *args):
     """``Op(op, w, args)``, folded when every argument is a known constant."""
     if op == "note":
         return note_entry(w, args)
+    if op in ("lut", "aget"):
+        return indexed(op, w, args)
     if all(isinstance(a, K) and a.v is not None for a in args):
         return K(evaluate(op, w, [a.v for a in args], max(width(a) for a in args)), w)
     if op == "land":
@@ -22,6 +24,17 @@ def mk(op: str, w: int, *args):
                 return K(1, 1) if a.v else b
     if op == "lnot" and isinstance(args[0], Op) and args[0].op == "lnot":
         return args[0].a[0]
+    return Op(op, w, tuple(args))
+
+
+def indexed(op: str, w: int, args):
+    """The ``lut`` / ``aget`` operator over ``args``, its item once the index is constant and
+    within the items."""
+    at = 1 if op == "lut" else 0
+    index = args[at]
+    items = args[0].v if op == "lut" else args[1:]
+    if isinstance(index, K) and index.v is not None and index.v < len(items):
+        return K(items[index.v], w) if op == "lut" else items[index.v]
     return Op(op, w, tuple(args))
 
 

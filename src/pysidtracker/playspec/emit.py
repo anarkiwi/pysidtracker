@@ -256,12 +256,42 @@ class _Writer:
         self.events = program.events
         self.named: Dict[str, str] = {}
         self.controls = program.controls
+        self.tabs: Dict[tuple, str] = {}
+        self.elems: Dict[str, str] = {}
+        self.arrays: List[tuple] = []
+        defaults = {n: (w, d) for n, w, d in program.controls}
+        for key, elems in program.arrays.items():
+            if elems[0] not in defaults:
+                continue
+            name = self.fresh(key)
+            self.arrays.append(
+                (name, defaults[elems[0]][0], [defaults[e][1] for e in elems])
+            )
+            for i, elem in enumerate(elems):
+                self.vars[elem] = f"{name}[{i}]"
+                self.elems[elem] = name
+
+    def tab(self, items: tuple, w: int) -> str:
+        """The name of the ``ro`` array state holding ``items``."""
+        if (items, w) not in self.tabs:
+            self.tabs[items, w] = self.fresh("tab")
+        return self.tabs[items, w]
 
     def states(self) -> List[str]:
-        """The ``state`` declarations of the program's controls."""
-        return [
+        """The ``state`` declarations of the program's controls, arrays together, and of the
+        constant tables it reads."""
+        out = [
             f"state {self.var(n)}: {type_of(w)} = {self.ex(K(d, w))};"
             for n, w, d in self.controls
+            if n not in self.elems
+        ]
+        out += [
+            f"state {name}: {type_of(w)}[{len(items)}] = [{', '.join(map(str, items))}];"
+            for name, w, items in self.arrays
+        ]
+        return out + [
+            f"state {name}: {type_of(w)}[] ro = [{', '.join(map(str, items))}];"
+            for (items, w), name in self.tabs.items()
         ]
 
     def declarations(self) -> List[str]:
@@ -273,6 +303,7 @@ class _Writer:
         ]
         for oid, name in self.named.items():
             obj = self.objects[oid]
+            tabs = [self.tab(t, 8) for t in obj.tabs]
             cells = {}
             for role, loc in obj.locs.items():
                 if isinstance(loc[0], Own):
@@ -280,7 +311,7 @@ class _Writer:
                     continue
                 cells[role] = self.fresh(f"{name}_{role}")
                 out.append(emitobj.cell(cells[role], loc))
-            out += emitobj.declare(obj, cells, name) + [""]
+            out += emitobj.declare(obj, cells, name, tabs) + [""]
         return out
 
     def fresh(self, stem: str) -> str:
@@ -368,6 +399,10 @@ class _Writer:
             return name
         if e.op == "note":
             return self.note(e)
+        if e.op == "lut":
+            return f"{self.tab(e.a[0].v, e.a[0].w)}[{self.ex(e.a[1])}]"
+        if e.op == "aget":
+            return f"{self.elems[e.a[1].n]}[{self.ex(e.a[0])}]"
         args = e.a
         if e.op in INFIX:
             return f"({self.ex(args[0])} {INFIX[e.op]} {self.ex(args[1])})"
@@ -490,6 +525,9 @@ def pruned(program: Program) -> Program:
     while True:
         out = eliminate(body, live, live)[0]
         now = live | (every & _reads(out))
+        for elems in program.arrays.values():
+            if now.intersection(elems):
+                now = now.union(elems)
         if now == live:
             break
         live = now

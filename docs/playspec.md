@@ -66,6 +66,8 @@ schedule {
       nothing about *when* in the call the read happens (see "Volatile inputs").
     - `per_proc`: for a partly relocated player whose routines address the cell at different places. A proc `P` accesses the cell at its place with `L.<cell>` read as the binding's `<cell>@P` when that field exists (the rest of the place expression is unchanged), else at the cell's own place. Without such fields the program is unchanged.
     - `notes(lo|hi|word, K)`: the `ro` table holds the native note table; index `i` means standard note `i + K` (`K` a static, possibly negative). `lo`/`hi` mark a `u8[n]` as the low/high byte of the note word, `word` a `u16[n]`/`ptr[n]` as the whole word. Cells aliasing one table may declare different `K`.
+- `state n: T[len] [ro] = L.list;` declares an [array state](#array-states): song data the binder
+  lays out as a list, indexed at run time.
 - `machine m [x in a..b] { cell/signal/control/proc/step }` declares a machine
   and its instances; `x` is the static instance index.
 - `control c [on cell mask M] { s = v, ... }` declares control states. With
@@ -141,7 +143,9 @@ opened stream with that `ByteGrammar` and reports malformed data in
 - recursion, unreachable code, `old()` outside an invariant, and misplaced
   value-returning calls;
 - a `let`, proc parameter or `state` that nothing reads, judged on the spec as written
-  with every `build` branch included.
+  with every `build` branch included (storing to an array state reads nothing of it);
+- an array state's initial items that do not match its length or fit its type, a static index
+  past its items, a store to a `ro` array.
 
 With a binding it also rejects private cells shared by two instances, and lists
 writable cells aliasing read-only tables in `Program.notes`.
@@ -208,6 +212,7 @@ the operand forms).
 ```
 cursor name {
   table @ base [, base ...] [width w];  // interleaved rows (one base) or columns (several)
+  table rows [, rows ...] [width w];    // the same over ro array states, in place of memory
   pos cell; [count cell;] [run cell;] [ret cell;] [values v0, v1;] [start e;]
   advance post|pre;                     // default post
   on frame step; on note reset; [on tick settle;]
@@ -230,6 +235,12 @@ cursor name {
 | `stop` | `pos` stays on the row, flag 1; so does a byte no arm matches |
 | `end [take n]` | advances, flag 1 |
 
+- **Arrays.** `table rows width 3;` reads the `ro` byte array state `rows` instead of memory:
+  column `j` of the row at `pos` is item `pos + j` (one array and a `width`), or one array per
+  column (`table lo, hi;`). Every `cursor.cN` read, `jump` and `hold` check reads the array too. A
+  read past its items is a `SpecRuntimeError`, so the binder ends the list with the `width - 1`
+  bytes a last row's decode reads. `start` and the `react` operands are indexes, so
+  `start first[inst]` starts each instrument at its own row. A `stream` cursor reads memory only.
 - **Steps.** A step decodes at most 256 rows (`SpecRuntimeError` after that). The flag is the
   carry a `-> flag` reaction receives: the carry of the sweep addition (0 with `frac`), 1 at the
   end of a `hold` or `sweep`, at a `stop` and an `end`, a `jump`'s `target >= pos`, else 0.
@@ -309,7 +320,9 @@ another unless `@` places them; `u16` is little-endian), readable and a target. 
 base is held in data: a `u16` cell holds the one sub-table (`t[r].f`, so assigning the cell rebinds
 the table), a `u16` array a table of tables, an index choosing the sub-table: `pattern[p][r].f`.
 `offset` is a layout expression added to the pointer, so pointer relocation is in the binding. A
-table is syntax over `mem[...]`.
+table is syntax over `mem[...]`. `table name in rows stride n { ... }` reads the `ro` byte array
+state `rows` instead: `name[i].f` is item `i * n + offset of f` of the array (little-endian for a
+`u16` field), a read-only table with no base address; see [array states](#array-states).
 
 Words that start a declaration (`counter`, `owner`, `accum`, `cursor`, `event`, `fire`, `handler`,
 `latch`, `output`, `record`, `signal`, `state`, `stream`, `table`, `view`, `control`) and `match` are
@@ -326,13 +339,60 @@ A `u8`/`u16` state serves everywhere a scalar cell does: an object's position, c
 (each byte a lane of the variable), the pointer of a `via` table, and another instance's member
 (`voice[v].n`, `voice[v].n := e`). Its initial value is static, so a player's variables start
 from what its init left by way of the binding: `state seqpos: u8 = L.init_seqpos[x];` reads item
-`x` of the layout list `init_seqpos` (`L.list[i]` takes a static index).
+`x` of the layout list `init_seqpos` (`L.list[i]` takes a static index; [array states](#array-states) index at run time).
 
 State belongs to the tune, not to an entry: a `SpecPlayer` keeps one value per state and hidden
 `control`, keyed by its declaration (`name`, or `machine[i].name` for a machine's; `Program.keys`),
 and every entry's program, Python or native, reads and sets that one value. A state set by one
 entry is read by the next call of another. `SpecPlayer.state(name)` and `set_state(name, value)`
 read and set it by that key once the entry that declares it has run.
+
+### Array states
+
+```
+state rows:  u8[] ro = L.rows;        // song data: read-only, length from the list
+state first: u8[8] ro = L.first;      // the length is checked against the list
+state hist:  u8[4]  = 0;              // spec-owned: every element starts as 0
+state seen:  u8[3]  = [1, 2, 3];      // a literal list
+```
+
+An array state is a list the spec indexes at run time, `rows[i]` (any 8- or 16-bit expression),
+where `L.list[i]` takes only a static index. It is how a binder hands song data to a spec without
+the spec doing pointer arithmetic: the binder lays instruments, patterns and the wave, pulse and
+filter rows of an instrument out as index-addressed lists and never interprets a byte, while the
+encoding stays in the spec. Jagged data is a flat array plus a list of start indexes
+(`rows[first[inst] + k]`); nested lists are not part of the language.
+
+- **Length.** `[n]` is a layout or constant expression and must equal the list's length; `[]` takes it
+  from the list. `len(rows)` is static. A mutable array may start every element as one static
+  value (`= 0`) and then needs `[n]`.
+- **Items** are static, of the element type `u8`..`u16`; one that does not fit is an error.
+- **`ro`.** The array is constant data: a store is an error and the lowered program reads it
+  through one constant table (`lut`), so `outorder.reorder` and `outproof` treat a read as a pure
+  function of its index. It is the qualifier `cell` already uses for song tables, trailing the
+  type as it trails a cell's place. `table ... in rows`, `view ... in rows @ i` and
+  `cursor { table rows ... }` read a `ro` byte array in place of memory.
+- **Mutable.** Without `ro` the array is spec-owned state, like a scalar `state`: `n` hidden
+  variables kept from call to call (one set per machine instance), stored with `rows[i] := e`
+  (and `+=`...) and read with `rows[i]`. A read is one `aget` over the elements, which keeps every
+  element a visible dependency of the passes; a store with a run-time index is an assertion on the
+  index followed by a binary `if` tree on it.
+  `SpecPlayer.state("rows")` is the list of its elements and `set_state("rows", list)` sets
+  them; `state("rows[2]")` is one element. A machine's is `machine[i].rows`.
+- **Out of range.** An index past the items is never wrapped: a static one is an elaboration error
+  (`rows[9] is past its 5 items`), a run-time one a `SpecRuntimeError`, on the Python executor and
+  the native machine alike (the native frame bails and Python raises it). The solver reads an
+  index past a table as an obligation of the bounded check (`smt.bmc`), so a spec that indexes with
+  an unconstrained byte is reported. The binder is expected to size slices so it never happens.
+- **Backends.** The native machine runs both forms with the instructions it already has (`Note`
+  over the constant table) and one more (`VarX`, an indexed variable), and cursor columns read
+  their table in place of memory; no program with arrays falls back to Python. `emit` writes a
+  `ro` array as `state tab: u8[] ro = [...]` and a mutable one as `state a: u8[n] = [...]`, so
+  emitted text elaborates to the same program (`emit.isomorphic`).
+
+`examples/arrays/instrument-rows.play` lays every instrument's pulse rows end to end and starts a
+`cursor` at `first[inst]`; `tests/test_playspec_arrays.py` checks it against the cursor over the
+same rows in memory.
 
 ### Registers wider than a byte
 
@@ -394,6 +454,9 @@ cell may (`record v @ 0 stride 7 { lo: u8 @ L.lo; w: u16 @ L.lo; }`).
 held in a cell: `view instrument @ zp { ad @ 3; sr @ 4; }` makes `instrument.ad` the byte at
 `zp + 3`, read through the pointer as it stands in the proc that reads it.
 
+
+`view name in rows @ index { f @ k; }` names the bytes at fixed offsets from an index into the `ro`
+byte array state `rows`: `name.f` is item `index + k`, read in the proc that reads it.
 
 `view name via ptrs [offset e] { f @ k; }` reaches records through a pointer table: `name[i].f`
 is the byte `k` past pointer `ptrs[i]` (plus `offset`, a layout expression, so relocation is in
@@ -835,6 +898,7 @@ The tests exercise each construct with small generic specs on synthetic memory.
 | Zero-page pointers and temporaries, `(zp),Y` | all | zero-page cells, `ind`, stream bases |
 | Multiple SIDs / stereo voices | GT2, defMON | instances routed to SID bases by static index |
 | Linked-list channel walk (variable count) | GT1 | runtime index into array cells, bounded `while` |
+| Instruments, patterns and wave/pulse/filter rows as binder-laid lists, jagged by start index | rearranged song layouts | `ro` array states, `table`/`view`/`cursor` over them |
 | Carry flag entering the play call | GT1 | `cpu.c` entry register |
 | Several player instances in one image | MA, GT2 | `SpecPlayer` binding per trapped entry |
 | Play wrappers / driver code calling the player | MA | `SpecPlayer` runs the 6502 play routine, trapping entries |

@@ -333,11 +333,13 @@ class ObjectLowering:
         by_tag: Dict[str, list] = {}
         for clause in clauses:
             by_tag.setdefault(clause[0], []).append(clause)
-        for need in ("w_table", "w_pos"):
-            if len(by_tag.get(need, ())) != 1:
-                self.error(line, f"cursor {name} needs exactly one {need[2:]} clause")
+        tables = by_tag.get("w_table", []) + by_tag.get("w_atable", [])
+        for need, found in (("table", tables), ("pos", by_tag.get("w_pos", ()))):
+            if len(found) != 1:
+                self.error(line, f"cursor {name} needs exactly one {need} clause")
                 return Obj(oid, "cursor", "", {}, (0, 1, 1, ()), {}), {}
-        _t, tline, bases, width = by_tag["w_table"][0]
+        _t, tline, bases, width = tables[0]
+        arrays = bases if tables[0][0] == "w_atable" else None
         count = by_tag["w_count"][0][2] if "w_count" in by_tag else None
         declared = by_tag["w_values"][0][2] if "w_values" in by_tag else []
         names = self.row_targets(clauses, count, declared)
@@ -353,7 +355,16 @@ class ObjectLowering:
             locs[f"v{i}"] = self.object_cell(value, line, scope)
         step = None if width is None else self.static(width, scope, tline)
         columns = step if len(bases) == 1 and step else len(bases)
-        if len(bases) == 1 and columns > 1:
+        tabs = ()
+        if arrays is not None:
+            found = [self.array_ref(n, scope, tline, ro=True) for n in arrays]
+            if None in found:
+                return Obj(oid, "cursor", "", {}, (0, 1, 1, ()), {}), {}
+            tabs = tuple(f[4] or () for f in found) * (
+                columns if len(found) == 1 else 1
+            )
+            bases = [const(j if len(found) == 1 else 0, 0) for j in range(columns)]
+        elif len(bases) == 1 and columns > 1:
             bases = [("+", tline, bases[0], const(j, 0)) for j in range(columns)]
         cols = {f"c{j}": j for j in range(columns)}
         targets = [*names, count]
@@ -379,7 +390,7 @@ class ObjectLowering:
         start = by_tag["w_start"][0][2] if "w_start" in by_tag else const(0, 8)
         spec = (adv, step or 1, columns, rows)
         self.check_cursor(name, line, locs, spec)
-        obj = Obj(oid, "cursor", "", locs, spec, reactions, fires)
+        obj = Obj(oid, "cursor", "", locs, spec, reactions, fires, tabs=tabs)
         return obj, dict.fromkeys(reactions, [*bases, start])
 
     def check_cursor(self, name: str, line: int, locs: dict, spec: tuple) -> None:
@@ -614,6 +625,8 @@ class ObjectLowering:
             windows, extra = obj.spec[2], room + obj.spec[1]
         dyn = []
         for index, base in enumerate(ops[:windows]):
+            if obj.tabs and obj.tabs[index] is not None:
+                continue
             if isinstance(base, K) and base.v is not None and base.v + extra <= TOP:
                 reads.append((base.v, base.v + extra))
             else:
@@ -715,6 +728,8 @@ class ObjectLowering:
         pos = mk(
             "add", 8, self.loc_byte(obj.locs["pos"][0]), K(int(obj.spec[0] > 0), 8)
         )
+        if obj.tabs:
+            return mk("lut", 8, K(obj.tabs[column], 8), add16(start, pos))
         return self.rd(add16(start, pos))
 
     def owner_value(self, name: str, attr: str, scope, line: int):

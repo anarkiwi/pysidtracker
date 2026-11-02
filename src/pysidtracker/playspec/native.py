@@ -190,7 +190,10 @@ def describe(obj: Obj, event: str, out: int, slot=None) -> List[int]:
     for role in ("pos", "cnt", "run", "ret"):
         out_ += _loc(locs.get(role, (-1, -1)))
     out_ += [len(values)] + [x for v in values for x in _loc(v)]
-    return out_ + [len(rows)] + [x for r in rows for x in _row(r)]
+    out_ += [len(rows)] + [x for r in rows for x in _row(r)]
+    for tab in obj.tabs or (None,) * columns:
+        out_ += [-1] if tab is None else [len(tab), *tab]
+    return out_
 
 
 def available() -> bool:
@@ -252,6 +255,19 @@ class _Encoder:
             key = (*(k.v for k in e.a[:3]), 1 << max(8, width(e.a[3])))
             self.expr(e.a[3])
             self.emit("Note", self.tables.setdefault(key, len(self.tables)))
+            return
+        if name == "lut":
+            self.expr(e.a[1])
+            self.emit(
+                "Note", self.tables.setdefault(("lut", e.a[0].v), len(self.tables))
+            )
+            return
+        if name == "aget":
+            slots = [self.var(v.n) for v in e.a[1:]]
+            if slots != list(range(slots[0], slots[0] + len(slots))):
+                raise Unsupported("array elements that are not consecutive variables")
+            self.expr(e.a[0])
+            self.emit("VarX", slots[0] | len(slots) << 24)
             return
         args = list(e.a)
         if name in ("land", "lor", "ite"):
@@ -449,7 +465,10 @@ class _Encoder:
             self.emit("Ret")
         for at, pid in self.calls:
             self.patch(at, starts[pid])
-        tables = [table(*key) for key in sorted(self.tables, key=self.tables.get)]
+        tables = [
+            list(key[1]) if key[0] == "lut" else table(*key)
+            for key in sorted(self.tables, key=self.tables.get)
+        ]
         code = array("q", self.code).tobytes()
         return (
             code,

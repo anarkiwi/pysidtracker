@@ -1,0 +1,34 @@
+// Song data as index-addressed lists. The binder lays every instrument's pulse rows end to end in
+// one list and gives the index each instrument starts at; the spec reads them in place, with no
+// pointer table or relocation.
+spec instrument_rows;
+layout { w: addr; pulse_rows, pulse_start: list; }
+cell chip: u8[25] @ 0xD400 out;
+cell pw: u16 @ (L.w, L.w + 1);
+cell pwpos: u8 @ L.w + 2;
+cell pwcnt: u8 @ L.w + 3;
+cell inst: u8 @ L.w + 4;
+cell gate: u8 @ L.w + 5;
+state rows: u8[] ro = L.pulse_rows;
+state first: u8[] ro = L.pulse_start;
+
+cursor pulse {
+  table rows width 3;
+  pos pwpos; count pwcnt; values pw; start first[inst];
+  on frame step; on note reset;
+  match c0 {
+    0..0x7f =>    sweep(into=pw, count=c0, step=c1);
+    0x80..0xfd => value(pw.hi = c0 & 0x7f, pw.lo = c1);
+    0xfe =>       jump(c1);
+    0xff =>       stop;
+  }
+}
+
+machine voice[x in 0..3] {
+  step {
+    chip[7 * x + 2] := lo(pw);
+    chip[7 * x + 3] := hi(pw);
+  }
+}
+machine clock { step { fire frame; if gate != 0 { fire note; } } }
+schedule { clock; for v in 0..3 { voice[v]; } }

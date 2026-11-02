@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 from ..notes import PARTS
 from .check import unread
 from .ir import Cell, K, Obj, Op, Program, Rd, V, width
+from .lowerarray import UNKNOWN_LIST, ArrayLowering
 from .lowerobj import ObjectLowering
 from .lowerview import ViewLowering
 from .lowerops import add16, mk, word, zext
@@ -53,7 +54,6 @@ COMPOUND = {
 }
 LKINDS = {"addr", "byte", "flag", "list"}
 CPU_INPUTS = {"a": 8, "x": 8, "y": 8, **dict.fromkeys("czvndi", 1)}
-UNKNOWN_LIST = ("?",)
 
 
 class Scope:
@@ -83,7 +83,7 @@ class Instance:
         self.objects: Dict[str, Obj] = {}
 
 
-class Lowerer(ViewLowering, ObjectLowering):
+class Lowerer(ViewLowering, ObjectLowering, ArrayLowering):
     """One elaboration of a :class:`Spec` (see :func:`elaborate`)."""
 
     # pylint: disable=too-many-public-methods,too-many-instance-attributes
@@ -104,6 +104,7 @@ class Lowerer(ViewLowering, ObjectLowering):
         self.signals: List[Tuple[str, int, int]] = []
         self.controls: List[Tuple[str, int, int]] = []
         self.keys: Dict[str, str] = {}
+        self.arrays: Dict[str, Tuple[str, ...]] = {}
         self.state_widths: Dict[str, int] = {}
         self.grammars: List[Tuple[str, int]] = []
         self.ran: set = set()
@@ -329,7 +330,13 @@ class Lowerer(ViewLowering, ObjectLowering):
     def bind_state(self, states: dict, item, scope: Scope, owner: str = "") -> None:
         """Declare spec-owned state: a variable kept from call to call, at no address; its
         key is ``name``, qualified by the instance ``owner`` of a machine's."""
-        _tag, line, name, typ, initial = item
+        _tag, line, name, typ, initial, size, attr = item
+        if size is not None:
+            self.bind_array(states, item, scope, owner)
+            return
+        if attr is not None or initial[0] == "alist":
+            self.error(line, f"state {name}: a list or `ro` needs an array ([n])")
+            initial = ("num", line, 0)
         w = WIDTHS.get(typ) or int(typ[1:])
         value = self.coerce(self.expr(initial, scope), w, line)
         if not isinstance(value, K):
@@ -506,7 +513,7 @@ class Lowerer(ViewLowering, ObjectLowering):
         """``instance.attr``: a signal or private cell of another instance."""
         if attr in inst.signals:
             return self.signal_read(inst, attr, line)
-        if attr in inst.states:
+        if attr in inst.states and inst.states[attr][0] == "var":
             return V(*inst.states[attr][1:])
         if attr in inst.cells:
             return self.read_cell(inst.cells[attr], None, line)
@@ -701,6 +708,9 @@ class Lowerer(ViewLowering, ObjectLowering):
             return self.signal_read(found[1], found[2], line)
         if kind == "cell":
             return self.read_cell(found[1], None, line)
+        if kind == "array":
+            self.error(line, f"{name} is an array; index it ({name}[i])")
+            return K(None, found[2])
         self.error(
             line, f"{name} is a stream; read it with next, {name}[k] or {name}.pos"
         )
@@ -720,6 +730,13 @@ class Lowerer(ViewLowering, ObjectLowering):
                 line, f"view {name} {'needs' if index is None else 'takes no'} an index"
             )
             return K(None, 8)
+        if base[0] == "in":
+            arr = self.array_ref(base[2], scope, line, ro=True)
+            if arr is None:
+                return K(None, 8)
+            start = self.coerce(self.expr(base[3], scope), 16, line)
+            offset = self.coerce(self.expr(offsets[attr], scope), 16, line)
+            return self.array_read(arr, mk("add", 16, start, offset), line)
         if base[0] == "via":
             found = self.lookup(base[2], scope)
             if found is None or found[0] != "cell" or found[1].length is None:
@@ -790,6 +807,8 @@ class Lowerer(ViewLowering, ObjectLowering):
             return self.rd(add16(V(found[1], 16), pos))
         if found is not None and found[0] == "cell":
             return self.read_cell(found[1], index, line)
+        if found is not None and found[0] == "array":
+            return self.array_read(found, index, line)
         if name in self.spec.machines:
             self.error(line, f"{name}[...] needs a member (.signal or .cell)")
             return K(None, 8)
@@ -830,6 +849,10 @@ class Lowerer(ViewLowering, ObjectLowering):
                 line, f"proc {name} returns only as a whole let/assignment value"
             )
             return K(None, 8)
+        if name == "len" and args[0][0] == "name":
+            found = self.lookup(args[0][2], scope)
+            if found is not None and found[0] == "array":
+                return K(found[5], 0)
         if name == "len" or name == "member":
             values = self.list_value(args[-1], scope)
             if values is UNKNOWN_LIST:
@@ -1079,6 +1102,8 @@ class Lowerer(ViewLowering, ObjectLowering):
             return [("wr", addr, self.coerce(value, 8, line))]
         if tag == "index":
             found = self.lookup(lval[2], scope)
+            if found is not None and found[0] == "array":
+                return self.array_write(found, self.expr(lval[3], scope), value, line)
             if found is None or found[0] != "cell":
                 self.error(line, f"cannot assign to {lval[2]}[...]")
                 return []
@@ -1091,7 +1116,7 @@ class Lowerer(ViewLowering, ObjectLowering):
             return self.table_write(lval[2], pick, lval[4], value, scope, line)
         if tag == "inst_attr" and lval[2] in self.spec.machines:
             inst = self.machine_instance(lval[2], self.expr(lval[3], scope), line)
-            if inst is not None and lval[4] in inst.states:
+            if inst is not None and inst.states.get(lval[4], ("",))[0] == "var":
                 _kind, ir, w = inst.states[lval[4]]
                 return [("set", ir, self.coerce(value, w, line))]
             if inst is not None and lval[4] in inst.cells:
@@ -1662,6 +1687,7 @@ def elaborate(
         signals=low.signals,
         controls=low.controls,
         keys=low.keys,
+        arrays=low.arrays,
         cells=low.cells(),
         invariants=invariants,
         assumes=assumes,

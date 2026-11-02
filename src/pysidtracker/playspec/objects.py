@@ -136,6 +136,17 @@ def _cursor(obj: Obj, action: tuple) -> Step:
     values = [locs[f"v{i}"] for i in range(len(locs)) if f"v{i}" in locs]
     room = (1 << 8 * len(pos)) - 1
     empty = next((r[3][2] for r in rows if r[3][0] == "run"), ())
+    tabs = obj.tabs or (None,) * columns
+
+    def fetch(R, j, addr):
+        tab = tabs[j]
+        if tab is None:
+            return R(addr & 0xFFFF)
+        if addr & 0xFFFF >= len(tab):
+            raise SpecRuntimeError(
+                f"cursor read {addr & 0xFFFF} past its {len(tab)} items"
+            )
+        return tab[addr & 0xFFFF]
 
     def assign(W, cols, sets, left):
         for index, part, spec, guard in sets:
@@ -176,7 +187,7 @@ def _cursor(obj: Obj, action: tuple) -> Step:
             return at + used - (adv > 0) & room
 
         for _ in range(JUMPS):
-            cols = [R((ops[j] + at) & 0xFFFF) for j in range(columns)]
+            cols = [fetch(R, j, ops[j] + at) for j in range(columns)]
             first = cols[0] if via is None else via
             row = next(
                 (
@@ -196,7 +207,7 @@ def _cursor(obj: Obj, action: tuple) -> Step:
                     break
                 at, via = target, row[3] if kind == "jump" else None
                 hold = row[2] if kind == "jump" else None
-                if hold and hold[0] <= R((ops[0] + at) & 0xFFFF) <= hold[1]:
+                if hold and hold[0] <= fetch(R, 0, ops[0] + at) <= hold[1]:
                     left[0] = 0
                     break
                 continue

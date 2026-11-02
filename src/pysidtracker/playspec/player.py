@@ -163,6 +163,7 @@ class SpecPlayer(EmuPlayer):
         self._state: List[int] = []
         self._places: Dict[Tuple[int, int], List[int]] = {}
         self._slot: Dict[str, int] = {}
+        self._arrays: Dict[str, int] = {}
         self._entry_sets: Dict[int, frozenset] = {}
         self.validator = StreamValidator() if validate else None
         self._native_state: Optional[dict] = None
@@ -236,6 +237,7 @@ class SpecPlayer(EmuPlayer):
     def _slots(self, program: Program, key: Tuple[int, int]) -> Dict[str, int]:
         """Each control of ``program`` at its place in the state every entry shares."""
         out = {}
+        self._arrays.update((key, len(elems)) for key, elems in program.arrays.items())
         for name, _w, start in program.controls:
             ident = program.keys.get(name, f"{key[0]}:{key[1]}:{name}")
             if ident not in self._slot:
@@ -244,14 +246,29 @@ class SpecPlayer(EmuPlayer):
             out[name] = self._slot[ident]
         return out
 
-    def state(self, name: str) -> int:
+    def state(self, name: str):
         """The value of the ``state`` or ``control`` ``name`` (``machine[i].name`` for a
-        machine's), shared by all the entries of the tune."""
+        machine's), shared by all the entries of the tune; an array state's is the list of its
+        elements (``name[i]`` is one)."""
+        if name in self._arrays:
+            return [
+                self._state[self._slot_of(f"{name}[{i}]")]
+                for i in range(self._arrays[name])
+            ]
         return self._state[self._slot_of(name)]
 
-    def set_state(self, name: str, value: int) -> None:
-        """Sets the ``state`` or ``control`` ``name`` to ``value``."""
-        self._state[self._slot_of(name)] = value
+    def set_state(self, name: str, value) -> None:
+        """Sets the ``state`` or ``control`` ``name`` to ``value`` (an array state to a list of
+        as many elements)."""
+        if name not in self._arrays:
+            self._state[self._slot_of(name)] = value
+        elif len(value) != self._arrays[name]:
+            raise ValueError(
+                f"{name} has {self._arrays[name]} elements, not {len(value)}"
+            )
+        else:
+            for i, item in enumerate(value):
+                self._state[self._slot_of(f"{name}[{i}]")] = item
 
     def _slot_of(self, name: str) -> int:
         if name not in self._slot:

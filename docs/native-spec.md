@@ -34,6 +34,9 @@ a modelled entry as that entry's program.
   `Obj` instruction pops the operands the encoder pushed, steps the reaction through the same
   memory access as any store (so a device read or a refused store bails the frame), and sets the
   wrap flag variable. `pysidtracker.playspec.objects` is the reference.
+- **Arrays.** A `ro` array state is a constant table (`Note`), a mutable one an indexed run of
+  variables (`VarX`); a cursor column over an array reads its table in place of memory. An index
+  past the items is a range bail, which Python then raises as `SpecRuntimeError`.
 - **Memory maps.** Each setting of the CPU port's low bits has its own map (ROM pages, I/O) and
   modelled entries, added by Python as it meets them; the port is read and written natively.
 - **Bails.** A frame that needs anything Python answers is undone from a log of its stores and

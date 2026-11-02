@@ -26,7 +26,9 @@ ATTR: "ro" | "out" | "operand" | "scratch" | "latched" | "volatile" | "per_proc"
 machine: "machine" NAME ("[" NAME "in" expr ".." expr "]")? "{" _mitem* "}"
 _mitem: cell | own | signal | control | proc | step | _object | record
 signal: "signal" NAME ":" TYPE "=" expr ";"
-own: "state" NAME ":" TYPE "=" expr ";"
+own: "state" NAME ":" TYPE [alen] [ATTR] "=" (expr | alist) ";"
+alen: "[" [expr] "]"
+alist: "[" expr ("," expr)* "]"
 control: "control" NAME ("on" NAME "mask" expr)? "{" state ("," state)* "}"
 state: NAME ("=" expr)?
 step: "step" block
@@ -70,6 +72,7 @@ o_on: "on" events "claim" ["when" expr] ";"   -> o_claim
     | "on" events "release" ["when" expr] ";" -> o_release
 
 w_table: "table" "@" expr ("," expr)* [w_width] ";"
+w_atable: "table" NAME ("," NAME)* [w_width] ";"
 w_width: "width" expr
 w_pos: "pos" NAME [k_last] ";"
 w_count: "count" NAME ";"
@@ -81,7 +84,7 @@ w_then: "then" wset ("," wset)*
 wset: NAME ["." NAME] "=" expr ["if" expr] ["when" expr]
 
 cursor: "cursor" NAME "{" _uclause* "}"
-_uclause: w_table | k_stream | w_pos | w_count | w_values | u_ret | u_run | k_run | u_adv | w_on
+_uclause: w_table | w_atable | k_stream | w_pos | w_count | w_values | u_ret | u_run | k_run | u_adv | w_on
         | u_settle | k_next | w_start | c_wrap | u_match | k_field
 k_stream: "stream" "@" expr ("grammar" gsel ("," gsel)*)? ";"
 k_next: "on" events "next" ";"
@@ -108,13 +111,15 @@ k_run: "run" expr ".." expr "base" expr "->" NAME ";"
 k_field: "field" NAME ["when" expr] ["->" kout ("," kout)*] ";"
 kout: NAME "=" expr ["when" expr]
 
-table: "table" NAME (t_at | t_via) "stride" expr ["offset" expr] "{" rfield* "}"
+table: "table" NAME (t_at | t_via | t_in) "stride" expr ["offset" expr] "{" rfield* "}"
 t_at: "@" expr
+t_in: "in" NAME
 t_via: "via" NAME
 output: "output" NAME "@" expr "order" STRING ["copy" "to" expr] ";"
-view: "view" NAME (v_at | v_via) "{" vfield* "}"
+view: "view" NAME (v_at | v_via | v_in) "{" vfield* "}"
 v_at: "@" expr
 v_via: "via" NAME ["offset" expr]
+v_in: "in" NAME "@" expr
 vfield: NAME "@" expr ";"
 record: "record" NAME "@" expr "stride" expr "{" rfield* "}"
 rfield: NAME ":" TYPE ["@" expr] ";"

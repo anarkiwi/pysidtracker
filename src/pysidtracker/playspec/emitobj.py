@@ -86,8 +86,11 @@ def row(spec: tuple, values: List[str]) -> str:
     return f"    {span}{when} => {body}{tail};"
 
 
-def declare(obj: Obj, cells: Dict[str, str], name: str) -> List[str]:
-    """The lines declaring ``obj`` as ``name``; ``cells`` maps each loc role to its cell."""
+def declare(
+    obj: Obj, cells: Dict[str, str], name: str, tabs: List[str] = ()
+) -> List[str]:
+    """The lines declaring ``obj`` as ``name``; ``cells`` maps each loc role to its cell and
+    ``tabs`` names the array each column of a cursor reads."""
     head = f"{obj.kind} {name}"
     if obj.kind == "counter":
         out = [f"{head}: {cells['cell']} {{"]
@@ -127,7 +130,8 @@ def declare(obj: Obj, cells: Dict[str, str], name: str) -> List[str]:
     adv, width, columns, rows = obj.spec
     values = [cells[f"v{i}"] for i in range(len(cells)) if f"v{i}" in cells]
     values += [cells["cnt"]] if "cnt" in cells else [""]
-    out = [f"{head} {{", f"  table @ {', '.join(['0'] * columns)} width {width};"]
+    table = f"@ {', '.join(['0'] * columns)}" if not tabs else ", ".join(tabs)
+    out = [f"{head} {{", f"  table {table} width {width};"]
     for role in ("pos", "cnt", "run", "ret"):
         if role in cells:
             out.append(f"  {'count' if role == 'cnt' else role} {cells[role]};")
