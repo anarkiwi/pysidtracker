@@ -480,6 +480,7 @@
     "tests/test_playspec.py::test_syntax_error_is_a_spec_error[native]",
     "tests/test_playspec.py::test_syntax_error_is_a_spec_error[python]",
     "tests/test_playspec.py::test_translation_validation_assume_bounds_memory_driven_loop[native]",
+    "tests/test_playspec.py::test_translation_validation_assume_bounds_memory_driven_loop[python]",
     "tests/test_playspec.py::test_translation_validation_counterexample_replays[python]",
     "tests/test_playspec.py::test_translation_validation_of_a_stretch[python]",
     "tests/test_playspec.py::test_translation_validation_pha_push_is_not_aliased_by_reads[native]",
