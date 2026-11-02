@@ -460,6 +460,19 @@ def test_a_record_field_placed_by_hand_may_alias_and_sit_past_the_stride():
     assert seen == [(0x34, 0x12, 0x35, 0x12, 1, 2)]
 
 
+def test_an_instance_writes_another_instances_cell():
+    text = """spec w;
+    machine m[x in 0..3] {
+      cell c: u8 @ 0x40 + x;
+      step { if x == 0 { for v in 0..3 { m[v].c := 7 + v; } } }
+    }
+    schedule { m[0]; }
+    """
+    assert frames(build(text), {}, 1, (0x40, 0x41, 0x42)) == [(7, 8, 9)]
+    with pytest.raises(SpecError, match="has no cell 'd'"):
+        build(text.replace("m[v].c :=", "m[v].d :="))
+
+
 def test_a_u16_cell_carries_into_its_high_byte_without_help():
     text = """spec u;
     cell w: u16 @ (0x10, 0x20);

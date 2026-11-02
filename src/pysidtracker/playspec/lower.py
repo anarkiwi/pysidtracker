@@ -993,6 +993,13 @@ class Lowerer(ViewLowering, ObjectLowering):
         if tag == "inst_attr" and lval[2] in self.tables:
             pick = [self.expr(lval[3], scope)]
             return self.table_write(lval[2], pick, lval[4], value, scope, line)
+        if tag == "inst_attr" and lval[2] in self.spec.machines:
+            inst = self.machine_instance(lval[2], self.expr(lval[3], scope), line)
+            if inst is not None and lval[4] in inst.cells:
+                return self.write_cell(inst.cells[lval[4]], None, value, line)
+            if inst is not None:
+                self.error(line, f"{inst.ident} has no cell {lval[4]!r}")
+            return []
         if (
             tag == "inst_attr"
             or tag == "attr"
