@@ -473,6 +473,36 @@ def test_an_instance_writes_another_instances_cell():
         build(text.replace("m[v].c :=", "m[v].d :="))
 
 
+def test_registers_wider_than_a_byte_pack_into_their_bytes():
+    text = """spec p;
+    cell pw: u12 @ 0x40;
+    cell fc: u11 @ (0x50 : 3, 0x51);
+    cell got: u16 @ 0x60;
+    machine m { step { pw += 0x0FFF; fc := fc + 0x0123; got := pw + fc; } }
+    schedule { m; }
+    """
+    seen = frames(
+        build(text), {0x40: [0x34, 0xF2], 0x50: [0xFD, 0x40]}, 1, range(0x40, 0x62)
+    )
+    pw = (0x234 + 0xFFF) & 0xFFF
+    fc = ((0x40 << 3 | 5) + 0x123) & 0x7FF
+    assert seen[0][0:2] == (pw & 0xFF, pw >> 8)
+    assert seen[0][0x10:0x12] == (fc & 7, fc >> 3)
+    assert seen[0][0x20:0x22] == ((pw + fc) & 0xFF, (pw + fc) >> 8)
+
+
+@pytest.mark.parametrize(
+    "decl, message",
+    [
+        ("cell a: u12 @ (0x50 : 2, 0x51);", "u12 as 2 \\+ 10"),
+        ("cell a: u16 @ (0x50 : 3, 0x51);", "u9..u15"),
+    ],
+)
+def test_a_packed_register_is_checked(decl, message):
+    with pytest.raises(SpecError, match=message):
+        build(f"spec p; {decl} machine m {{ step {{ }} }} schedule {{ m; }}")
+
+
 def test_a_u16_cell_carries_into_its_high_byte_without_help():
     text = """spec u;
     cell w: u16 @ (0x10, 0x20);

@@ -487,7 +487,8 @@ class _ToAst(Transformer):
         return self._n("at", meta, c[0])
 
     def split(self, meta, c):
-        return self._n("split", meta, c[0], c[1])
+        node = self._n("split", meta, c[0], c[2])
+        return node if c[1] is None else node + (c[1],)
 
     def machine(self, meta, c):
         name = str(c[0])

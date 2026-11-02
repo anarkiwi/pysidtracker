@@ -202,7 +202,19 @@ class Lowerer(ViewLowering, ObjectLowering):
         size = None if length is None else self.static(length, scope, line)
         if length is not None and size is None and self.binding is not None:
             size = -1
-        addrs = tuple(self.static(p, scope, line) for p in place[2:])
+        addrs = tuple(self.static(p, scope, line) for p in place[2:4])
+        low = self.static(place[4], scope, line) if len(place) > 4 else 8
+        pack = None
+        if typ not in ("u8", "u16", "bool", "ptr"):
+            pack, typ = (low, int(typ[1:])), "u16"
+            if length is not None or not 0 < low <= 8 or low + 8 < pack[1]:
+                self.error(
+                    line, f"cell {name}: u{pack[1]} as {low} + {pack[1] - low} bits"
+                )
+        elif len(place) > 4:
+            self.error(
+                line, f"cell {name}: a split place's bit width needs a u9..u15 type"
+            )
         if len(addrs) == 2 and typ == "u8":
             self.error(line, f"cell {name}: a split place needs a ptr or u16 type")
         if typ == "ptr" and length is None:
@@ -221,6 +233,7 @@ class Lowerer(ViewLowering, ObjectLowering):
             line,
             self.bind_notes(name, typ, length, attrs, notes, scope, line),
             bits=self.bind_bits(name, typ, bits, scope),
+            pack=pack,
         )
         if "per_proc" in attrs:
             self.decls[id(cell)] = (decl, owner, scope, layout_names(place))
@@ -357,6 +370,11 @@ class Lowerer(ViewLowering, ObjectLowering):
         addrs, combine = self.cell_access(cell, index, line)
         volatile = "volatile" in cell.attrs
         reads = [self.rd(a, volatile) for a in addrs]
+        if cell.pack is not None:
+            low, bits = cell.pack
+            lo = mk("and", 16, zext(reads[0], 16), K((1 << low) - 1, 16))
+            hi = mk("shl", 16, zext(reads[1], 16), K(low, 16))
+            return mk("and", 16, mk("or", 16, lo, hi), K((1 << bits) - 1, 16))
         return reads[0] if combine is None else combine(*reads)
 
     def check_latched(self, cell: Cell, line: int) -> None:
@@ -400,6 +418,21 @@ class Lowerer(ViewLowering, ObjectLowering):
         if not isinstance(value, (K, V)):
             tmp = self.fresh("w16")
             pre, value = [("set", tmp, value)], V(tmp, 16)
+        if cell.pack is not None:
+            low, bits = cell.pack
+            top = mk("shr", 16, value, K(low, 16))
+            return pre + [
+                (
+                    "wr",
+                    addrs[0],
+                    mk("lo", 8, mk("and", 16, value, K((1 << low) - 1, 16))),
+                ),
+                (
+                    "wr",
+                    addrs[1],
+                    mk("lo", 8, mk("and", 16, top, K((1 << bits - low) - 1, 16))),
+                ),
+            ]
         return pre + [
             ("wr", addrs[0], mk("lo", 8, value)),
             ("wr", addrs[1], mk("hi", 8, value)),

@@ -7,7 +7,7 @@ from typing import Dict, Optional, Tuple
 from .ir import Cell, K, Rd, V
 from .lowerops import mk, word, zext
 
-SIZES = {"u8": 1, "u16": 2}
+SIZES = {"u8": 1, **{f"u{n}": 2 for n in range(9, 17)}}
 REGISTERS = 25
 
 

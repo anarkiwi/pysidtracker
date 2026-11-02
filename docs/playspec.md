@@ -309,6 +309,14 @@ the table), a `u16` array a table of tables, an index choosing the sub-table: `p
 `offset` is a layout expression added to the pointer, so pointer relocation is in the binding. A
 table is syntax over `mem[...]`.
 
+### Registers wider than a byte
+
+`cell pw: u12 @ L.sid + 2;` is a 12-bit register over two bytes, the low byte then the low four
+bits of the next; `cell fc: u11 @ (L.sid + 0x15 : 3, L.sid + 0x16);` takes `3` bits of its first
+byte and the rest from the second. Types `u9`..`u15` read and assign the register's value, wrap at
+its width and write only its bits; a write of some of its bits is an assignment of the value
+(`fc := (fc & 7) | (top << 3)`). A record field may have such a type.
+
 ### Split tables
 
 `cell ptrs: u16[3] @ (L.lo, L.hi);` is a table of words stored as a low-byte and a high-byte

@@ -107,7 +107,8 @@ class Cell:
 
     ``notes`` is ``(part, offset)`` when the cell holds a note table: ``part`` its
     :data:`~pysidtracker.notes.PARTS` key and ``offset`` the note of index 0; ``bits`` maps
-    a named bit field to its ``(low, high)`` bit positions.
+    a named bit field to its ``(low, high)`` bit positions; ``pack`` is ``(k, w)`` for a
+    ``w``-bit register stored as ``k`` bits of its first byte and the rest in the second.
     """
 
     name: str
@@ -120,6 +121,7 @@ class Cell:
     notes: Optional[Tuple[str, int]] = None
     record: Optional[str] = None
     bits: Optional[Dict[str, Tuple[int, int]]] = None
+    pack: Optional[Tuple[int, int]] = None
 
     def extent(self) -> List[int]:
         """Every byte address the declaration spans (empty while unbound)."""

@@ -15,7 +15,7 @@ EVENTS = {
     "legato": "row",
     "instrument": "row",
 }
-SIZES = {"u8": 1, "u16": 2}
+SIZES = {"u8": 1, **{f"u{n}": 2 for n in range(9, 17)}}
 TOP = 0xFFFF
 MAX_BYTES = 16
 Asts = Dict[str, list]
