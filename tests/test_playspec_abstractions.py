@@ -565,7 +565,6 @@ machine m {
   step {
     let at = pos;
     let again = true;
-    let n = 0;
     while again bound 256 {
       again := false;
       let c0 = tab[at];

@@ -1242,10 +1242,8 @@ def _reorder(program, body, slots, base, observed, known, proof) -> Reordered:
     proof["placed"], proof["forward"] = placed, []
     proof["forwarded"] = forward(placed, proof=proof["forward"])
     out = eliminate(proof["forwarded"], end, end)[0]
-    out = declared(
-        rewrite(out, tidy, lambda s: [] if s[0] == "hook" else None),
-        [*end, *program.inputs],
-    )
+    out = rewrite(out, tidy, lambda s: [] if s[0] == "hook" else None)
+    out = declared(eliminate(out, end, end)[0], [*end, *program.inputs])
     staged = sorted({s[1] for s in statements(out) if s[0] == "set" and staging(s[1])})
     every = program.body + [s for p in program.procs.values() for s in p]
     return Reordered(

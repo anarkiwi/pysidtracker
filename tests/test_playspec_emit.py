@@ -45,6 +45,24 @@ def test_emitted_spec_elaborates_to_the_reordered_program(text):
         assert again.body
 
 
+FOLDED = HEAD + """cell osc: u8 @ L.sid + 0x1B volatile;
+machine m {
+  step {
+    let a = tick + 1;
+    let c = osc != 0;
+    chip[0] := ite(c, 5, ite(c, a, 9));
+  }
+}
+schedule { m; }
+"""
+
+
+def test_a_variable_only_folded_reads_read_is_not_emitted():
+    source = emit(O.reorder(program(FOLDED), ORDER).program, "ordered")
+    assert "tick + 1" not in source and "let a" not in source
+    assert elaborate(parse(source), {}).body
+
+
 def test_emitted_names_are_readable():
     source = emit(O.reorder(program(STALE), ORDER).program, "ordered")
     assert "let out_v0_pw_lo: u8 = pw;" in source

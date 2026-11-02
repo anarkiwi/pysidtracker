@@ -139,7 +139,9 @@ opened stream with that `ByteGrammar` and reports malformed data in
 - causality: a foreign signal read before its owner runs, a signal written by
   another machine, or a `latched` cell read after another instance's store;
 - recursion, unreachable code, `old()` outside an invariant, and misplaced
-  value-returning calls.
+  value-returning calls;
+- a `let`, proc parameter or `state` that nothing reads, judged on the spec as written
+  with every `build` branch included.
 
 With a binding it also rejects private cells shared by two instances, and lists
 writable cells aliasing read-only tables in `Program.notes`.

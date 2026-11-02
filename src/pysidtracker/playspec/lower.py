@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
 from ..notes import PARTS
+from .check import unread
 from .ir import Cell, K, Obj, Op, Program, Rd, V, width
 from .lowerobj import ObjectLowering
 from .lowerview import ViewLowering
@@ -1617,6 +1618,8 @@ def elaborate(
     its note at that clock rather than memory.
     """
     low = Lowerer(spec, binding, standard)
+    for line, message in unread(spec):
+        low.error(line, message)
     if routine is None:
         body = low.frame()
     else:

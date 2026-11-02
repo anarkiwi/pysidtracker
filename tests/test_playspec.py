@@ -137,6 +137,38 @@ def test_static_checks(body, message):
         lower(body)
 
 
+UNREAD = "cell o: u8 @ L.a;\n{}\nschedule {{ m; }}"
+
+
+@pytest.mark.parametrize(
+    "decl, message",
+    [
+        ("machine m { step { let v = 1; } }", "line t:4: let v is never read"),
+        (
+            "machine m { proc g(a: u8, b: u8) { o := a; } step { g(1, 2); } }",
+            "line t:4: parameter b of g is never read",
+        ),
+        ("state s: u8 = 0;\nmachine m { step { o := 1; } }", "state s is never read"),
+        (
+            "machine m { state t: u8 = 0; step { o := 1; } }",
+            "state t is never read",
+        ),
+    ],
+)
+def test_unread_variables_are_errors(decl, message):
+    with pytest.raises(SpecError, match=re.escape(message)):
+        lower(UNREAD.format(decl))
+
+
+def test_a_variable_read_only_in_a_build_branch_is_read():
+    text = UNREAD.format(
+        "machine m { step { let v = 1; if L.f { o := v; } } }\n"
+        "machine n { state k: u8 = 0; step { if L.f { o := k; } } }"
+    )
+    assert lower(text, dict(BIND, f=0))
+    assert lower(text, dict(BIND, f=1))
+
+
 SEMANTICS = """
 const K = 0xF0;
 cell w: u16 @ (L.a, L.a + 0x10);
@@ -331,7 +363,7 @@ TV_BIND = {"cnt": 0x1000, "idx": 0x1010, "acc": 0x1020, "hi": 0x1030, "sid": 0xD
 def test_translation_validation_counterexample_replays():
     image, labels = _routine()
     binding = dict(TV_BIND, reload=labels["reload"] + 1)
-    broken = parse(TV_SPEC.replace("if c { hi += 1; }", ""))
+    broken = parse(TV_SPEC.replace("hi += 1;", ""))
     result = validate(broken, binding, "v[0].tick", image, 0x2000, registers={"X": 0})
     assert not result.proven
     cex = result.counterexample
