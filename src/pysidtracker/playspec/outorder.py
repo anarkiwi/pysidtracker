@@ -460,7 +460,8 @@ class Effects:
             "set": lambda: Effect(frozenset((s[1],))),
             "wr": lambda: Effect(stores=(span(s[1]),)),
             "obj": lambda: Effect(
-                frozenset(s[3:4]) - {None}, tuple((a, a) for a in s[6])
+                (frozenset(s[3:4]) | frozenset(s[8])) - {None},
+                tuple((a, a) for a in s[6]),
             ),
             "finish": lambda: Effect(finishes=True),
         }.get(s[0], Effect)()
@@ -1123,7 +1124,7 @@ def eliminate(
         elif tag == "finish":
             live = end
         elif tag == "obj":
-            live = (live - set(s[3:4])).union(*map(names, s[4]))
+            live = (live - set(s[3:4])).union(*map(names, s[4]), s[8])
         else:
             live = live.union(*map(names, stmt_exprs(s)))
         out.append(s)
@@ -1242,10 +1243,8 @@ def _reorder(program, body, slots, base, observed, known, proof) -> Reordered:
     proof["placed"], proof["forward"] = placed, []
     proof["forwarded"] = forward(placed, proof=proof["forward"])
     out = eliminate(proof["forwarded"], end, end)[0]
-    out = declared(
-        rewrite(out, tidy, lambda s: [] if s[0] == "hook" else None),
-        [*end, *program.inputs],
-    )
+    out = rewrite(out, tidy, lambda s: [] if s[0] == "hook" else None)
+    out = declared(eliminate(out, end, end)[0], [*end, *program.inputs])
     staged = sorted({s[1] for s in statements(out) if s[0] == "set" and staging(s[1])})
     every = program.body + [s for p in program.procs.values() for s in p]
     return Reordered(

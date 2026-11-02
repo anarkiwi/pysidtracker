@@ -3,7 +3,7 @@
 
 start: _item*
 
-_item: spec_decl | layout | const | cell | machine | proc | schedule
+_item: spec_decl | layout | const | cell | own | machine | proc | schedule
      | invariant | assume | override | extend | patch | drop
      | event | _object | record | view | table | output
 
@@ -20,12 +20,13 @@ notes: "notes" "(" NOTEPART "," expr ")"
 NOTEPART: "lo" | "hi" | "word"
 ctype: TYPE ("[" expr "]")?
 place: expr                    -> at
-     | "(" expr "," expr ")"   -> split
+     | "(" expr [":" expr] "," expr ")"   -> split
 ATTR: "ro" | "out" | "operand" | "scratch" | "latched" | "volatile" | "per_proc"
 
 machine: "machine" NAME ("[" NAME "in" expr ".." expr "]")? "{" _mitem* "}"
-_mitem: cell | signal | control | proc | step | _object | record
+_mitem: cell | own | signal | control | proc | step | _object | record
 signal: "signal" NAME ":" TYPE "=" expr ";"
+own: "state" NAME ":" TYPE "=" expr ";"
 control: "control" NAME ("on" NAME "mask" expr)? "{" state ("," state)* "}"
 state: NAME ("=" expr)?
 step: "step" block
@@ -111,7 +112,9 @@ table: "table" NAME (t_at | t_via) "stride" expr ["offset" expr] "{" rfield* "}"
 t_at: "@" expr
 t_via: "via" NAME
 output: "output" NAME "@" expr "order" STRING ["copy" "to" expr] ";"
-view: "view" NAME "@" expr "{" vfield* "}"
+view: "view" NAME (v_at | v_via) "{" vfield* "}"
+v_at: "@" expr
+v_via: "via" NAME ["offset" expr]
 vfield: NAME "@" expr ";"
 record: "record" NAME "@" expr "stride" expr "{" rfield* "}"
 rfield: NAME ":" TYPE ["@" expr] ";"
@@ -198,6 +201,7 @@ ASSIGNOP.3: ":=" | "+=" | "-=" | "&=" | "|=" | "^=" | "<<=" | ">>="
      | NAME "[" expr "]" "." NAME -> inst_attr
      | NAME "[" expr "]" "[" expr "]" "." NAME -> row_attr
      | NAME "." NAME            -> attr
+     | NAME "." NAME "[" expr "]" -> attr_index
      | NAME "." NAME "." NAME   -> attr2
      | "mem" "[" expr "]"       -> mem
      | "mem16" "[" expr "]"     -> mem16
@@ -208,7 +212,7 @@ CMPOP: "==" | "!=" | "<=" | ">=" | "<" | ">"
 SHOP.2: "<<" | ">>"
 MULOP: "*" | "/" | "%"
 ADDOP: "+" | "-"
-TYPE: "u8" | "u16" | "bool" | "ptr"
+TYPE.2: /u(?:8|9|1[0-6])(?![A-Za-z0-9_])/ | "bool" | "ptr"
 INT: /0x[0-9a-fA-F]+/ | /0b[01]+/ | /[0-9]+/
 STRING: /"[^"]*"/
 

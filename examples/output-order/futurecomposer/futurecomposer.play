@@ -842,7 +842,6 @@ machine futurecomposer_ordered {
             let pulse_ctrl: u8 = 0;
             let pw_hi: u8 = 0;
             let wave: u8 = 0;
-            let record_base: u16 = 0;
             if ((f8 & 0xf0) == 0xf0) {
               cur := (mem[0x2126] + 1);
               mem[0x2126] := cur;
@@ -952,7 +951,6 @@ machine futurecomposer_ordered {
                   wrote_v2_freq_lo := true;
                   mem[0x213e] := lo_2;
                   ins_2 := (mem[0x2135] << 3);
-                  record_base := (0x2188 + u16(ins_2));
                   let sv_25: u8 = instr_tab[(u16(ins_2) + 2)];
                   sid[V2_AD] := sv_25;
                   let sv_26: u8 = instr_tab[(u16(ins_2) + 3)];
@@ -1104,7 +1102,6 @@ machine futurecomposer_ordered {
                     wrote_v2_freq_lo := true;
                     mem[0x213e] := lo_2;
                     ins_2 := (mem[0x2135] << 3);
-                    record_base := (0x2188 + u16(ins_2));
                     sv_27 := instr_tab[(u16(ins_2) + 2)];
                     sid[V2_AD] := sv_27;
                     sv_28 := instr_tab[(u16(ins_2) + 3)];
@@ -2383,7 +2380,6 @@ machine futurecomposer_ordered {
             let pulse_ctrl_2: u8 = 0;
             let pw_hi_2: u8 = 0;
             let wave_2: u8 = 0;
-            let record_base_2: u16 = 0;
             if ((f8_2 & 0xf0) == 0xf0) {
               cur_3 := (mem[0x2125] + 1);
               mem[0x2125] := cur_3;
@@ -2493,7 +2489,6 @@ machine futurecomposer_ordered {
                   wrote_v1_freq_lo := true;
                   mem[0x213d] := lo_3;
                   ins_4 := (mem[0x2134] << 3);
-                  record_base_2 := (0x2188 + u16(ins_4));
                   let sv_77: u8 = instr_tab[(u16(ins_4) + 2)];
                   sid[V1_AD] := sv_77;
                   let sv_78: u8 = instr_tab[(u16(ins_4) + 3)];
@@ -2645,7 +2640,6 @@ machine futurecomposer_ordered {
                     wrote_v1_freq_lo := true;
                     mem[0x213d] := lo_3;
                     ins_4 := (mem[0x2134] << 3);
-                    record_base_2 := (0x2188 + u16(ins_4));
                     sv_79 := instr_tab[(u16(ins_4) + 2)];
                     sid[V1_AD] := sv_79;
                     sv_80 := instr_tab[(u16(ins_4) + 3)];
@@ -4332,7 +4326,6 @@ machine futurecomposer_ordered {
             let pulse_ctrl_3: u8 = 0;
             let pw_hi_3: u8 = 0;
             let wave_3: u8 = 0;
-            let record_base_3: u16 = 0;
             if ((f8_3 & 0xf0) == 0xf0) {
               cur_5 := (mem[0x2124] + 1);
               mem[0x2124] := cur_5;
@@ -4442,7 +4435,6 @@ machine futurecomposer_ordered {
                   wrote_v0_freq_lo := true;
                   mem[0x213c] := lo_4;
                   ins_6 := (mem[0x2133] << 3);
-                  record_base_3 := (0x2188 + u16(ins_6));
                   let sv_129: u8 = instr_tab[(u16(ins_6) + 2)];
                   sid[V0_AD] := sv_129;
                   let sv_130: u8 = instr_tab[(u16(ins_6) + 3)];
@@ -4594,7 +4586,6 @@ machine futurecomposer_ordered {
                     wrote_v0_freq_lo := true;
                     mem[0x213c] := lo_4;
                     ins_6 := (mem[0x2133] << 3);
-                    record_base_3 := (0x2188 + u16(ins_6));
                     sv_131 := instr_tab[(u16(ins_6) + 2)];
                     sid[V0_AD] := sv_131;
                     sv_132 := instr_tab[(u16(ins_6) + 3)];

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from .ir import Cell, K, Obj, V
+from .ir import Cell, K, Obj, Own, V
 from .lowerops import add16, mk
 
 EVENTS = {
@@ -15,7 +15,7 @@ EVENTS = {
     "legato": "row",
     "instrument": "row",
 }
-SIZES = {"u8": 1, "u16": 2}
+SIZES = {"u8": 1, **{f"u{n}": 2 for n in range(9, 17)}}
 TOP = 0xFFFF
 MAX_BYTES = 16
 Asts = Dict[str, list]
@@ -92,10 +92,10 @@ class ObjectLowering:
                 self.error(fline, f"record field {name}: u8 or u16 only")
                 continue
             end = offset + SIZES[typ]
-            if size is not None and end > size:
+            if where is None and size is not None and end > size:
                 self.error(fline, f"record field {name} ends past the stride {size}")
             for byte in range(offset, end):
-                if taken.setdefault(byte, name) != name:
+                if taken.setdefault(byte, name) != name and where is None:
                     self.error(fline, f"record field {name} overlaps {taken[byte]}")
             if name in cells:
                 self.error(fline, f"record field {name} is already a cell")
@@ -105,9 +105,24 @@ class ObjectLowering:
             cells[name].record = rec
             offset = end
 
+    def loc_byte(self, a):
+        """The byte an object keeps at ``a``: memory, or a lane of a ``state``."""
+        if not isinstance(a, Own):
+            return self.rd(K(a, 16))
+        w = self.state_widths[a.n]
+        return V(a.n, 8) if w == 8 else mk("hi" if a.lane else "lo", 8, V(a.n, w))
+
     def object_cell(self, name: str, line: int, scope, wide: int = 2) -> tuple:
-        """The byte addresses of the scalar cell ``name`` (at most ``wide`` bytes)."""
+        """The byte addresses of the scalar cell ``name`` (at most ``wide`` bytes), or the
+        byte lanes of the ``state`` ``name``."""
         found = self.lookup(name, scope)
+        if found and found[0] == "var" and found[1] in self.state_widths:
+            if found[2] not in (8, 16) or found[2] > 8 * wide:
+                self.error(
+                    line, f"state {name} is not a u8 or u16 of at most {wide} bytes"
+                )
+                return (None,)
+            return tuple(Own(found[1], lane) for lane in range(found[2] // 8))
         cell = self.in_proc(found[1]) if found and found[0] == "cell" else None
         if cell is None or cell.length is not None or SIZES.get(cell.typ, 9) > wide:
             self.error(line, f"{name} is not a scalar cell of at most {wide} bytes")
@@ -580,7 +595,9 @@ class ObjectLowering:
 
     def step_stmt(self, obj: Obj, event: str, ops: list, flag: Optional[str]) -> list:
         """The statements of one reaction (a cursor's grammar hook first)."""
-        locs = [a for loc in obj.locs.values() for a in loc if a is not None]
+        every = [a for loc in obj.locs.values() for a in loc if a is not None]
+        locs = [a for a in every if not isinstance(a, Own)]
+        owns = tuple(sorted({a.n for a in every if isinstance(a, Own)}))
         reads = [(a, a) for a in locs]
         windows, extra = 0, 0
         if obj.kind == "cursor":
@@ -602,6 +619,7 @@ class ObjectLowering:
                 tuple(reads),
                 tuple(locs),
                 tuple(dyn),
+                owns,
             )
         ]
         if obj.grammar is not None and obj.reactions[event] == ("step",):
@@ -667,24 +685,28 @@ class ObjectLowering:
         return self.step_stmt(obj, event, ops, flag)
 
     def cursor_value(self, name: str, attr: str, scope, line: int):
-        """``cursor.ahead`` (the byte the next row starts with) or ``cursor.idle`` (no run of
-        empty rows is pending), if ``name`` is a cursor."""
+        """``cursor.ahead`` (the byte the next row starts with), ``cursor.cN`` (byte ``N`` of
+        that row) or ``cursor.idle`` (no run of empty rows is pending), if ``name`` is a
+        cursor."""
         obj = self.find_object(name)
         if obj is None or obj.kind != "cursor":
             return None
         if attr == "idle":
             if "run" not in obj.locs:
                 return K(1, 1)
-            return mk("eq", 1, self.rd(K(obj.locs["run"][0], 16)), K(0, 8))
-        if attr == "ahead":
-            base = next(iter(self.asts[obj.name].values()))[0]
-            start = self.coerce(self.expr(self.given(base), type(scope)()), 16, line)
-            pos = mk(
-                "add", 8, self.rd(K(obj.locs["pos"][0], 16)), K(int(obj.spec[0] > 0), 8)
+            return mk("eq", 1, self.loc_byte(obj.locs["run"][0]), K(0, 8))
+        column = 0 if attr == "ahead" else int(attr[1:]) if attr[1:].isdigit() else -1
+        if attr[:1] not in "ac" or not 0 <= column < obj.spec[2]:
+            self.error(
+                line, f"cursor {name} has ahead, idle and c0..c{obj.spec[2] - 1}"
             )
-            return self.rd(add16(start, pos))
-        self.error(line, f"cursor {name} has ahead and idle")
-        return K(None, 8)
+            return K(None, 8)
+        base = next(iter(self.asts[obj.name].values()))[column]
+        start = self.coerce(self.expr(self.given(base), type(scope)()), 16, line)
+        pos = mk(
+            "add", 8, self.loc_byte(obj.locs["pos"][0]), K(int(obj.spec[0] > 0), 8)
+        )
+        return self.rd(add16(start, pos))
 
     def owner_value(self, name: str, attr: str, scope, line: int):
         """``owner.mine`` (the owner cell holds this instance's id) or ``owner.free``
@@ -692,7 +714,7 @@ class ObjectLowering:
         obj = self.find_object(name)
         if obj is None or obj.kind != "owner":
             return None
-        held = self.rd(K(obj.locs["cell"][0], 16))
+        held = self.loc_byte(obj.locs["cell"][0])
         ident, none = (
             self.coerce(self.expr(self.given(a), scope), 8, line)
             for a in self.owner_exprs[obj.name]

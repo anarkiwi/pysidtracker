@@ -11,11 +11,12 @@ its variables are global, so arguments and results pass by name) and ``("finish"
 
 Event-driven objects stay typed through every stage. ``("fire", event, body)`` runs ``body``,
 the reactions of the objects to ``event`` (a transparent block). ``("obj", name, event, out,
-operands, reads, writes, dynamic)`` is one reaction of ``Program.objects[name]``: it
+operands, reads, writes, dynamic, owns)`` is one reaction of ``Program.objects[name]``: it
 evaluates ``operands``, steps the object on memory, and assigns the boolean ``out`` (None: no
 variable) whether the step wrapped; ``reads`` (address intervals) and ``writes`` (addresses)
-bound its memory accesses, and ``dynamic`` lists ``(operand, extra)``: it also reads the bytes
-from that operand's address up to ``extra`` above it. So a pass that has not seen the object's
+bound its memory accesses, ``dynamic`` lists ``(operand, extra)``: it also reads the bytes
+from that operand's address up to ``extra`` above it, and ``owns`` names the ``state``
+variables it reads and may assign (an object's byte :class:`Own` of one). So a pass that has not seen the object's
 kind can still treat it as one opaque, deterministic step.
 
 ``Op("note", w, (K(clock), K(part), K(offset), index))`` (standard note mode only) is
@@ -33,6 +34,14 @@ class K(NamedTuple):
 
     v: Optional[int]
     w: int
+
+
+class Own(NamedTuple):
+    """Byte ``lane`` of the ``state`` variable ``n``: where an object keeps a value the spec
+    owns at no address."""
+
+    n: str
+    lane: int
 
 
 class Rd(NamedTuple):
@@ -107,7 +116,8 @@ class Cell:
 
     ``notes`` is ``(part, offset)`` when the cell holds a note table: ``part`` its
     :data:`~pysidtracker.notes.PARTS` key and ``offset`` the note of index 0; ``bits`` maps
-    a named bit field to its ``(low, high)`` bit positions.
+    a named bit field to its ``(low, high)`` bit positions; ``pack`` is ``(k, w)`` for a
+    ``w``-bit register stored as ``k`` bits of its first byte and the rest in the second.
     """
 
     name: str
@@ -120,6 +130,7 @@ class Cell:
     notes: Optional[Tuple[str, int]] = None
     record: Optional[str] = None
     bits: Optional[Dict[str, Tuple[int, int]]] = None
+    pack: Optional[Tuple[int, int]] = None
 
     def extent(self) -> List[int]:
         """Every byte address the declaration spans (empty while unbound)."""

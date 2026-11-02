@@ -57,6 +57,9 @@ def test_syntax_error_is_a_spec_error():
         parse("spec x; cell")
 
 
+@pytest.mark.strain_exempt(
+    reason="each case pins one diagnostic message; elaboration is shared by both engines"
+)
 @pytest.mark.parametrize(
     "body, message",
     [
@@ -135,6 +138,44 @@ def test_static_checks(body, message):
         return
     with pytest.raises(SpecError, match=re.escape(message)):
         lower(body)
+
+
+UNREAD = "cell o: u8 @ L.a;\n{}\nschedule {{ m; }}"
+
+
+@pytest.mark.strain_exempt(
+    reason="each kind of unread name is reported with its own message"
+)
+@pytest.mark.parametrize(
+    "decl, message",
+    [
+        ("machine m { step { let v = 1; } }", "line t:4: let v is never read"),
+        (
+            "machine m { proc g(a: u8, b: u8) { o := a; } step { g(1, 2); } }",
+            "line t:4: parameter b of g is never read",
+        ),
+        ("state s: u8 = 0;\nmachine m { step { o := 1; } }", "state s is never read"),
+        (
+            "machine m { state t: u8 = 0; step { o := 1; } }",
+            "state t is never read",
+        ),
+    ],
+)
+def test_unread_variables_are_errors(decl, message):
+    with pytest.raises(SpecError, match=re.escape(message)):
+        lower(UNREAD.format(decl))
+
+
+@pytest.mark.strain_exempt(
+    reason="a read inside a build-flag branch is a read; asserts acceptance, not a branch"
+)
+def test_a_variable_read_only_in_a_build_branch_is_read():
+    text = UNREAD.format(
+        "machine m { step { let v = 1; if L.f { o := v; } } }\n"
+        "machine n { state k: u8 = 0; step { if L.f { o := k; } } }"
+    )
+    assert lower(text, dict(BIND, f=0))
+    assert lower(text, dict(BIND, f=1))
 
 
 SEMANTICS = """
@@ -331,7 +372,7 @@ TV_BIND = {"cnt": 0x1000, "idx": 0x1010, "acc": 0x1020, "hi": 0x1030, "sid": 0xD
 def test_translation_validation_counterexample_replays():
     image, labels = _routine()
     binding = dict(TV_BIND, reload=labels["reload"] + 1)
-    broken = parse(TV_SPEC.replace("if c { hi += 1; }", ""))
+    broken = parse(TV_SPEC.replace("hi += 1;", ""))
     result = validate(broken, binding, "v[0].tick", image, 0x2000, registers={"X": 0})
     assert not result.proven
     cex = result.counterexample
@@ -1063,3 +1104,19 @@ def test_hosted_native_hook_runs_the_tune_code(monkeypatch):
     grid = player.render_grid(frames)
     assert grid == InterruptPlayer(data).render_grid(frames)
     assert 0 in {row[0] for row in grid[1:]} and len({row[0] for row in grid}) > 10
+
+
+@pytest.mark.strain_exempt(
+    reason="an unread state is still reported when only a list is indexed"
+)
+def test_state_read_through_another_instance_or_an_index_or_an_object_is_read():
+    text = (
+        "cell o: u8 @ L.a;\n"
+        "machine m[x in 0..2] { state n: u8 = 0; step { n := 1; } }\n"
+        "machine r { step { o := m[1].n; } }\n"
+        "schedule { m[0]; m[1]; r; }"
+    )
+    assert lower(text)
+    listed = text.replace("o := m[1].n;", "o := L.l[0];")
+    with pytest.raises(SpecError, match="state n is never read"):
+        lower(listed)

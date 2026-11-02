@@ -398,14 +398,12 @@ def prove(
     stages: dict = {}
     result = O.reorder(program, order, memory=memory, observed=observed, proof=stages)
     end = frozenset(n for n, _w, _d in program.controls)
-    final = declared(
-        O.rewrite(
-            O.eliminate(stages["forwarded"], end, end)[0],
-            O.tidy,
-            lambda s: [] if s[0] == "hook" else None,
-        ),
-        [*end, *program.inputs],
+    tidied = O.rewrite(
+        O.eliminate(stages["forwarded"], end, end)[0],
+        O.tidy,
+        lambda s: [] if s[0] == "hook" else None,
     )
+    final = declared(O.eliminate(tidied, end, end)[0], [*end, *program.inputs])
     live = O.live_slots(result.slots, result.native)
     checks = {
         "flush order": None if result.paths == {live} else "out of order",

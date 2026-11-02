@@ -1,5 +1,7 @@
 """Events and event-driven objects: counters, owners, cursors and records."""
 
+import re
+
 import pytest
 
 from pysidtracker.playspec import (
@@ -209,6 +211,38 @@ def test_a_table_cursor_sweeps_delays_sets_and_jumps_on_each_frame():
     ]
 
 
+ROW_READS = """
+spec r;
+cell pos: u8 @ 0x20; cell a: u8 @ 0x21; cell b: u8 @ 0x22; cell c: u8 @ 0x23;
+cell q: u8 @ 0x24; cell p: u8 @ 0x25;
+cursor t { table @ %s; pos %s; on frame step;
+  match c0 { 0xff => stop; _ => value(); } }
+machine m { step { a := t.c0; b := t.c1; c := t.c2; fire frame; } }
+schedule { m; }
+"""
+
+
+@pytest.mark.parametrize(
+    "table, memory, pos",
+    [
+        ("0x2000 width 3", {0x2000: [1, 2, 3, 4, 5, 6, 0xFF, 7, 8]}, "pos"),
+        (
+            "0x2000, 0x2100, 0x2200",
+            {0x2000: [1, 4, 0xFF], 0x2100: [2, 5, 7], 0x2200: [3, 6, 8]},
+            "p",
+        ),
+    ],
+)
+def test_a_cursor_reads_the_bytes_of_the_row_at_its_position(table, memory, pos):
+    seen = frames(build(ROW_READS % (table, pos)), memory, 4, (0x21, 0x22, 0x23))
+    assert seen == [(1, 2, 3), (4, 5, 6), (0xFF, 7, 8), (0xFF, 7, 8)]
+
+
+def test_a_cursor_has_no_column_past_its_row():
+    with pytest.raises(SpecError, match="c0..c2"):
+        build((ROW_READS % ("0x2000 width 3", "pos")).replace("t.c2", "t.c3"))
+
+
 def test_a_table_cursor_sweeps_a_fixed_point_word_and_stops():
     prog = build(WALKER, tab=0x2000)
     rows = [0x51, 0xFE, 0, 0xFF, 0, 0]
@@ -399,8 +433,8 @@ def test_a_record_places_each_voices_fields_at_a_stride():
 @pytest.mark.parametrize(
     "fields, message",
     [
-        ("a: u8; b: u16 @ 5;", "ends past the stride"),
-        ("a: u16; b: u8 @ 1;", "overlaps a"),
+        ("a: u16 @ 4; b: u8;", "ends past the stride"),
+        ("a: u16 @ 1; b: u8 @ 0; c: u8;", "overlaps a"),
         ("a: bool;", "u8 or u16"),
         ("dur: u8;", "already a cell"),
     ],
@@ -414,6 +448,154 @@ def test_record_declarations_are_checked(fields, message):
     """
     with pytest.raises(SpecError, match=message):
         build(text)
+
+
+def test_a_record_field_placed_by_hand_may_alias_and_sit_past_the_stride():
+    text = """spec r;
+    machine m[x in 0..2] {
+      record r @ 0 stride 7 { lo: u8 @ 0x40; hi: u8 @ 0x41; w: u16 @ 0x40; far: u8 @ 0x90; }
+      step { w := 0x1234 + x; far := x + 1; }
+    }
+    schedule { m[0]; m[1]; }
+    """
+    seen = frames(build(text), {}, 1, (0x40, 0x41, 0x47, 0x48, 0x90, 0x97))
+    assert seen == [(0x34, 0x12, 0x35, 0x12, 1, 2)]
+
+
+def test_an_instance_writes_another_instances_cell():
+    text = """spec w;
+    machine m[x in 0..3] {
+      cell c: u8 @ 0x40 + x;
+      step { if x == 0 { for v in 0..3 { m[v].c := 7 + v; } } }
+    }
+    schedule { m[0]; }
+    """
+    assert frames(build(text), {}, 1, (0x40, 0x41, 0x42)) == [(7, 8, 9)]
+    with pytest.raises(SpecError, match="has no state or cell 'd'"):
+        build(text.replace("m[v].c :=", "m[v].d :="))
+
+
+def test_registers_wider_than_a_byte_pack_into_their_bytes():
+    text = """spec p;
+    cell pw: u12 @ 0x40;
+    cell fc: u11 @ (0x50 : 3, 0x51);
+    cell got: u16 @ 0x60;
+    machine m { step { pw += 0x0FFF; fc := fc + 0x0123; got := pw + fc; } }
+    schedule { m; }
+    """
+    seen = frames(
+        build(text), {0x40: [0x34, 0xF2], 0x50: [0xFD, 0x40]}, 1, range(0x40, 0x62)
+    )
+    pw = (0x234 + 0xFFF) & 0xFFF
+    fc = ((0x40 << 3 | 5) + 0x123) & 0x7FF
+    assert seen[0][0:2] == (pw & 0xFF, pw >> 8)
+    assert seen[0][0x10:0x12] == (fc & 7, fc >> 3)
+    assert seen[0][0x20:0x22] == ((pw + fc) & 0xFF, (pw + fc) >> 8)
+
+
+@pytest.mark.parametrize(
+    "decl, message",
+    [
+        ("cell a: u12 @ (0x50 : 2, 0x51);", "u12 as 2 \\+ 10"),
+        ("cell a: u16 @ (0x50 : 3, 0x51);", "u9..u15"),
+    ],
+)
+def test_a_packed_register_is_checked(decl, message):
+    with pytest.raises(SpecError, match=message):
+        build(f"spec p; {decl} machine m {{ step {{ }} }} schedule {{ m; }}")
+
+
+def test_a_view_through_a_pointer_table_reads_the_record_an_index_chooses():
+    text = """spec v;
+    cell ptrs: u16[2] @ (0x10, 0x12) ro;
+    cell o: u8 @ 0x30; cell p: u8 @ 0x31;
+    view ins via ptrs offset 0x100 { control @ 0; ad @ 3; }
+    machine m { step { o := ins[0].ad; p := ins[1].control; } }
+    schedule { m; }
+    """
+    memory = {0x10: [0x00, 0x08], 0x12: [0x20, 0x20], 0x2103: [7], 0x2108: [9]}
+    assert frames(build(text), memory, 1, (0x30, 0x31)) == [(7, 9)]
+    with pytest.raises(SpecError, match="needs an index"):
+        build(text.replace("ins[0].ad", "ins.ad"))
+
+
+def test_spec_owned_state_lasts_from_call_to_call_at_no_address():
+    text = """spec s;
+    state last: u8 = 7;
+    cell out: u8[4] @ 0x40;
+    machine m[x in 0..2] {
+      state count: u16 = 0x00FF;
+      step {
+        count += 1;
+        out[x] := last;
+        out[2 + x] := hi(count);
+        last := x;
+      }
+    }
+    schedule { m[0]; m[1]; }
+    """
+    prog = build(text)
+    assert frames(prog, {}, 2, (0x40, 0x41, 0x42, 0x43)) == [(7, 0, 1, 1), (1, 0, 1, 1)]
+    assert not any(c.name in ("last", "count") for c in prog.cells)
+    wide = build(text.replace("count: u16 = 0x00FF", "count: u12 = 0x0FFF"))
+    assert frames(wide, {}, 1, (0x42, 0x43)) == [(0, 0)]
+
+
+STATED_WALKER = (
+    WALKER.replace("cell pos: u8 @ 0x20;", "state pos: u8 = 0;")
+    .replace("cell cnt: u8 @ 0x21;", "state cnt: u8 = 0;")
+    .replace("cell pw: u16 @ (0x22, 0x23);", "state pw: u16 = 0;")
+    .replace("cell band: u8 @ 0x24;", "state band: u8 = 0;")
+    .replace(
+        "cell fine: u16 @ (0x25, 0x26);", "state fine: u16 = 0;\ncell o: u8[5] @ 0x20;"
+    )
+    .replace(
+        "step { fire frame; }",
+        "step { fire frame; o[0] := pos; o[1] := cnt; o[2] := lo(pw); o[3] := hi(pw);"
+        " o[4] := band; }",
+    )
+)
+
+
+def test_objects_keep_state_as_they_keep_cells():
+    memory = {0x2000: TABLE}
+    watch = (0x20, 0x21, 0x22, 0x23, 0x24)
+    prog = build(STATED_WALKER, tab=0x2000)
+    assert frames(prog, memory, 14, watch) == frames(
+        build(WALKER, tab=0x2000), memory, 14, watch
+    )
+    assert {c.name for c in prog.cells} == {"o"}
+
+
+def test_state_starts_from_the_binding_points_a_table_and_is_reached_by_instance():
+    text = """spec v;
+    layout { starts: list; }
+    cell out: u8[4] @ 0x40;
+    state ptr: u16 = 0x2000;
+    table seq via ptr stride 1 { b: u8; }
+    machine m[x in 0..2] {
+      state n: u8 = L.starts[x];
+      step { out[x] := n; n += 1; }
+    }
+    machine k { step { out[2] := m[0].n; m[1].n := 9; out[3] := seq[1].b; ptr += 1; } }
+    schedule { m[0]; m[1]; k; }
+    """
+    prog = build(text, starts=[5, 7])
+    memory = {0x2000: [10, 11, 12]}
+    assert frames(prog, memory, 2, (0x40, 0x41, 0x42, 0x43)) == [
+        (5, 7, 6, 11),
+        (6, 9, 7, 12),
+    ]
+    with pytest.raises(SpecError, match=r"L.starts\[2\] is past its 2 items"):
+        build(text.replace("L.starts[x]", "L.starts[x + 2]"), starts=[5, 7])
+    with pytest.raises(SpecError, match="state n is not a u8 or u16"):
+        wide = text.replace("state n: u8", "state n: u12")
+        build(
+            wide.replace(
+                "step { out", "counter c: n { on frame += 1; }\n      step { out"
+            ),
+            starts=[5, 7],
+        )
 
 
 def test_a_u16_cell_carries_into_its_high_byte_without_help():
@@ -515,10 +697,18 @@ machine clock { step { fire frame; if tick == 3 { fire note; } } }
 schedule { clock; for v in 0..2 { voice[v]; } }
 """
 BINDING = {"sid": 0xD400, "tab": 0x2000}
+STATED_FULL = FULL
+for _name, _typ in [("tick", "u8"), ("spdc", "u8"), ("wpos", "u8"), ("wcnt", "u8"),
+                    ("pw", "u16"), ("band", "u8"), ("cpos", "u8"), ("crun", "u8"),
+                    ("cnote", "u8"), ("owned", "u8")]:  # fmt: skip
+    STATED_FULL = re.sub(
+        rf"cell {_name}: \w+ @ [^;]*;", f"state {_name}: {_typ} = 0;", STATED_FULL
+    )
 
 
-def test_reorder_keeps_the_objects_and_proves_the_simplified_code_around_them():
-    prog = elaborate(parse(FULL), BINDING)
+@pytest.mark.parametrize("text", [FULL, STATED_FULL], ids=["cells", "state"])
+def test_reorder_keeps_the_objects_and_proves_the_simplified_code_around_them(text):
+    prog = elaborate(parse(text), BINDING)
     result = O.reorder(prog, O.ORDER)
     before = [s for s in O.statements(O.inline(prog.body, prog.procs)) if s[0] == "obj"]
     after = [s for s in O.statements(result.program.body) if s[0] == "obj"]

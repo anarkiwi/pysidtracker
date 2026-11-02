@@ -7,13 +7,14 @@ disables the machine; :class:`~.player.SpecPlayer` then runs :func:`~.pyexec.com
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import os
 from array import array
 from typing import Dict, List, Tuple
 
 from ..notes import table
-from .ir import K, Obj, Op, Program, Rd, V, width
+from .ir import K, Obj, Op, Own, Program, Rd, V, width
 
 try:
     _core = importlib.import_module("pysidtracker._specvm")
@@ -21,6 +22,7 @@ except ImportError:  # pragma: no cover - the Python executor stands in
     _core = None  # pylint: disable=invalid-name
 
 ENV = "PYSIDTRACKER_SPEC_NATIVE"
+OWN = 0x10000
 REGISTER = {name: i for i, name in enumerate("axyczidvn")}
 Core = _core.Core if _core else None
 OPS: Dict[str, int] = (
@@ -149,8 +151,18 @@ def _row(row) -> List[int]:
     ]
 
 
-def describe(obj: Obj, event: str, out: int) -> List[int]:
-    """The flat description of ``obj``'s reaction to ``event`` for the native core."""
+def describe(obj: Obj, event: str, out: int, slot=None) -> List[int]:
+    """The flat description of ``obj``'s reaction to ``event`` for the native core; ``slot``
+    maps a ``state`` variable to its slot, its byte :class:`~.ir.Own` to ``OWN + 2 * slot +
+    lane``."""
+    if slot is not None:
+        lanes = {
+            role: tuple(
+                OWN + 2 * slot(a.n) + a.lane if isinstance(a, Own) else a for a in loc
+            )
+            for role, loc in obj.locs.items()
+        }
+        obj = dataclasses.replace(obj, locs=lanes)
     action = obj.reactions[event]
     head = [
         {"counter": 0, "owner": 1, "cursor": 2, "accum": 3}[obj.kind],
@@ -367,7 +379,7 @@ class _Encoder:
         obj = self.program.objects.get(s[1])
         if obj is None:
             raise Unsupported(f"no object {s[1]!r}")
-        self.objects.append(describe(obj, s[2], out))
+        self.objects.append(describe(obj, s[2], out, self.var))
         self.emit("Obj", len(self.objects) - 1 | len(s[4]) << 24)
 
     def native(self, s) -> None:

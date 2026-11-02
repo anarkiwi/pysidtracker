@@ -117,7 +117,11 @@ pub struct Step {
 struct Reader<'a> {
     data: &'a [i64],
     at: usize,
+    vars: usize,
 }
+
+/// The first of the byte addresses that name a variable's byte: `OWN + 2 * slot + lane`.
+pub const OWN: i64 = 0x10000;
 
 impl Reader<'_> {
     fn next(&mut self) -> Result<i64, String> {
@@ -135,8 +139,9 @@ impl Reader<'_> {
 
     fn loc(&mut self) -> Result<Loc, String> {
         let (lo, hi) = (self.next()?, self.next()?);
-        if !(0..=0xFFFF).contains(&lo) || hi > 0xFFFF {
-            return Err("an address outside the 64 KiB".into());
+        let end = OWN + 2 * self.vars as i64;
+        if !(0..end).contains(&lo) || hi >= end {
+            return Err("an address outside the 64 KiB and the variables".into());
         }
         Ok(Loc {
             lo,
@@ -186,7 +191,7 @@ impl Reader<'_> {
 impl Step {
     /// Parses a description: `kind, out (-1: none), operands, ...` as the encoder writes it.
     pub fn parse(data: &[i64], vars: usize) -> Result<Step, String> {
-        let mut r = Reader { data, at: 0 };
+        let mut r = Reader { data, at: 0, vars };
         let kind = r.next()?;
         let out = r.next()?;
         let operands = r.count()?;
@@ -331,9 +336,15 @@ impl Step {
         env: &mut Env,
         ram: &[Cell<u8>],
         slow: u16,
+        vars: *mut i64,
         ops: &[i64],
     ) -> Result<i64, Bail> {
-        let mut mem = Mem { env, ram, slow };
+        let mut mem = Mem {
+            env,
+            ram,
+            slow,
+            vars,
+        };
         match &self.kind {
             Kind::Counter {
                 cell,
@@ -351,14 +362,27 @@ struct Mem<'a, 'b> {
     env: &'a mut Env<'b>,
     ram: &'a [Cell<u8>],
     slow: u16,
+    vars: *mut i64,
 }
 
 impl Mem<'_, '_> {
     fn get(&mut self, addr: i64) -> Result<i64, Bail> {
+        if addr >= OWN {
+            let (slot, shift) = ((addr - OWN) >> 1, 8 * ((addr - OWN) & 1));
+            // SAFETY: `Reader::loc` keeps `slot` below the program's variables.
+            return Ok(unsafe { *self.vars.add(slot as usize) } >> shift & 0xFF);
+        }
         read(self.env, self.ram, self.slow, addr)
     }
 
     fn put(&mut self, addr: i64, value: i64) -> Result<(), Bail> {
+        if addr >= OWN {
+            let (slot, shift) = ((addr - OWN) >> 1, 8 * ((addr - OWN) & 1));
+            // SAFETY: as in `get`.
+            let var = unsafe { &mut *self.vars.add(slot as usize) };
+            *var = *var & !(0xFF << shift) | (value & 0xFF) << shift;
+            return Ok(());
+        }
         store(self.env, addr, value & 0xFF)
     }
 

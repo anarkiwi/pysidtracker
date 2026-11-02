@@ -242,10 +242,12 @@ class Executor:
         return st
 
     def react(self, s, st: State, guard) -> None:
-        """An object reaction: every byte it writes and its wrap flag are uninterpreted
-        functions of its operands and the bytes it may read, the same for every call."""
-        _tag, name, event, out, ops, reads, writes, dynamic = s
+        """An object reaction: every byte it writes, every ``state`` it keeps and its wrap flag
+        are uninterpreted functions of its operands, those states and the bytes it may read,
+        the same for every call."""
+        _tag, name, event, out, ops, reads, writes, dynamic, owns = s
         args = [self.expr(o, st) for o in ops] + [st.mem] * bool(dynamic)
+        args += [st.env[n] for n in owns]
         for lo, hi in sorted(reads):
             args += [z3.Select(st.mem, z3.BitVecVal(a, 16)) for a in range(lo, hi + 1)]
         sorts = [a.sort() for a in args]
@@ -257,6 +259,11 @@ class Executor:
                 value = z3.If(guard, value, z3.Select(st.mem, at))
             st.mem = z3.Store(st.mem, at, value)
             st.writes.append(at)
+        kept = {}
+        for n in owns:
+            value = z3.Function(f"{key}:{n}", *sorts, st.env[n].sort())(*args)
+            kept[n] = value if guard is None else z3.If(guard, value, st.env[n])
+        st.env.update(kept)
         if out:
             flag = z3.Function(f"{key}:wrap", *sorts, z3.BoolSort())(*args)
             if guard is not None and out in st.env:

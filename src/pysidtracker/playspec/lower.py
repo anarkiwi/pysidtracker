@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
 from ..notes import PARTS
+from .check import unread
 from .ir import Cell, K, Obj, Op, Program, Rd, V, width
 from .lowerobj import ObjectLowering
 from .lowerview import ViewLowering
@@ -77,6 +78,7 @@ class Instance:
         self.cells: Dict[str, Cell] = {}
         self.signals: Dict[str, Tuple[str, int]] = {}
         self.controls: Dict[str, tuple] = {}
+        self.states: Dict[str, tuple] = {}
         self.procs: Dict[str, tuple] = {}
         self.objects: Dict[str, Obj] = {}
 
@@ -97,9 +99,11 @@ class Lowerer(ViewLowering, ObjectLowering):
         self.natives: list = []
         self.consts: Dict[str, K] = {}
         self.shared: Dict[str, Cell] = {}
+        self.states: Dict[str, tuple] = {}
         self.instances: Dict[str, Instance] = {}
         self.signals: List[Tuple[str, int, int]] = []
         self.controls: List[Tuple[str, int, int]] = []
+        self.state_widths: Dict[str, int] = {}
         self.grammars: List[Tuple[str, int]] = []
         self.ran: set = set()
         self.writers: Dict[str, set] = {}
@@ -135,6 +139,8 @@ class Lowerer(ViewLowering, ObjectLowering):
             self.consts[name] = value
         for decl in spec.cells:
             self.shared[decl[2]] = self.bind_cell(decl, "", Scope())
+        for decl in spec.states:
+            self.bind_state(self.states, decl, Scope())
         self.bind_tables(Scope())
         self.bind_output(Scope())
         for record in spec.records:
@@ -202,7 +208,19 @@ class Lowerer(ViewLowering, ObjectLowering):
         size = None if length is None else self.static(length, scope, line)
         if length is not None and size is None and self.binding is not None:
             size = -1
-        addrs = tuple(self.static(p, scope, line) for p in place[2:])
+        addrs = tuple(self.static(p, scope, line) for p in place[2:4])
+        low = self.static(place[4], scope, line) if len(place) > 4 else 8
+        pack = None
+        if typ not in ("u8", "u16", "bool", "ptr"):
+            pack, typ = (low, int(typ[1:])), "u16"
+            if length is not None or not 0 < low <= 8 or low + 8 < pack[1]:
+                self.error(
+                    line, f"cell {name}: u{pack[1]} as {low} + {pack[1] - low} bits"
+                )
+        elif len(place) > 4:
+            self.error(
+                line, f"cell {name}: a split place's bit width needs a u9..u15 type"
+            )
         if len(addrs) == 2 and typ == "u8":
             self.error(line, f"cell {name}: a split place needs a ptr or u16 type")
         if typ == "ptr" and length is None:
@@ -221,6 +239,7 @@ class Lowerer(ViewLowering, ObjectLowering):
             line,
             self.bind_notes(name, typ, length, attrs, notes, scope, line),
             bits=self.bind_bits(name, typ, bits, scope),
+            pack=pack,
         )
         if "per_proc" in attrs:
             self.decls[id(cell)] = (decl, owner, scope, layout_names(place))
@@ -280,6 +299,8 @@ class Lowerer(ViewLowering, ObjectLowering):
                 inst.cells[item[2]] = self.bind_cell(item, ident, scope)
             elif tag == "signal":
                 self.bind_signal(inst, item, scope)
+            elif tag == "own":
+                self.bind_state(inst.states, item, scope)
             elif tag == "control":
                 self.bind_control(inst, item, scope)
             elif tag == "proc":
@@ -303,6 +324,19 @@ class Lowerer(ViewLowering, ObjectLowering):
         ir = self.fresh(f"sig_{name}")
         inst.signals[name] = (ir, w)
         self.signals.append((ir, w, value.v or 0))
+
+    def bind_state(self, states: dict, item, scope: Scope) -> None:
+        """Declare spec-owned state: a variable kept from call to call, at no address."""
+        _tag, line, name, typ, initial = item
+        w = WIDTHS.get(typ) or int(typ[1:])
+        value = self.coerce(self.expr(initial, scope), w, line)
+        if not isinstance(value, K):
+            self.error(line, f"state {name}'s initial value must be static")
+            value = K(0, w)
+        ir = self.fresh(f"state_{name}")
+        self.state_widths[ir] = w
+        states[name] = ("var", ir, w)
+        self.controls.append((ir, w, value.v or 0))
 
     def bind_control(self, inst: Instance, item, scope: Scope) -> None:
         """Declare a control state set, memory-mapped or hidden."""
@@ -357,6 +391,11 @@ class Lowerer(ViewLowering, ObjectLowering):
         addrs, combine = self.cell_access(cell, index, line)
         volatile = "volatile" in cell.attrs
         reads = [self.rd(a, volatile) for a in addrs]
+        if cell.pack is not None:
+            low, bits = cell.pack
+            lo = mk("and", 16, zext(reads[0], 16), K((1 << low) - 1, 16))
+            hi = mk("shl", 16, zext(reads[1], 16), K(low, 16))
+            return mk("and", 16, mk("or", 16, lo, hi), K((1 << bits) - 1, 16))
         return reads[0] if combine is None else combine(*reads)
 
     def check_latched(self, cell: Cell, line: int) -> None:
@@ -400,6 +439,21 @@ class Lowerer(ViewLowering, ObjectLowering):
         if not isinstance(value, (K, V)):
             tmp = self.fresh("w16")
             pre, value = [("set", tmp, value)], V(tmp, 16)
+        if cell.pack is not None:
+            low, bits = cell.pack
+            top = mk("shr", 16, value, K(low, 16))
+            return pre + [
+                (
+                    "wr",
+                    addrs[0],
+                    mk("lo", 8, mk("and", 16, value, K((1 << low) - 1, 16))),
+                ),
+                (
+                    "wr",
+                    addrs[1],
+                    mk("lo", 8, mk("and", 16, top, K((1 << bits - low) - 1, 16))),
+                ),
+            ]
         return pre + [
             ("wr", addrs[0], mk("lo", 8, value)),
             ("wr", addrs[1], mk("hi", 8, value)),
@@ -423,13 +477,15 @@ class Lowerer(ViewLowering, ObjectLowering):
             return ("static", inst.x)
         if name in inst.signals:
             return ("signal", inst, name)
+        if name in inst.states:
+            return inst.states[name]
         if name in inst.cells:
             return ("cell", inst.cells[name])
         if name in self.consts:
             return ("static", self.consts[name])
         if name in self.shared:
             return ("cell", self.shared[name])
-        return None
+        return self.states.get(name)
 
     def signal_read(self, inst: Instance, name: str, line: int):
         """A signal of ``inst``; a foreign read must follow its writer in the schedule."""
@@ -446,9 +502,11 @@ class Lowerer(ViewLowering, ObjectLowering):
         """``instance.attr``: a signal or private cell of another instance."""
         if attr in inst.signals:
             return self.signal_read(inst, attr, line)
+        if attr in inst.states:
+            return V(*inst.states[attr][1:])
         if attr in inst.cells:
             return self.read_cell(inst.cells[attr], None, line)
-        self.error(line, f"{inst.ident} has no signal or cell {attr!r}")
+        self.error(line, f"{inst.ident} has no signal, state or cell {attr!r}")
         return K(None, 8)
 
     def machine_instance(self, name: str, index, line: int) -> Optional[Instance]:
@@ -538,6 +596,8 @@ class Lowerer(ViewLowering, ObjectLowering):
             return self.name_value(node[2], scope, line)
         if tag == "attr":
             return self.attr_value(node[2], node[3], scope, line)
+        if tag == "attr_index":
+            return self.list_item(node, scope)
         if tag == "attr2":
             field = ("attr", line, node[2], node[3])
             return self.nibble(field, node[4], scope)
@@ -550,6 +610,8 @@ class Lowerer(ViewLowering, ObjectLowering):
             index = self.expr(node[3], scope)
             if node[2] in self.tables:
                 return self.table_value(node[2], [index], node[4], scope, line)
+            if node[2] in self.views:
+                return self.view_value(node[2], node[4], scope, line, index)
             if self.bit_cell(node[2], scope, node[4]):
                 return self.bit_value(node[2], index, node[4], scope, line)
             inst = self.machine_instance(node[2], index, line)
@@ -640,14 +702,32 @@ class Lowerer(ViewLowering, ObjectLowering):
         )
         return K(None, 8)
 
-    def view_value(self, name: str, attr: str, scope: Scope, line: int):
-        """``view.field``: the byte at the field's offset from the view's base address."""
+    def view_value(self, name: str, attr: str, scope: Scope, line: int, index=None):
+        """``view.field``: the byte at the field's offset from the view's base address; a
+        view ``via`` a pointer table is indexed, ``view[i].field`` from pointer ``i``.
+        """
         _tag, _line, _name, base, fields = self.views[name]
         offsets = {f[2]: f[3] for f in fields}
         if attr not in offsets:
             self.error(line, f"view {name} has no field {attr!r}")
             return K(None, 8)
-        start = self.coerce(self.expr(base, scope), 16, line)
+        if (base[0] == "via") != (index is not None):
+            self.error(
+                line, f"view {name} {'needs' if index is None else 'takes no'} an index"
+            )
+            return K(None, 8)
+        if base[0] == "via":
+            found = self.lookup(base[2], scope)
+            if found is None or found[0] != "cell" or found[1].length is None:
+                self.error(line, f"view {name}: {base[2]} is not a pointer table")
+                return K(None, 8)
+            start = self.read_cell(found[1], index, line)
+            if base[3] is not None:
+                start = mk(
+                    "add", 16, start, self.coerce(self.expr(base[3], scope), 16, line)
+                )
+        else:
+            start = self.coerce(self.expr(base, scope), 16, line)
         offset = self.coerce(self.expr(offsets[attr], scope), 16, line)
         return self.rd(mk("add", 16, start, offset))
 
@@ -711,6 +791,18 @@ class Lowerer(ViewLowering, ObjectLowering):
             return K(None, 8)
         self.error(line, f"undefined cell {name!r}")
         return K(None, 8)
+
+    def list_item(self, node, scope: Scope):
+        """``L.<list>[i]``, ``i`` static."""
+        _tag, line, left, name, index = node
+        values = self.list_value(("attr", line, left, name), scope)
+        i = self.static(index, scope, line)
+        if values is UNKNOWN_LIST or i is None:
+            return K(None, 0)
+        if not 0 <= i < len(values):
+            self.error(line, f"L.{name}[{i}] is past its {len(values)} items")
+            return K(None, 0)
+        return K(values[i], 0)
 
     def list_value(self, node, scope: Scope):
         """A static list: ``L.<list>`` or a range."""
@@ -993,6 +1085,16 @@ class Lowerer(ViewLowering, ObjectLowering):
         if tag == "inst_attr" and lval[2] in self.tables:
             pick = [self.expr(lval[3], scope)]
             return self.table_write(lval[2], pick, lval[4], value, scope, line)
+        if tag == "inst_attr" and lval[2] in self.spec.machines:
+            inst = self.machine_instance(lval[2], self.expr(lval[3], scope), line)
+            if inst is not None and lval[4] in inst.states:
+                _kind, ir, w = inst.states[lval[4]]
+                return [("set", ir, self.coerce(value, w, line))]
+            if inst is not None and lval[4] in inst.cells:
+                return self.write_cell(inst.cells[lval[4]], None, value, line)
+            if inst is not None:
+                self.error(line, f"{inst.ident} has no state or cell {lval[4]!r}")
+            return []
         if (
             tag == "inst_attr"
             or tag == "attr"
@@ -1537,6 +1639,8 @@ def elaborate(
     its note at that clock rather than memory.
     """
     low = Lowerer(spec, binding, standard)
+    for line, message in unread(spec):
+        low.error(line, message)
     if routine is None:
         body = low.frame()
     else:
@@ -1581,7 +1685,7 @@ def _argument(text: str):
 def layout_names(node) -> frozenset:
     """The layout fields ``L.name`` the syntax ``node`` reads."""
     if isinstance(node, tuple):
-        if len(node) > 3 and node[0] == "attr" and node[2] == "L":
+        if len(node) > 3 and node[0] in ("attr", "attr_index") and node[2] == "L":
             return frozenset((node[3],))
         return frozenset().union(*(layout_names(n) for n in node[2:]))
     if isinstance(node, list):

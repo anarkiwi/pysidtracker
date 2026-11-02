@@ -61,6 +61,7 @@ def test_isomorphic_reports_the_first_difference():
     assert "bound" in isomorphic(loop, [("loop", K(1, 1), [], 4, 9)])
 
 
+@pytest.mark.strain_exempt(reason="asserts the exact statements declared inserts")
 def test_declared_initialises_a_variable_read_before_it_is_assigned():
     body = [("if", V("c", 1), [("set", "x", K(1, 8))], []), ("set", "y", V("x", 8))]
     out = declared(body, ["c"])

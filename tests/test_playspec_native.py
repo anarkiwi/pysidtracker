@@ -15,7 +15,7 @@ from pysidtracker.playspec.pyexec import compile_program, controls
 from pysidtracker.testing import whole_song
 
 from .helpers import build_psid
-from .test_playspec_events import BINDING, FULL
+from .test_playspec_events import BINDING, FULL, STATED_WALKER, TABLE
 
 pytestmark = pytest.mark.skipif(
     not native.available(), reason="the native core is not built"
@@ -715,6 +715,14 @@ def run_both(program, memory, frames=3):
     return None
 
 
+@pytest.mark.strain_exempt(reason="asserts equality of two executors")
+def test_objects_over_state_agree_natively():
+    program = elaborate(parse(STATED_WALKER), {"tab": 0x2000})
+    memory = bytearray(0x10000)
+    memory[0x2000 : 0x2000 + len(TABLE)] = bytes(TABLE)
+    assert run_both(program, memory, 14) is None
+
+
 def table_memory(seed):
     """Memory whose scratch and table pages are ``seed`` over an alphabet of tags."""
     memory = bytearray(0x10000)
@@ -897,7 +905,7 @@ def object_programs(draw):
                 + ops[-1:]
             )
         flag = f"w{index}" if obj.fires and draw(st.booleans()) else None
-        program.body.append(("obj", obj.name, event, flag, ops, (), (), ()))
+        program.body.append(("obj", obj.name, event, flag, ops, (), (), (), ()))
         if flag:
             program.body.append(
                 ("if", V(flag, 1), [("wr", K(0x2200 + index, 16), K(1, 8))], [])
@@ -929,7 +937,7 @@ def test_a_native_table_cursor_that_jumps_forever_bails_to_the_error_python_rais
     )
     program = Program(
         "loop",
-        [("obj", "w", "frame", None, (K(0x2100, 16), K(0, 8)), (), (), ())],
+        [("obj", "w", "frame", None, (K(0x2100, 16), K(0, 8)), (), (), (), ())],
         objects={"w": walker},
     )
     memory = bytearray(0x10000)
@@ -981,7 +989,19 @@ def test_counters_wrap_at_every_boundary_natively(action, wide):
 
     program = Program(
         "count",
-        [("obj", "c", "frame", "w", (operand(0x2002), operand(0x2004)), (), (), ())],
+        [
+            (
+                "obj",
+                "c",
+                "frame",
+                "w",
+                (operand(0x2002), operand(0x2004)),
+                (),
+                (),
+                (),
+                (),
+            )
+        ],
         objects={"c": counter},
     )
     for value in [0, 1, 2, 3, 4, 5, 0xFE, 0xFF, 0x100, 0x1FF, 0xFFFF]:

@@ -61,6 +61,9 @@ def body(decls="", stmts="", top=""):
     return top + M.format(decls, stmts)
 
 
+@pytest.mark.strain_exempt(
+    reason="each case pins one diagnostic message; elaboration is shared by both engines"
+)
 @pytest.mark.parametrize(
     "spec, message",
     [
@@ -146,7 +149,7 @@ def body(decls="", stmts="", top=""):
         (
             "spec t;\nlayout { a: addr; }\nmachine p { cell c: u8 @ L.a; step { } }\n"
             "machine m { step { let q = p.zz; } }\nschedule { p; m; }\n",
-            "has no signal or cell",
+            "has no signal, state or cell",
         ),
         (
             "spec t;\nlayout { a: addr; }\nmachine p[x in 0..2] { cell c: u8 @ L.a + x; step { } }\n"

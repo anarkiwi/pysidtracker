@@ -139,7 +139,9 @@ opened stream with that `ByteGrammar` and reports malformed data in
 - causality: a foreign signal read before its owner runs, a signal written by
   another machine, or a `latched` cell read after another instance's store;
 - recursion, unreachable code, `old()` outside an invariant, and misplaced
-  value-returning calls.
+  value-returning calls;
+- a `let`, proc parameter or `state` that nothing reads, judged on the spec as written
+  with every `build` branch included.
 
 With a binding it also rejects private cells shared by two instances, and lists
 writable cells aliasing read-only tables in `Program.notes`.
@@ -243,8 +245,10 @@ cursor name {
 - **Streams.** `stream @ base [grammar "m:a:r" [if e], ...];` in place of `table` reads a
   byte stream instead: `pos cell [last];`, `on row next;`, `run lo..hi base b -> cell;` and
   `field f [when cond] [-> cell = op [when test], ...];`. Fields chain into arms whose `when`
-  tests the previous byte, `last` is `advance pre` with a `settle` reaction, and `cursor.ahead`
-  and `cursor.idle` read the byte the next row starts with and whether no run is pending.
+  tests the previous byte and `last` is `advance pre` with a `settle` reaction.
+- **Reads.** `cursor.c0`, `cursor.c1`, ... read the bytes of the row at the cursor's position,
+  the row its next step decodes (`cursor.ahead` is `cursor.c0`); `cursor.idle` is whether no run
+  is pending.
 
 The pulse table of `examples/events/pulse-filter.play`:
 
@@ -307,6 +311,26 @@ the table), a `u16` array a table of tables, an index choosing the sub-table: `p
 `offset` is a layout expression added to the pointer, so pointer relocation is in the binding. A
 table is syntax over `mem[...]`.
 
+### State
+
+`state name: type = initial;` is a variable the spec owns, kept from call to call at no address:
+at the top level one for the whole player, in a machine one per instance. It is the player's
+state that has no meaning as memory (which instrument was last used, a running count), where a
+`cell` is state the tune's data or the chip places. Both executors and the native core keep it.
+A `u8`/`u16` state serves everywhere a scalar cell does: an object's position, count or values
+(each byte a lane of the variable), the pointer of a `via` table, and another instance's member
+(`voice[v].n`, `voice[v].n := e`). Its initial value is static, so a player's variables start
+from what its init left by way of the binding: `state seqpos: u8 = L.init_seqpos[x];` reads item
+`x` of the layout list `init_seqpos` (`L.list[i]` takes a static index).
+
+### Registers wider than a byte
+
+`cell pw: u12 @ L.sid + 2;` is a 12-bit register over two bytes, the low byte then the low four
+bits of the next; `cell fc: u11 @ (L.sid + 0x15 : 3, L.sid + 0x16);` takes `3` bits of its first
+byte and the rest from the second. Types `u9`..`u15` read and assign the register's value, wrap at
+its width and write only its bits; a write of some of its bits is an assignment of the value
+(`fc := (fc & 7) | (top << 3)`). A record field may have such a type.
+
 ### Split tables
 
 `cell ptrs: u16[3] @ (L.lo, L.hi);` is a table of words stored as a low-byte and a high-byte
@@ -349,7 +373,9 @@ the same test on two values.
 
 `record name @ base stride s { f: u8; g: u16 [@ offset]; }` in a machine gives each instance the
 cells `f`, `g` at `base + x * s + offset` (fields follow one another unless `@` places them). It
-replaces cells declared as `L.base + 7 * x + k` and is checked for overlaps and the stride.
+replaces cells declared as `L.base + 7 * x + k`. Fields that follow one another are checked for
+overlaps and the stride; a field placed with `@` may alias others or lie past the stride, as a
+cell may (`record v @ 0 stride 7 { lo: u8 @ L.lo; w: u16 @ L.lo; }`).
 
 ### view
 
@@ -357,6 +383,10 @@ replaces cells declared as `L.base + 7 * x + k` and is checked for overlaps and 
 held in a cell: `view instrument @ zp { ad @ 3; sr @ 4; }` makes `instrument.ad` the byte at
 `zp + 3`, read through the pointer as it stands in the proc that reads it.
 
+
+`view name via ptrs [offset e] { f @ k; }` reaches records through a pointer table: `name[i].f`
+is the byte `k` past pointer `ptrs[i]` (plus `offset`, a layout expression, so relocation is in
+the binding). It replaces loading a pointer into zero page and reading through it.
 ### Nibble fields
 
 `x.hi` and `x.lo` are the high and low nibble of a `u8` cell, local or parameter, and
