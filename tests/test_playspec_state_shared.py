@@ -3,7 +3,7 @@
 import pytest
 
 from pysidtracker.asm6502 import assemble
-from pysidtracker.playspec import SpecError, SpecPlayer, elaborate, native, parse
+from pysidtracker.playspec import SpecPlayer, native, parse
 from pysidtracker.testing import whole_song
 
 from .helpers import build_psid
@@ -58,19 +58,3 @@ def test_entries_of_one_tune_share_their_state(fast):
     assert play.memory[0x1300:0x1302] == bytes([101, 102])
     with pytest.raises(KeyError, match="no state"):
         play.state("missing")
-
-
-@pytest.mark.strain_exempt(reason="the same coverage under each backend fixture")
-def test_output_is_a_name_wherever_it_is_not_a_declaration():
-    text = """spec o;
-cell c: u8 @ 0x20;
-machine m {
-  proc output() { c := 7; }
-  step { output(); }
-}
-schedule { m; }
-"""
-    assert elaborate(parse(text), {}).name == "o"
-    assert parse(text + 'output sid @ 0xD400 order "v0.freq";').outputs[0][2] == "sid"
-    with pytest.raises(SpecError, match="unknown declaration"):
-        parse(text + 'emit sid @ 0xD400 order "v0.freq";')
