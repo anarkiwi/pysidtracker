@@ -133,6 +133,9 @@ def _frames(program, count):
     return memory, runs
 
 
+@pytest.mark.strain_exempt(
+    reason="asserts probing leaves the output unchanged and marks only statements run"
+)
 def test_probes_mark_the_statements_run_and_change_nothing():
     spec = parse(PLAY)
     binding = {"out": 0x1300, "on": 0}
