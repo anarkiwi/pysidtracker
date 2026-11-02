@@ -369,6 +369,10 @@ cell may (`record v @ 0 stride 7 { lo: u8 @ L.lo; w: u16 @ L.lo; }`).
 held in a cell: `view instrument @ zp { ad @ 3; sr @ 4; }` makes `instrument.ad` the byte at
 `zp + 3`, read through the pointer as it stands in the proc that reads it.
 
+
+`view name via ptrs [offset e] { f @ k; }` reaches records through a pointer table: `name[i].f`
+is the byte `k` past pointer `ptrs[i]` (plus `offset`, a layout expression, so relocation is in
+the binding). It replaces loading a pointer into zero page and reading through it.
 ### Nibble fields
 
 `x.hi` and `x.lo` are the high and low nibble of a `u8` cell, local or parameter, and

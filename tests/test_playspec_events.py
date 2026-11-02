@@ -503,6 +503,20 @@ def test_a_packed_register_is_checked(decl, message):
         build(f"spec p; {decl} machine m {{ step {{ }} }} schedule {{ m; }}")
 
 
+def test_a_view_through_a_pointer_table_reads_the_record_an_index_chooses():
+    text = """spec v;
+    cell ptrs: u16[2] @ (0x10, 0x12) ro;
+    cell o: u8 @ 0x30; cell p: u8 @ 0x31;
+    view ins via ptrs offset 0x100 { control @ 0; ad @ 3; }
+    machine m { step { o := ins[0].ad; p := ins[1].control; } }
+    schedule { m; }
+    """
+    memory = {0x10: [0x00, 0x08], 0x12: [0x20, 0x20], 0x2103: [7], 0x2108: [9]}
+    assert frames(build(text), memory, 1, (0x30, 0x31)) == [(7, 9)]
+    with pytest.raises(SpecError, match="needs an index"):
+        build(text.replace("ins[0].ad", "ins.ad"))
+
+
 def test_a_u16_cell_carries_into_its_high_byte_without_help():
     text = """spec u;
     cell w: u16 @ (0x10, 0x20);

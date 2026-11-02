@@ -392,6 +392,13 @@ class _ToAst(Transformer):
     def view(self, meta, c):
         return self._n("view", meta, str(c[0]), c[1], list(c[2:]))
 
+    def v_at(self, meta, c):
+        del meta
+        return c[0]
+
+    def v_via(self, meta, c):
+        return self._n("via", meta, str(c[0]), c[1])
+
     def table(self, meta, c):
         base, via = (c[1][2], None) if c[1][0] == "t_at" else (None, c[1][2])
         return self._n("table", meta, str(c[0]), base, via, c[2], c[3], list(c[4:]))

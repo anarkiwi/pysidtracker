@@ -583,6 +583,8 @@ class Lowerer(ViewLowering, ObjectLowering):
             index = self.expr(node[3], scope)
             if node[2] in self.tables:
                 return self.table_value(node[2], [index], node[4], scope, line)
+            if node[2] in self.views:
+                return self.view_value(node[2], node[4], scope, line, index)
             if self.bit_cell(node[2], scope, node[4]):
                 return self.bit_value(node[2], index, node[4], scope, line)
             inst = self.machine_instance(node[2], index, line)
@@ -673,14 +675,32 @@ class Lowerer(ViewLowering, ObjectLowering):
         )
         return K(None, 8)
 
-    def view_value(self, name: str, attr: str, scope: Scope, line: int):
-        """``view.field``: the byte at the field's offset from the view's base address."""
+    def view_value(self, name: str, attr: str, scope: Scope, line: int, index=None):
+        """``view.field``: the byte at the field's offset from the view's base address; a
+        view ``via`` a pointer table is indexed, ``view[i].field`` from pointer ``i``.
+        """
         _tag, _line, _name, base, fields = self.views[name]
         offsets = {f[2]: f[3] for f in fields}
         if attr not in offsets:
             self.error(line, f"view {name} has no field {attr!r}")
             return K(None, 8)
-        start = self.coerce(self.expr(base, scope), 16, line)
+        if (base[0] == "via") != (index is not None):
+            self.error(
+                line, f"view {name} {'needs' if index is None else 'takes no'} an index"
+            )
+            return K(None, 8)
+        if base[0] == "via":
+            found = self.lookup(base[2], scope)
+            if found is None or found[0] != "cell" or found[1].length is None:
+                self.error(line, f"view {name}: {base[2]} is not a pointer table")
+                return K(None, 8)
+            start = self.read_cell(found[1], index, line)
+            if base[3] is not None:
+                start = mk(
+                    "add", 16, start, self.coerce(self.expr(base[3], scope), 16, line)
+                )
+        else:
+            start = self.coerce(self.expr(base, scope), 16, line)
         offset = self.coerce(self.expr(offsets[attr], scope), 16, line)
         return self.rd(mk("add", 16, start, offset))
 

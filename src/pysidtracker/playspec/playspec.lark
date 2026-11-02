@@ -111,7 +111,9 @@ table: "table" NAME (t_at | t_via) "stride" expr ["offset" expr] "{" rfield* "}"
 t_at: "@" expr
 t_via: "via" NAME
 output: "output" NAME "@" expr "order" STRING ["copy" "to" expr] ";"
-view: "view" NAME "@" expr "{" vfield* "}"
+view: "view" NAME (v_at | v_via) "{" vfield* "}"
+v_at: "@" expr
+v_via: "via" NAME ["offset" expr]
 vfield: NAME "@" expr ";"
 record: "record" NAME "@" expr "stride" expr "{" rfield* "}"
 rfield: NAME ":" TYPE ["@" expr] ";"
