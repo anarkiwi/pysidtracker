@@ -220,7 +220,7 @@ class Lowerer(ViewLowering, ObjectLowering):
             frozenset(attrs),
             line,
             self.bind_notes(name, typ, length, attrs, notes, scope, line),
-            bits=self.bind_bits(name, typ, bits, scope, line),
+            bits=self.bind_bits(name, typ, bits, scope),
         )
         if "per_proc" in attrs:
             self.decls[id(cell)] = (decl, owner, scope, layout_names(place))

@@ -89,7 +89,7 @@ def _accum(obj: Obj, action: tuple) -> Step:
             return 0
         if mode == "to":
             if value == target:
-                return 1
+                return 0
             moved = (
                 min(value + amount, target)
                 if value < target

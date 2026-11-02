@@ -28,7 +28,7 @@ a modelled entry as that entry's program.
   compare-and-branch, conditional expressions evaluated lazily as Python does). The core checks a
   program once (operands, jump targets, a consistent stack at every instruction) and then runs it
   without bounds checks.
-- **Objects.** The reactions of [counters, owners, walkers and cursors](playspec.md#events-and-objects)
+- **Objects.** The reactions of [counters, owners, accumulators and cursors](playspec.md#events-and-objects)
   run natively: `native.describe` flattens each reaction (its kind, byte addresses, rows and
   fields) to integers, `crates/specvm-core/src/objects.rs` parses them once into a `Step`, and an
   `Obj` instruction pops the operands the encoder pushed, steps the reaction through the same

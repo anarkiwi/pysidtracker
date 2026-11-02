@@ -64,5 +64,5 @@ def test_a_wide_operand_has_no_nibble():
 
 
 def test_compound_assignment_reads_then_writes_the_nibble():
-    out, cell = outputs(program("v.hi += 1; v.lo |= 8;"), 0x2A)
+    _out, cell = outputs(program("v.hi += 1; v.lo |= 8;"), 0x2A)
     assert cell == 0x3A

@@ -219,6 +219,7 @@ class ObjectLowering:
         for event, action in reactions.items():
             if fires and action[0] != "flip" and not self.below(fires, event):
                 self.error(line, f"{name} fires {fires}, which is not below {event}")
+                fires = None
             if action[0] in ("tri", "flip") and "dir" not in locs:
                 self.error(line, f"accum {name}: {action[0]} needs a dir cell")
         obj = Obj(oid, "accum", "", locs, (), reactions, fires)
@@ -344,8 +345,7 @@ class ObjectLowering:
         rows = tuple(
             row
             for c in by_tag.get("w_row", ())
-            if (row := self.cursor_row(c, targets, cols, columns, step or 1, scope))
-            is not None
+            if (row := self.cursor_row(c, targets, cols, step or 1, scope)) is not None
         )
         reactions: dict = {}
         for _t, cline, event, action in by_tag.get("w_on", ()):
@@ -405,7 +405,7 @@ class ObjectLowering:
         found = self.guard(node, cols, scope, line)
         return () if found is None else (found,)
 
-    def cursor_row(self, clause, names, cols, columns, width, scope) -> Optional[tuple]:
+    def cursor_row(self, clause, names, cols, width, scope) -> Optional[tuple]:
         """``(lo, hi, tests, action)`` of a ``row`` clause or ``match`` arm."""
         _t, line, lo, hi, cond, act, then, when = clause
         if cond is not None and self.static(cond, scope, line) == 0:

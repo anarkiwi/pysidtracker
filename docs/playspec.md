@@ -146,8 +146,7 @@ writable cells aliasing read-only tables in `Program.notes`.
 
 ## Events and objects
 
-A player is mostly counters that wrap, tables walked a row at a time and streams read a row at
-a time. A spec declares those as **objects**, each stating what it does when an **event**
+A player is mostly counters that wrap, tables and streams read a row at a time, and values that ramp. A spec declares those as **objects**, each stating what it does when an **event**
 happens, instead of writing the cursor, counter and carry arithmetic in procs. Objects stay
 typed through the IR, both executors, the simplifier and the solver
 ([In the toolchain](#objects-in-the-toolchain)).
@@ -198,107 +197,146 @@ counter played: rows { on row += 1; }
 machine clock { step { fire frame; } }
 ```
 
-### walker
+### cursor
 
-A table walker advances through a table of fixed-width rows. The first byte of a row (`c0`) picks
-the arm by range; the arm reads the row's bytes `c0`, `c1`, ... as operands.
+One object reads tables and streams a row at a time. Rows are decoded by a `match` on the first
+byte `c0`; the bytes of a row are `c0`, `c1`, ... (`c0 & 0x7f`, `c0 << 4`, `(c1 & 0x0f) >> 2` are
+the operand forms).
 
 ```
-walker name {
+cursor name {
   table @ base [, base ...] [width w];  // interleaved rows (one base) or columns (several)
-  pos cell; count cell; values v0, v1;  // position, sweep counter, the values it exposes
-  start e;                              // the position `reset` loads (default 0)
-  on frame step; on note reset;
-  row lo[..hi] [if static]: sweep(into=v, count=op, step=op [, frac=n]) [then v = op, ...];
-  row lo[..hi] [if static]: delay(count=op) [then ...];
-  row lo[..hi] [if static]: set(v = op, v.hi = op, v.lo = op) [then ...];
-  row lo[..hi] [if static]: jump(op) [hold lo..hi] [as c0];
-  row lo[..hi] [if static]: stop;
+  pos cell; [count cell;] [run cell;] [ret cell;] [values v0, v1;] [start e;]
+  advance post|pre;                     // default post
+  on frame step; on note reset; [on tick settle;]
+  [wrap -> event;]                      // the event a step's flag fires
+  match c0 {
+    lo[..hi][, ...] [if static] [when test && ...] => row [then v = op, ...];
+    _ => row;                           // last: every other byte
+  }
 }
 ```
 
-- **Layout.** `table @ b width w` has rows of `w` bytes at `b`, `b+1`, ...: `ci` is the byte at
-  `pos + i`. `table @ b0, b1, b2` reads `ci` at `bi + pos` and advances by `width` (default 1).
-  The bases are expressions evaluated at each step, so a table can move.
-- **Operands.** `ci`, a constant, `& mask` and one shift: `c0 & 0x7f`, `c0 << 4`, `(c1 & 0x0f) >> 2`.
-- **Step.** The row at `pos` is the first arm whose range holds `c0`, else a `stop`.
-  - `sweep` ends when `cnt == count`: `cnt := 0`, `pos` advances by the width, the `then`
-    assignments run. Otherwise `cnt += 1` and the signed `step` is added to the value `into`.
-    A word value takes the carry; with `frac = n` the low `n` bits of the sum are held in the
-    low byte of a word (a fixed-point value).
-  - `delay` is a `sweep` that adds nothing; `set` assigns and advances.
-  - `jump` loads `pos` and decodes the row there in the same step, and a jump to the current
-    row holds. A walker that jumps 256 times in a step raises `SpecRuntimeError`.
-    `hold lo..hi` stops the step at a target whose first byte is in the range, with `pos` at the
-    target and the count cleared: the row is decoded on the next step. `as c0` decodes any other
-    target as the arm that handles the first byte `c0`, whatever the row says.
-  - **Static and runtime conditions.** `if e` on a row or a `then` item is a static test of the
-    binding (`L.flag`): a false one drops the row or item. `item when test` guards a `then` or
-    `set` assignment by a test of a row byte, `(c2 & 0xf0) == 0x80`, `!=`, `neg(c2)`, `bit(c2, n)`.
-    The walker's count cell can be assigned in `then`: `then count = 0`.
-  - **Carry.** A reaction's `-> flag` receives the carry the 6502 leaves: a sweep step the carry
-    out of the low byte of the addition (0 with `frac`), the end of a sweep or delay and a stop 1,
-    a set 0 (the jump's carry when a jump led to it) and a jump `target >= pos`.
-- **Values.** `values` are cells the rest of the spec reads; `v.hi` and `v.lo` assign one byte
-  of a word.
+| Row | Effect |
+|---|---|
+| `value(v = op, v.hi = op, ...) [take n]` | assigns, advances `n` bytes (default `width`) |
+| `hold(op)` | counts `count` up to `op`, then advances; the flag is 1 on that step |
+| `sweep(into=v, count=op, step=op [, frac=n])` | like `hold`, adding the signed `step` to `v` each step; `v` may be a `u16` and with `frac` its low byte holds the fraction |
+| `jump(op) [hold lo..hi] [as c0]` | loads `pos` and decodes there in the same step; a jump to itself stays; `hold` stops at a target whose first byte is in the range; `as` decodes the target as another first byte |
+| `call(op)` / `return` | `call` saves the next row in `ret` and jumps; `return` jumps to `ret` |
+| `run(base)` | a run of `c0 - base + 1` empty rows (every byte reads 0): the rows after the first count `run` down and leave `pos` where it is; `then` items apply to each empty row |
+| `stop` | `pos` stays on the row, flag 1; so does a byte no arm matches |
+| `end [take n]` | advances, flag 1 |
 
-The pulse and filter tables of `examples/events/pulse-filter.play`:
+- **Steps.** A step decodes at most 256 rows (`SpecRuntimeError` after that). The flag is the
+  carry a `-> flag` reaction receives: the carry of the sweep addition (0 with `frac`), 1 at the
+  end of a `hold` or `sweep`, at a `stop` and an `end`, a `jump`'s `target >= pos`, else 0.
+- **Advance.** With `post`, `pos` is the next row to read. With `pre`, `pos` rests on the last byte
+  of the row read, a step first moves one byte on (unless a `run` is pending) and `reset` loads
+  `start - 1`; a `settle` reaction takes that byte instead, for a player that moves on at a later
+  tick. `hold` and `sweep` need `post`.
+- **Conditions.** `if e` on an arm or a `then` item is a static test of the binding (`L.flag`); a
+  false one drops it. `when` tests row bytes (`c1 == 3`, `neg(c1)`, `bit(c1, n)`, `(c2 & 0xf0) !=
+  0x80`) and `&&` joins them; an item `v = op when test` assigns only if the test holds.
+- **Values.** `v.hi` and `v.lo` assign one byte of a word. The `count` cell can be assigned in
+  `then`. Value cells are collected from the rows; `values` fixes their order.
+- **Fields.** The declarations of a stream cursor, `cursor name @ base pos cell [last] { on row
+  next; run lo..hi base b -> cell; field f [when cond] [-> cell = op [when test], ...]; }`, and of
+  a `walker` (`row lo[..hi]: sweep(...)|delay(...)|set(...)|jump(...)|stop`), are accepted and
+  lowered to this object: `field` chains become arms whose `when` tests the previous byte, `last`
+  is `advance pre` with a `settle` reaction, and `cursor.ahead` and `cursor.idle` read the byte
+  the next row starts with and whether no run is pending.
+
+The pulse table of `examples/events/pulse-filter.play`:
 
 ```
-walker pulse {
+cursor pulse {
   table @ L.pulse_table width 3;
-  pos pwpos; count pwcnt; values pw; start start_pulse;
+  pos pwpos; count pwcnt; start start_pulse;
   on frame step; on note reset;
-  row 0..0x7f:    sweep(into=pw, count=c0, step=c1);
-  row 0x80..0xfd: set(pw.hi = c0 & 0x7f, pw.lo = c1);
-  row 0xfe:       jump(c1);
-  row 0xff:       stop;
+  match c0 {
+    0x00..0x7f => sweep(into=pw, count=c0, step=c1);
+    0x80..0xfd => value(pw.hi = c0 & 0x7f, pw.lo = c1);
+    0xfe       => jump(c1);
+    0xff       => stop;
+  }
 }
 ```
 
 replaces a proc that decodes the row, compares the sweep counter, adds the sign-extended step to
 the low byte, carries into the high byte by hand, follows jumps and writes the position back.
 `tests/test_playspec_event_examples.py` checks it against that proc on random tables.
+`examples/events/pattern-cursor.play` is the stream form: an orderlist cursor chooses the pattern a
+second cursor reads.
 
-### cursor
+### accum
 
 ```
-cursor name @ base pos cell [last] [grammar "module:attr:rule"] {
-  on row next; on pattern_end reset; on tick settle;
-  run lo..hi base b -> cell;                // a byte in lo..hi starts a run of (byte - b) empty rows
-  field name [when cond] [-> cell = operand [when test], ...];
+accum name: cell {            // cell is a u8 or u16
+  step e;                     // the amount per step (default 1)
+  dir cell;                   // the direction of a triangle, 0 up
+  on frame ramp;              // cell += step; the flag is the carry out
+  on frame ramp to e then stop; // moves toward e by step and holds there; the flag is the arrival
+  on frame triangle;          // adds step going up, subtracts going down
+  on turn flip;               // reverses the direction
+  [-> event]                  // the event the flag fires
 }
 ```
 
-The cursor reads the stream `base` at the 8-bit position in `pos`, as `stream` does, and
-`grammar` names the same `ByteGrammar` view. `next` reads one row: a pending run count makes it
-empty (and counts down); else a first byte in the `run` range loads the count (and is the row);
-else the row is a first field and each following field whose `when` holds of the previous field's
-byte: `neg(prev)`, `bit(prev, n)`, `(prev & m) == v`, `!=`, `!`. An empty row reads its first
-field as 0. Each field with `->` stores its byte, through the operand, in the cell; `pos`
-advances over the bytes read. `reset` loads `pos` from `start` (default 0) and clears the run.
+A triangle is an `accum` stepping on `frame` and a `counter` whose wrap fires the event the
+accumulator flips on: `counter half: beat { on frame += 1; wrap at 3 -> turn; }` with `on turn flip;`.
 
-With `last`, `pos` stays on the last byte read, as a player that adds one on a later tick keeps
-it: `next` reads at `pos`, leaves it on the row's last byte, and `settle` moves it to the next
-row unless a run is pending. `cursor.ahead` is the byte the next row starts with (at `pos + 1`
-in `last` mode, else at `pos`) and `cursor.idle` that no run is pending, so a format can look
-for its end marker before it settles. A field's stores each take their own `when` test of the
-field's byte.
+### Bit fields
 
-The orderlist and pattern of `examples/events/pattern-cursor.play` replace a proc of `stream`s,
-`next`s and position write-backs:
+`cell ad: u8 @ A { hi: 4..7, lo: 0..3 };` names bit ranges of a cell. `ad.hi` reads the range
+right-aligned and `ad.hi := v` stores `(ad & ~mask) | ((v & field mask) << low)`; `+=` and the like
+read then write the field, and `arr[i].flag` addresses a field of a cell array. A range is `lo..hi`
+or one bit, within the cell's width. A field the cell does not declare is the
+[nibble](#nibble-fields) `.hi`/`.lo`. Bit fields are syntax over shifts and masks.
+
+### Tables
 
 ```
-cursor orderlist @ L.orderlist pos ordpos { on pattern_end next; field pattern -> curptn = pattern; }
-cursor pattern @ word(ptn_lo[curptn], ptn_hi[curptn]) pos ptnpos {
-  on row next; on pattern_end reset;
-  run 0xF0..0xF7 base 0xF0 -> gap;
-  field note -> curnote = note & 0x7F;
-  field inst when neg(note) -> curinst = inst & 0x7F;
-  field fx when neg(inst) -> curfx = fx;
-}
-handler last_row on row { if curnote == 0x7F { fire pattern_end; } }
+table voices @ L.base stride 7 { freq: u16; ctrl: u8; ad: u8 @ 5; }   // voices[i].freq
+table pattern via ptrs stride 3 [offset L.reloc] { note: u8; fx: u8 @ 2; }
 ```
+
+`t[i].f` is the field `f` of row `i`, at `base + i * stride + offset of f` (fields follow one
+another unless `@` places them; `u16` is little-endian), readable and a target. With `via`, the
+base is held in data: a `u16` cell holds the one sub-table (`t[r].f`, so assigning the cell rebinds
+the table), a `u16` array a table of tables, an index choosing the sub-table: `pattern[p][r].f`.
+`offset` is a layout expression added to the pointer, so pointer relocation is in the binding. A
+table is syntax over `mem[...]`.
+
+### Split tables
+
+`cell ptrs: u16[3] @ (L.lo, L.hi);` is a table of words stored as a low-byte and a high-byte
+table: `ptrs[i]` reads and assigns one `u16`. A `via` table reaches the sub-tables it points to.
+
+### latch
+
+`latch x := y on row [when c];` copies `y` into `x` when `row` fires: a handler of one assignment.
+With an event chain (`counter ... wrap -> gate_on;`, `handler ... { fire gate_off; }`) it commits a
+pending value or rebinds a pointer a table reads (`latch cur := next_ptr on gate_on;`), and a
+`cursor`'s `on e reset` restarts it. `tests/test_playspec_abstractions.py` runs note, gate-off,
+ticks, gate-on as such a chain.
+
+### Instances
+
+`machine voice[x in 0..3] { record slot @ L.w stride 7 { freq: u16; ctrl: u8; } ... }` is one
+machine definition run for `x = 0, 1, 2`, each instance with its own `freq` and `ctrl` at `L.w +
+7 * x + offset`, so a spec never writes `x * 7`. An [owner](#owner) cell shared by the instances
+claims and releases on events: `owner filt: owner_id { id x + 1; none 0; on note claim when
+gate[x] != 0; on legato release; }`, and `filt.mine` tests it.
+
+### output
+
+`output chip @ A order "ORDER";` declares the 25 register cells `chip` at `A` and the write order
+`outorder.reorder(program)` uses when it is given none (`ORDER` as in [Output order](#output-order),
+`segments(sr,ad,ctrl):4` included). `output chip @ G order "ORDER" copy to A;` binds the same
+cells to a staging block `G`: the spec's stores go there and the call copies it to the SID at `A`
+before every `finish` and at its end. Only the declaration differs, and `reorder` promotes the
+staging copy as it does a ghost block.
 
 ### owner
 
@@ -328,12 +366,12 @@ held in a cell: `view instrument @ zp { ad @ 3; sr @ 4; }` makes `instrument.ad`
 the like read then write the nibble. A nibble is syntax over `>> 4`, `& 0x0F` and the or of the
 masked halves, so the IR, native code, `emit` and proofs are those of that arithmetic. A view
 field is read through its pointer; it is not a target. `.hi` and `.lo` of a `u16` cell are its
-bytes (`cutoff.hi` in a walker), and of any other operand than a `u8` an error.
+bytes (`pw.hi` in a cursor), and of any other operand than a `u8` an error.
 
 ### u16 cells
 
 A `u16` cell is a word at adjacent bytes or at `(lo, hi)` addresses; reads and stores combine the
-bytes, so `pw += sx(step)` carries into the high byte. A walker's `sweep` and `v.hi`/`v.lo` use the
+bytes, so `pw += sx(step)` carries into the high byte. A cursor's `sweep` and `v.hi`/`v.lo` use the
 same cells.
 
 ### Objects in the toolchain
@@ -364,8 +402,7 @@ same cells.
   cell placed at several layout fields (`(L.lo, L.hi)`) moves when any of them has a `<field>@<proc>`
   binding. `routine` of `elaborate` takes arguments, `voice[0].seq_fx(a)`: registers and flags
   by name, anything else as an expression over the instance (`smallfx(curfx2 >> 4, a)`).
-- **Limits.** Rows carry at most 16 bytes, and operands are the forms above. An object cannot write the SID (state those stores);
-  the carry a walker returns is the one its row kind leaves.
+- **Limits.** Rows carry at most 16 bytes, and operands are the forms above. An object cannot write the SID (state those stores).
 
 ## Variants
 

@@ -14,7 +14,7 @@ REGISTERS = 25
 class ViewLowering:
     """Bit fields of cells and ``table`` declarations of a :class:`~.lower.Lowerer`."""
 
-    def bind_bits(self, name: str, typ: str, bits, scope, line: int):
+    def bind_bits(self, name: str, typ: str, bits, scope):
         """``{field: (low, high)}`` of a cell's named bit ranges (None: no fields)."""
         if bits is None:
             return None
@@ -102,7 +102,16 @@ class ViewLowering:
     def bind_tables(self, scope) -> None:
         """Place the fields of every ``table`` (a field follows the previous unless `@`)."""
         self.table_fields: Dict[str, Dict[str, Tuple[int, str]]] = {}
-        for _tag, line, name, base, via, stride, offset, fields in self.tables.values():
+        for (
+            _tag,
+            line,
+            name,
+            base,
+            via,
+            stride,
+            _offset,
+            fields,
+        ) in self.tables.values():
             size = self.static(stride, scope, line)
             placed: Dict[str, Tuple[int, str]] = {}
             taken: Dict[int, str] = {}

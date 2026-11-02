@@ -420,7 +420,7 @@ fn accum(m: &mut Mem, cell: Loc, mode: i64, dir: Option<Loc>, ops: &[i64]) -> Re
         }
         1 => {
             if value == target {
-                return Ok(1);
+                return Ok(0);
             }
             let moved = if value < target {
                 (value + amount).min(target)

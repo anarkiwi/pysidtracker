@@ -105,7 +105,8 @@ def declare(obj: Obj, cells: Dict[str, str], name: str) -> List[str]:
         return out + ["}"]
     if obj.kind == "accum":
         out = [f"{head}: {cells['cell']} {{"]
-        out += [f"  dir {cells['dir']};"] * ("dir" in cells)
+        if "dir" in cells:
+            out.append(f"  dir {cells['dir']};")
         modes = {
             "ramp": "ramp",
             "to": "ramp to 0 then stop",
