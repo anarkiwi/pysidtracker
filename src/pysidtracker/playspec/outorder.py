@@ -223,12 +223,15 @@ def span(e) -> Tuple[int, int]:
     return (lo, hi) if hi <= top else (0, top)
 
 
-def ranges(body, unknown: Iterable[str]) -> Dict[str, Tuple[int, int]]:
-    """An interval holding 0 and every value each variable ``body`` assigns takes
-    (``unknown``: variables that also hold values from outside, left out)."""
+def ranges(body, unknown: Iterable[str], procs=()) -> Dict[str, Tuple[int, int]]:
+    """An interval holding 0 and every value each variable ``body`` and ``procs`` assign
+    takes (``unknown``: variables that also hold values from outside, left out)."""
     unknown = frozenset(unknown)
     assigns = [
-        (s[1], s[2]) for s in statements(body) if s[0] == "set" and s[1] not in unknown
+        (s[1], s[2])
+        for b in [body, *procs]
+        for s in statements(b)
+        if s[0] == "set" and s[1] not in unknown
     ]
     table: Dict[str, Tuple[int, int]] = {}
     for _ in range(8):
@@ -239,6 +242,83 @@ def ranges(body, unknown: Iterable[str]) -> Dict[str, Tuple[int, int]]:
             old = new.get(name, (0, 0))
             new[name] = (min(lo, old[0]), max(hi, old[1]))
         RANGES.reset(token)
+        if new == table:
+            break
+        table = new
+    return table
+
+
+BITS: ContextVar[Dict[str, Tuple[int, int]]] = ContextVar("BITS", default={})
+
+
+def bits(e) -> Tuple[int, int]:
+    """``(known, value)``: the bits of ``e`` known whatever the state, and their values
+    (a variable's from :data:`BITS`)."""
+    top = (1 << max(width(e), 1)) - 1
+    if isinstance(e, K):
+        return (0, 0) if e.v is None else (top, e.v & top)
+    if isinstance(e, V):
+        return BITS.get().get(e.n, (0, 0))
+    if isinstance(e, Rd):
+        return (0, 0)
+    op, args = e.op, [bits(a) for a in e.a]
+    (m, v), rest = args[0], args[1:]
+    if op in ("and", "or", "xor"):
+        n, w = rest[0]
+        if op == "xor":
+            return m & n, (v ^ w) & m & n
+        if op == "and":
+            zero, one = (m & ~v) | (n & ~w), m & v & n & w
+        else:
+            zero, one = (m & ~v) & (n & ~w), (m & v) | (n & w)
+        return zero | one, one
+    if op == "not":
+        return m, ~v & m
+    if op == "zext":
+        return m | (top & ~((1 << width(e.a[0])) - 1)), v
+    if op == "lo":
+        return m & top, v & top
+    if op == "hi":
+        return m >> 8, v >> 8
+    if op in ("shl", "shr") and isinstance(e.a[1], K) and e.a[1].v is not None:
+        k = e.a[1].v
+        if op == "shl":
+            return ((m << k) | ((1 << k) - 1)) & top, (v << k) & top
+        return ((m >> k) | (top & ~(top >> k))) & top, v >> k
+    if op == "word":
+        n, w = rest[0]
+        return (m | n << 8) & top, (v | w << 8) & top
+    if op == "ite":
+        (n, w), (x, y) = rest
+        if isinstance(e.a[0], K) and e.a[0].v is not None:
+            return (n, w) if e.a[0].v else (x, y)
+        both = n & x & ~(w ^ y)
+        return both, w & both
+    return (0, 0)
+
+
+def known_bits(body, unknown: Iterable[str], procs=()) -> Dict[str, Tuple[int, int]]:
+    """The bits every variable ``body`` and ``procs`` assign holds in all of its values,
+    zero included (``unknown``: variables that also hold values from outside, left out).
+    """
+    unknown = frozenset(unknown)
+    assigns = [
+        (s[1], s[2])
+        for b in [body, *procs]
+        for s in statements(b)
+        if s[0] == "set" and s[1] not in unknown
+    ]
+    table: Dict[str, Tuple[int, int]] = {}
+    for _ in range(8):
+        token = BITS.set(table)
+        new: Dict[str, Tuple[int, int]] = {}
+        for name, value in assigns:
+            m, v = bits(value)
+            top = (1 << max(width(value), 1)) - 1
+            old = new.get(name, (top, 0))
+            both = old[0] & m & ~(old[1] ^ v)
+            new[name] = (both, v & both)
+        BITS.reset(token)
         if new == table:
             break
         table = new
@@ -344,19 +424,61 @@ def statements(stmts) -> Iterable[tuple]:
             yield from statements(arm)
 
 
-def inline(stmts, procs: Dict[str, list]) -> list:
-    """``stmts`` with each ``call`` replaced by the proc's body (procs share variables)."""
+def inline(stmts, procs: Dict[str, list], keep=frozenset()) -> list:
+    """``stmts`` with each ``call`` but those of procs in ``keep`` replaced by the proc's
+    body (procs share variables)."""
     out = []
     for s in stmts:
-        if s[0] == "call":
-            out += inline(procs[s[1]], procs)
+        if s[0] == "call" and s[1] not in keep:
+            out += inline(procs[s[1]], procs, keep)
         elif s[0] == "fire":
-            out += inline(s[2], procs)
+            out += inline(s[2], procs, keep)
         elif branches(s):
-            out.append(_with_arms(s, [inline(a, procs) for a in branches(s)]))
+            out.append(_with_arms(s, [inline(a, procs, keep) for a in branches(s)]))
         else:
             out.append(s)
     return out
+
+
+def calls(stmts) -> Iterable[str]:
+    """The id of each proc called in ``stmts``, once per call site."""
+    return (s[1] for s in statements(stmts) if s[0] == "call")
+
+
+def reached(body, procs: Dict[str, list]) -> List[str]:
+    """The procs ``body`` reaches, each before every proc it calls."""
+    order: List[str] = []
+    seen: set = set()
+
+    def visit(pid: str) -> None:
+        if pid not in seen:
+            seen.add(pid)
+            for callee in calls(procs[pid]):
+                visit(callee)
+            order.append(pid)
+
+    for pid in calls(body):
+        visit(pid)
+    return order[::-1]
+
+
+def outlined(body, procs: Dict[str, list]) -> FrozenSet[str]:
+    """The procs a call to which is smaller than the body inlined (call sites times
+    statements above their sum), unless the body, inlined, may ``finish`` or run native
+    code: no flush can be placed inside a call."""
+    order = reached(body, procs)
+    sites: Dict[str, int] = {}
+    for stmts in [body, *(procs[pid] for pid in order)]:
+        for pid in calls(stmts):
+            sites[pid] = sites.get(pid, 0) + 1
+    out: set = set()
+    for pid in reversed(order):
+        flat = list(statements(inline(procs[pid], procs, out)))
+        if sites[pid] * len(flat) > sites[pid] + len(flat) and not {
+            s[0] for s in flat
+        } & {"finish", "native"}:
+            out.add(pid)
+    return frozenset(out)
 
 
 def _known(stmts, flag: str) -> Optional[int]:
@@ -447,10 +569,13 @@ class Effect:
 
 
 class Effects:
-    """Memoised :class:`Effect` of statements (each kept alive while memoised)."""
+    """Memoised :class:`Effect` of statements (each kept alive while memoised); a ``call``
+    has the effect of its proc in ``procs``."""
 
-    def __init__(self):
+    def __init__(self, procs: Optional[Dict[str, list]] = None):
         self.memo: Dict[int, tuple] = {}
+        self.procs = {} if procs is None else procs
+        self.called: Dict[str, Effect] = {}
 
     def __call__(self, s) -> Effect:
         hit = self.memo.get(id(s))
@@ -467,6 +592,10 @@ class Effects:
         }.get(s[0], Effect)()
         for arm in branches(s):
             eff = eff | self.seq(arm)
+        if s[0] == "call":
+            if s[1] not in self.called:
+                self.called[s[1]] = self.seq(self.procs[s[1]])
+            eff = self.called[s[1]]
         self.memo[id(s)] = (s, eff)
         return eff
 
@@ -494,12 +623,14 @@ def _lookup(memory, mask, seen: dict, addr: int) -> Optional[int]:
 
 
 def fix(
-    body, program: Program, memory: Optional[bytes], observed=(), proof=None
+    body, program: Program, memory: Optional[bytes], observed=(), proof=None, procs=None
 ) -> tuple:
-    """``(body, fixed)``: ``body`` forwarded (:func:`forward`) with each fixed-address
-    read of a declared byte replaced by its byte in ``memory``, once no bounded store of
-    the result reaches any byte so replaced; ``fixed`` those bytes. Without ``memory``
-    nothing is fixed; a non-``ro`` byte in an ``observed`` interval never is."""
+    """``(body, procs, fixed)``: ``body`` and ``procs`` forwarded (:func:`forward`) with
+    each fixed-address read of a declared byte replaced by its byte in ``memory``, once
+    no bounded store of the result reaches any byte so replaced; ``fixed`` those bytes.
+    Without ``memory`` nothing is fixed; a non-``ro`` byte in an ``observed`` interval
+    never is."""
+    procs = {} if procs is None else procs
     table = np.zeros(0x10000, bool)
     if memory is not None:
         for cell in program.cells:
@@ -515,18 +646,19 @@ def fix(
 
         constant = partial(_lookup, memory, table, fixed)
         trace: list = []
-        out = forward(body, constant, trace)
+        out, outs = forward(body, constant, trace, procs)
         hit = table.copy()
-        for lo, hi in (span(s[1]) for s in statements(out) if s[0] == "wr"):
+        every = [s for b in [out, *outs.values()] for s in statements(b)]
+        for lo, hi in (span(s[1]) for s in every if s[0] == "wr"):
             if (lo, hi) != FULL:
                 hit[lo : hi + 1] = False
-        for s in statements(out):
+        for s in every:
             if s[0] == "obj":
                 hit[list(s[6])] = False
         if not (table & ~hit)[list(fixed)].any():
             if proof is not None:
                 proof.extend(trace)
-            return out, fixed
+            return out, outs, fixed
         table = hit
 
 
@@ -623,12 +755,13 @@ def staging(name: str) -> bool:
     return re.fullmatch(r"[oh]\d+_\d+", name) is not None
 
 
-def split(body, base: int = SID) -> list:
+def split(body, base: int = SID, count: Optional[list] = None) -> list:
     """``body`` with each bounded non-constant access that may reach the SID taken
     apart into one constant-address access per SID register it may reach, and the
-    access as before where it may reach none."""
+    access as before where it may reach none (``count``: the numbering of the address
+    variables, shared by the bodies of a program)."""
     band = (base, base + REGS - 1)
-    count = [0]
+    count = [0] if count is None else count
 
     def cases(addr) -> list:
         lo, hi = span(addr)
@@ -662,27 +795,240 @@ def split(body, base: int = SID) -> list:
     return rewrite(body, lambda e: rebuild(e, leaf), stmt)
 
 
-def peak(stmts, addr: int) -> int:
+def truth(cond, flags: FrozenSet) -> Optional[bool]:
+    """The value of ``cond`` given the one-bit variables ``flags`` hold, None if unknown."""
+    if isinstance(cond, K):
+        return None if cond.v is None else bool(cond.v)
+    if isinstance(cond, V):
+        return dict(flags).get(cond.n)
+    if not isinstance(cond, Op) or cond.op not in ("lnot", "land", "lor"):
+        return None
+    got = [truth(a, flags) for a in cond.a]
+    if cond.op == "lnot":
+        return None if got[0] is None else not got[0]
+    stop = cond.op == "lor"
+    if stop in got:
+        return stop
+    return None if None in got else not stop
+
+
+class _Edges:
+    """The most gate and test edges a path through a body may make in stores to one
+    ctrl register: a store ends a segment unless its value is the last one stored or has
+    the same :data:`EDGE_BITS` known. A path is the state before a store, None (none
+    yet) or ``(known, value, expr)`` of the last value stored (``expr`` dropped once an
+    assignment or store may change it), with the constants the variables of
+    loop conditions hold; a loop runs on while its condition may hold."""
+
+    MERGE = 64
+
+    def __init__(self, addr: int, body, procs: Dict[str, list], watch: FrozenSet[str]):
+        self.addr, self.watch, self.procs = addr, watch, procs
+        self.effects = Effects(procs)
+        self.stores: Dict[int, bool] = {}
+        values = [
+            s[2]
+            for b in [body, *procs.values()]
+            for s in statements(b)
+            if s[0] == "wr" and isinstance(s[1], K) and s[1].v == addr
+        ]
+        self.names = watch.union(*map(names, values))
+        self.spans = [r for v in values for r in reads(v)]
+
+    def stored(self, s) -> bool:
+        """Whether statement ``s`` may store to the register."""
+        if id(s) not in self.stores:
+            self.stores[id(s)] = (
+                s[0] == "wr"
+                and isinstance(s[1], K)
+                and s[1].v == self.addr
+                or s[0] == "call"
+                and any(map(self.stored, self.procs[s[1]]))
+                or any(self.stored(t) for arm in branches(s) for t in arm)
+            )
+        return self.stores[id(s)]
+
+    @staticmethod
+    def put(out: dict, key, count: int) -> None:
+        """Record that ``key`` is reached after ``count`` edges, if the most so far."""
+        out[key] = max(out.get(key, 0), count)
+
+    def store(self, state, value) -> tuple:
+        """``(state after storing value, whether it ends a segment)``."""
+        known, bit = bits(value)
+        edge = state is None or not (
+            state[2] == value
+            or (
+                state[0] & known & EDGE_BITS == EDGE_BITS
+                and not (state[1] ^ bit) & EDGE_BITS
+            )
+        )
+        kept = None if volatile(value) else value
+        return (known & EDGE_BITS, bit & EDGE_BITS, kept), edge
+
+    @staticmethod
+    def join(a, b):
+        """The state after either of two paths."""
+        if a is None or b is None:
+            return None
+        known = a[0] & b[0] & ~(a[1] ^ b[1])
+        return known, a[1] & known, a[2] if a[2] == b[2] else None
+
+    def merged(self, paths: dict) -> dict:
+        """``paths``, as one path if there are too many."""
+        if len(paths) <= self.MERGE:
+            return paths
+        (state, flags), count = next(iter(paths.items()))
+        for (other, held), more in paths.items():
+            state, flags, count = (
+                self.join(state, other),
+                flags & held,
+                max(count, more),
+            )
+        return {(state, flags): count}
+
+    def run(self, stmts, paths: dict) -> dict:
+        """The paths after ``stmts`` from ``paths`` (path: edges so far)."""
+        for s in stmts:
+            tag, out = s[0], {}
+            if tag == "wr" and isinstance(s[1], K) and s[1].v == self.addr:
+                for (state, flags), count in paths.items():
+                    state, edge = self.store(state, s[2])
+                    self.put(out, (state, flags), count + edge)
+            elif tag in ("if", "loop", "fire", "call") and not self.stored(s):
+                out = self.pass_by(s, paths)
+            elif tag == "if":
+                arms: tuple = ({}, {})
+                for key, count in paths.items():
+                    value = truth(s[1], key[1])
+                    if value is not False:
+                        self.put(arms[0], key, count)
+                    if value is not True:
+                        self.put(arms[1], key, count)
+                for arm, held in zip(s[2:4], arms):
+                    for k, n in (self.run(arm, held) if held else {}).items():
+                        self.put(out, k, n)
+            elif tag == "loop":
+                out = self.loop(s, paths)
+            elif tag in ("fire", "call"):
+                out = self.run(s[2] if tag == "fire" else self.procs[s[1]], paths)
+            else:
+                out = self.pass_by(s, paths)
+            paths = self.merged(out)
+        return paths
+
+    def pass_by(self, s, paths: dict) -> dict:
+        """The paths after a statement that makes no edge: it drops what it may change."""
+        eff, out = self.effects(s), {}
+        if (
+            eff.sets.isdisjoint(self.names)
+            and not _overlap(eff.stores, self.spans)
+            and not (s[0] == "set" and s[1] in self.watch)
+        ):
+            return paths
+        for (state, flags), count in paths.items():
+            if (
+                state is not None
+                and state[2] is not None
+                and (
+                    names(state[2]) & eff.sets or _overlap(eff.stores, reads(state[2]))
+                )
+            ):
+                state = (state[0], state[1], None)
+            held = dict(flags)
+            for name in eff.sets:
+                held.pop(name, None)
+            if s[0] == "set" and s[1] in self.watch and isinstance(s[2], K):
+                held[s[1]] = bool(s[2].v)
+            self.put(out, (state, frozenset(held.items())), count)
+        return out
+
+    def loop(self, s, paths: dict) -> dict:
+        """The paths after the loop ``s``: those leaving before it runs, after its first
+        pass, and after any later pass, which starts from the join of every state a
+        pass can leave it in."""
+        cond, bound = s[1], s[3] or 1 << 16
+
+        def split(found: dict) -> tuple:
+            go, stop = {}, {}
+            for key, count in found.items():
+                value = truth(cond, key[1])
+                if value is not False:
+                    self.put(go, key, count)
+                if value is not True:
+                    self.put(stop, key, count)
+            return go, stop
+
+        def gather(found: dict) -> tuple:
+            keys = list(found)
+            state, flags = keys[0]
+            for other, held in keys[1:]:
+                state, flags = self.join(state, other), flags & held
+            return state, flags
+
+        go, out = split(paths)
+        if not go:
+            return out
+        go, stop = split(self.run(s[2], go))
+        out.update((k, max(out.get(k, 0), n)) for k, n in stop.items())
+        if bound < 2:
+            go, out = {}, {**out, **go}
+        if not go:
+            return out
+        base, general = max(go.values()), gather(go)
+        while True:
+            more, stop = split(self.run(s[2], {general: 0}))
+            wider = gather({**more, general: 0})
+            if wider == general:
+                break
+            general = wider
+        step = max(more.values(), default=0)
+        for key, count in stop.items():
+            self.put(out, key, base + count + step * (bound - 2))
+        return out
+
+
+def peak(stmts, addr: int, procs=None) -> int:
     """The most stores to constant address ``addr`` a path through ``stmts`` makes (a
     loop's body counts its bound times)."""
+    procs = {} if procs is None else procs
     total = 0
     for s in stmts:
         if s[0] == "wr":
             total += isinstance(s[1], K) and s[1].v == addr
         elif s[0] == "if":
-            total += max(peak(s[2], addr), peak(s[3], addr))
+            total += max(peak(s[2], addr, procs), peak(s[3], addr, procs))
         elif s[0] == "loop":
-            total += peak(s[2], addr) * (s[3] or 1 << 16)
+            total += peak(s[2], addr, procs) * (s[3] or 1 << 16)
+        elif s[0] == "call":
+            total += peak(procs[s[1]], addr, procs)
     return total
 
 
-def native_regs(body, slots: Sequence[Slot], base: int = SID) -> FrozenSet[int]:
-    """The registers of each segmented voice whose ctrl a path may store as often as it
+def edges(body, addr: int, procs=None) -> int:
+    """The most gate and test edges (:class:`_Edges`) a path through ``body`` may make
+    storing to the constant address ``addr``."""
+    procs = {} if procs is None else procs
+    watch = frozenset(
+        n
+        for b in [body, *procs.values()]
+        for s in statements(b)
+        if s[0] == "loop"
+        for n in names(s[1])
+    )
+    start = {(None, frozenset()): 0}
+    return max(_Edges(addr, body, procs, watch).run(body, start).values(), default=0)
+
+
+def native_regs(
+    body, slots: Sequence[Slot], base: int = SID, procs=None
+) -> FrozenSet[int]:
+    """The registers of each segmented voice whose ctrl a path may edge as often as it
     has segments: their writes stay in place, in the program's order."""
     return frozenset(
         7 * v + o
         for v, n in segments(slots).items()
-        if peak(body, base + 7 * v + 4) >= n
+        if edges(body, base + 7 * v + 4, procs) >= n
         for o in SEGMENTED
     )
 
@@ -736,11 +1082,15 @@ def _segment_store(reg: int, value, n: int) -> list:
 
 
 def instrument(
-    body, slots: Sequence[Slot], base: int = SID, native: FrozenSet[int] = frozenset()
+    body,
+    slots: Sequence[Slot],
+    base: int = SID,
+    native: FrozenSet[int] = frozenset(),
+    head: bool = True,
 ) -> list:
     """``body`` with SID stores and reads through the slots' output variables (the flags
-    cleared first) and no SID store left but the ``native`` registers'; a store through
-    a :func:`split` address variable has missed every SID register."""
+    cleared first, if ``head``) and no SID store left but the ``native`` registers';
+    a store through a :func:`split` address variable has missed every SID register."""
     deep = segments(slots)
     band = [(base, base + REGS - 1)]
     seg = segment_regs(deep) - native
@@ -777,12 +1127,12 @@ def instrument(
         return [("set", out_var(one).n, s[2]), ("set", flag_var(one).n, TRUE)]
 
     live = live_slots(slots, native)
-    head = [("set", out_var(s).n, K(0, 8)) for s in live]
-    head += [("set", flag_var(s).n, FALSE) for s in live]
-    head += [("set", seen_var(r).n, FALSE) for r in sorted(seg)]
-    head += [("set", last_var(r).n, K(0, 8)) for r in sorted(seg)]
-    head += [("set", flag_var((NATIVE, 1)).n, FALSE)] * bool(native)
-    return head + rewrite(body, lambda e: rebuild(e, leaf), stmt)
+    first = [("set", out_var(s).n, K(0, 8)) for s in live]
+    first += [("set", flag_var(s).n, FALSE) for s in live]
+    first += [("set", seen_var(r).n, FALSE) for r in sorted(seg)]
+    first += [("set", last_var(r).n, K(0, 8)) for r in sorted(seg)]
+    first += [("set", flag_var((NATIVE, 1)).n, FALSE)] * bool(native)
+    return first * head + rewrite(body, lambda e: rebuild(e, leaf), stmt)
 
 
 def flush(slot: Slot, base: int = SID) -> tuple:
@@ -811,7 +1161,9 @@ def triggers(slot: Slot, deep: Dict[int, int]) -> FrozenSet[int]:
 class _Placer:
     """Flush placement over an instrumented body (see :func:`place`)."""
 
-    def __init__(self, slots: Sequence[Slot], base: int, native: FrozenSet[int]):
+    def __init__(
+        self, slots: Sequence[Slot], base: int, native: FrozenSet[int], procs=None
+    ):
         deep = segments(slots)
         self.live = live_slots(slots, native)
         self.slots = ((NATIVE, 1),) * bool(native) + self.live
@@ -820,7 +1172,7 @@ class _Placer:
             frozenset((NATIVE,)) if s[0] == NATIVE else triggers(s, deep)
             for s in self.slots
         ]
-        self.effects = Effects()
+        self.effects = Effects(procs)
         regs = [*range(REGS), *([NATIVE] if native else [])]
         self.flags = {marker(r, deep, native): r for r in regs}
 
@@ -875,12 +1227,16 @@ class _Placer:
 
 
 def place(
-    body, slots: Sequence[Slot], base: int = SID, native: FrozenSet[int] = frozenset()
+    body,
+    slots: Sequence[Slot],
+    base: int = SID,
+    native: FrozenSet[int] = frozenset(),
+    procs=None,
 ) -> list:
     """An instrumented ``body`` with each slot flushed once on every path, in order, at
     the earliest boundary after the last store that assigns its variables (after every
     native store), in each arm of a branch where that falls inside it."""
-    return _Placer(slots, base, native).seq(body, 0, frozenset())[0]
+    return _Placer(slots, base, native, procs).seq(body, 0, frozenset())[0]
 
 
 def flush_order(body, slots: Sequence[Slot]) -> FrozenSet[tuple]:
@@ -920,19 +1276,36 @@ class _Forward:
     """Constant, copy and single-use propagation under the conditions known to hold,
     merging arms at joins into an ``ite`` on a snapshot of the condition."""
 
-    def __init__(self, body, constant=lambda addr: None, proof=None):
-        self.effects = Effects()
+    def __init__(
+        self,
+        body,
+        constant=lambda addr: None,
+        proof=None,
+        procs=None,
+        share: FrozenSet = frozenset(),
+    ):
+        # pylint: disable=too-many-arguments,too-many-positional-arguments
+        procs = {} if procs is None else procs
+        self.effects = Effects(procs)
         self.counts: Dict[str, int] = {}
         self.guards = 0
         self.constant = constant
         self.proof = proof
-        for s in statements(body):
+        self.share = share
+        self.pending: list = []
+        self.create = True
+        self.procs = {pid: procs[pid] for pid in reached(body, procs)}
+        every = [s for b in [body, *self.procs.values()] for s in statements(b)]
+        for s in every:
             for e in stmt_exprs(s):
                 for n in names(e):
                     self.counts[n] = self.counts.get(n, 0) + 1
-        assigned = {s[1] for s in statements(body) if s[0] == "set"}
+        assigned = {s[1] for s in every if s[0] == "set"}
         self.guards = max(
             (int(n[2:]) for n in assigned if re.fullmatch(r"g_\d+", n)), default=0
+        )
+        self.temps = max(
+            (int(n[4:]) for n in assigned if re.fullmatch(r"cse_\d+", n)), default=0
         )
 
     def free(self, name: str) -> bool:
@@ -958,16 +1331,50 @@ class _Forward:
         while True:
             folded = rebuild(rebuild(e, leaf), known)
             if folded == e:
-                return e
+                return self.cache(e, env) if self.share and self.create else e
             e = folded
+
+    def cache(self, e, env: dict):
+        """``e`` with each subexpression in ``share`` that no variable holds yet assigned
+        to a fresh variable first (in :attr:`pending`), and each repeat by that variable.
+        """
+        if isinstance(e, (K, V)):
+            return e
+        if e in env:
+            return env[e].expr
+        out = e
+        if isinstance(e, Rd):
+            inner = self.cache(e.a, env)
+            out = e if inner == e.a else Rd(inner)
+        else:
+            args = tuple(self.cache(a, env) for a in e.a)
+            out = e if args == e.a else Op(e.op, e.w, args)
+        if e not in self.share or volatile(e):
+            return out
+        self.temps += 1
+        var = V(f"cse_{self.temps}", width(e))
+        RANGES.get()[var.n] = span(e)
+        pre = dict(env) if self.proof is not None else None
+        self.pending.append(("set", var.n, out))
+        env[e] = _Fact(var, names(e) | {var.n}, reads(e))
+        self.note("step", pre, ("set", var.n, e), ("set", var.n, out), dict(env))
+        return var
+
+    def take(self) -> list:
+        """The assignments to place before the statement under way."""
+        out, self.pending = self.pending, []
+        return out
 
     @staticmethod
     def kill(env: dict, eff: Effect) -> None:
         """Drop the facts ``eff`` clobbers."""
+        if not (eff.sets or eff.stores):
+            return
         for key in [
             k
             for k, f in env.items()
-            if k in eff.sets or f.uses & eff.sets or _overlap(eff.stores, f.spans)
+            if (eff.sets and (k in eff.sets or not eff.sets.isdisjoint(f.uses)))
+            or (eff.stores and f.spans and _overlap(eff.stores, f.spans))
         ]:
             del env[key]
 
@@ -1004,6 +1411,7 @@ class _Forward:
                 continue
             if s[0] == "loop":
                 bound = s[3]
+                self.create = False
                 test = self.sub(s[1], env)
                 while test == TRUE and bound > 1:
                     self.note("cond", dict(env), s[1], TRUE)
@@ -1012,23 +1420,27 @@ class _Forward:
                     test = self.sub(s[1], env)
                 self.note("cond", dict(env), s[1], test)
                 if test == FALSE:
+                    self.create = True
                     continue
                 s = ("loop", s[1], s[2], bound, s[4])
                 self.kill(env, self.effects(s))
                 inner = dict(env)
                 test = self.sub(s[1], inner)
+                self.create = True
                 self.note("cond", dict(inner), s[1], test)
                 body = self.seq(s[2], inner)
                 self.note("join", inner, None, None, dict(env))
                 out.append(("loop", test, body, *s[3:]))
                 continue
-            pre = dict(env) if self.proof is not None else None
             new = _map_stmt(s, lambda e: self.sub(e, env))
+            pre = dict(env) if self.proof is not None else None
+            out += self.take()
             out.append(new)
             self.kill(env, self.effects(new))
             if new[0] == "set":
                 self.learn(env, new[1], new[2])
-            self.note("step", pre, s, new, dict(env))
+            if new[0] != "call":
+                self.note("step", pre, s, new, dict(env))
             if new[0] == "finish":
                 break
         return out
@@ -1044,9 +1456,10 @@ class _Forward:
     def branch(self, s, env: dict) -> list:
         """An ``if``: a known condition picks its arm, else both arms run and merge."""
         cond = self.sub(s[1], env)
+        head = self.take()
         self.note("cond", dict(env), s[1], cond)
         if isinstance(cond, K) and cond.v is not None:
-            return self.seq(s[2] if cond.v else s[3], env)
+            return head + self.seq(s[2] if cond.v else s[3], env)
         then_env, else_env = self.assume(env, cond, True), self.assume(env, cond, False)
         self.note("entry", dict(env), cond, TRUE, dict(then_env))
         self.note("entry", dict(env), cond, FALSE, dict(else_env))
@@ -1061,7 +1474,7 @@ class _Forward:
                 b = self.arm(name, else_env, s[3], then_env)
                 if a is not None and b is not None:
                     merged[name] = (a, b)
-        out = []
+        out = head
         test = cond
         if merged and not (isinstance(cond, V) and cond.n.startswith("g_")):
             test = None
@@ -1082,18 +1495,99 @@ class _Forward:
         return out + [("if", cond, then, other)]
 
 
-def forward(body, constant=lambda addr: None, proof=None) -> list:
+def eliminate_all(
+    body, procs: Dict[str, list], live: FrozenSet[str], end: FrozenSet[str]
+) -> Tuple[list, Dict[str, list]]:
+    """``(body, procs)`` with dead assignments and empty branches removed (see
+    :func:`eliminate`); a proc keeps what is live after any call of it, and a proc left
+    empty is not called."""
+    seen, after = proc_reads(procs), {}
+    body = eliminate(body, live, end, seen, after)[0]
+    out = {}
+    for pid in reached(body, procs):
+        out[pid] = eliminate(procs[pid], after.get(pid, frozenset()), end, seen, after)[
+            0
+        ]
+    empty = {pid for pid, b in out.items() if not b}
+
+    def drop(stmts):
+        return rewrite(
+            stmts,
+            lambda e: e,
+            lambda s: [] if s[0] == "call" and s[1] in empty else None,
+        )
+
+    return drop(body), {pid: drop(b) for pid, b in out.items() if pid not in empty}
+
+
+def shared_exprs(body, procs: Dict[str, list]) -> FrozenSet:
+    """The expressions of ``body`` and ``procs`` that a variable holding them makes
+    smaller: those whose repeats outweigh the assignment."""
+    count: Dict = {}
+    for stmts in [body, *procs.values()]:
+        for s in statements(stmts):
+            for e in stmt_exprs(s):
+                for n in walk(e):
+                    if isinstance(n, (Op, Rd)) and not _leaf(n):
+                        count[n] = count.get(n, 0) + 1
+    size: Dict = {}
+
+    def nodes(n) -> int:
+        if n not in size:
+            size[n] = 1 + sum(map(nodes, _subs(n))) if isinstance(n, (Op, Rd)) else 1
+        return size[n]
+
+    return frozenset(
+        n for n, c in count.items() if (c - 1) * (nodes(n) - 1) > 2 and not volatile(n)
+    )
+
+
+def forward(
+    body, constant=lambda addr: None, proof=None, procs=None, share=frozenset()
+):
     """``body`` with values forwarded to their uses and each loop whose condition is
     known unrolled (see :class:`_Forward`); ``constant`` gives fixed bytes, and
-    ``proof`` (a list) collects the obligations that justify the result."""
-    return _Forward(body, constant, proof).seq(body, {})
+    ``proof`` (a list) collects the obligations that justify the result. With ``procs``
+    the result is ``(body, procs)``, each proc reached from ``body`` forwarded from no
+    known facts and the call of one leaving only the facts it cannot change. Each
+    expression in ``share`` is computed once into a variable while the same value
+    stays in it."""
+    run = _Forward(body, constant, proof, procs, share)
+    out = run.seq(body, {})
+    if procs is None:
+        return out
+    return out, {pid: run.seq(b, {}) for pid, b in run.procs.items()}
+
+
+def proc_reads(procs: Dict[str, list]) -> Dict[str, FrozenSet[str]]:
+    """The variables each proc, and the procs it calls, read."""
+    out: Dict[str, FrozenSet[str]] = {}
+
+    def of(pid: str) -> FrozenSet[str]:
+        if pid not in out:
+            found: set = set()
+            for s in statements(procs[pid]):
+                found.update(*map(names, stmt_exprs(s)))
+                found.update(s[8] if s[0] == "obj" else ())
+            out[pid] = frozenset(found).union(*map(of, set(calls(procs[pid]))))
+        return out[pid]
+
+    for pid in procs:
+        of(pid)
+    return out
 
 
 def eliminate(
-    stmts, live: FrozenSet[str], end: FrozenSet[str]
+    stmts,
+    live: FrozenSet[str],
+    end: FrozenSet[str],
+    seen: Optional[Dict[str, FrozenSet[str]]] = None,
+    after: Optional[Dict[str, FrozenSet[str]]] = None,
 ) -> Tuple[list, FrozenSet]:
     """``(stmts, live before)`` with dead assignments and empty branches removed;
-    ``live`` is read after ``stmts``, ``end`` when the call ends."""
+    ``live`` is read after ``stmts``, ``end`` when the call ends. A ``call`` reads what
+    its proc does in ``seen`` (:func:`proc_reads`), and adds the variables live after it
+    to ``after[proc]``."""
     out: list = []
     for s in reversed(stmts):
         tag = s[0]
@@ -1102,8 +1596,8 @@ def eliminate(
                 continue
             live = (live - {s[1]}) | names(s[2])
         elif tag == "if":
-            then, a = eliminate(s[2], live, end)
-            other, b = eliminate(s[3], live, end)
+            then, a = eliminate(s[2], live, end, seen, after)
+            other, b = eliminate(s[3], live, end, seen, after)
             if not then and not other and not volatile(s[1]):
                 continue
             s = (
@@ -1112,10 +1606,13 @@ def eliminate(
                 else ("if", fold("lnot", 1, (s[1],)), other, [])
             )
             live = a | b | names(s[1])
+        elif tag == "call":
+            after[s[1]] = after.get(s[1], frozenset()) | live
+            live = live | seen[s[1]]
         elif tag == "loop":
             inner = live | names(s[1])
             while True:
-                body, entry = eliminate(s[2], inner, end)
+                body, entry = eliminate(s[2], inner, end, seen, after)
                 if entry <= inner:
                     break
                 inner = inner | entry
@@ -1198,30 +1695,84 @@ def reorder(
     """``program`` rescheduled to write the kept writes of ``order`` (text or slots) in
     order; ``observed`` lists address intervals other code reads, never promoted;
     reads of declared bytes no store reaches take their values from ``memory``;
-    ``proof`` (a dict) collects each stage and the obligations of :func:`prove`."""
+    ``proof`` (a dict) collects each stage and the obligations of :func:`prove`.
+
+    A proc called from several sites may stay a proc (see :func:`outlined`), which keeps
+    the result small; inlining every proc, which lets the constants at each call site
+    simplify its body, is tried when that leaves registers ``native``, and the schedule
+    with fewer of them wins."""
     order = program.outorder if order is None else order
     if order is None:
         raise OrderError("no order given and the spec declares no output order")
     base = (SID if program.sid is None else program.sid) if base is None else base
     slots = parse_order(order) if isinstance(order, str) else tuple(order)
-    proof = {} if proof is None else proof
-    proof["nested"] = nest(inline(program.body, program.procs))
+    keep = outlined(program.body, program.procs)
+    runs: List[tuple] = []
+    for kept in [keep, frozenset()] if keep else [frozenset()]:
+        if runs and not runs[0][0]:
+            break
+        stages: dict = {}
+        native, finish = _attempt(program, slots, base, observed, memory, kept, stages)
+        runs.append((native, finish, stages))
+    runs.sort(key=lambda run: len(run[0]))
+    for at, (_native, finish, stages) in enumerate(runs):
+        try:
+            best = finish(True)
+        except OrderError:
+            if at == len(runs) - 1:
+                raise
+            continue
+        if proof is not None:
+            proof.update(stages)
+        return best
+    raise OrderError("no schedule")
+
+
+def size(program: Program) -> int:
+    """The statements and expression nodes of ``program``."""
+    return sum(
+        1 + sum(1 for e in stmt_exprs(s) for _ in walk(e))
+        for b in [program.body, *program.procs.values()]
+        for s in statements(b)
+    )
+
+
+def _attempt(program, slots, base, observed, memory, keep, proof):
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """``(native, finish)``: the registers left in place when the procs in ``keep`` stay
+    procs, and ``finish(share)``, the :class:`Reordered` (its stages in ``proof``), with
+    the repeated subexpressions computed once if ``share``."""
+    nested = nest(inline(program.body, program.procs, keep))
+    kept = {pid: nest(inline(program.procs[pid], program.procs, keep)) for pid in keep}
+    proof["nested"], proof["nested_procs"] = nested, kept
     proof["fix"] = []
-    body, fixed = fix(proof["nested"], program, memory, observed, proof["fix"])
-    proof["fixed_body"] = body
-    known = ranges(body, [n for n, _w, _d in program.controls] + list(program.inputs))
-    token = RANGES.set(known)
+    body, procs, fixed = fix(nested, program, memory, observed, proof["fix"], kept)
+    proof["fixed_body"], proof["fixed_procs"] = body, procs
+    unknown = [n for n, _w, _d in program.controls] + list(program.inputs)
+    known = ranges(body, unknown, procs.values())
+    marks = known_bits(body, unknown, procs.values())
+    token, mark = RANGES.set(known), BITS.set(marks)
     try:
-        return replace(
-            _reorder(program, body, slots, base, observed, known, proof), fixed=fixed
-        )
+        native, later = _reorder(program, body, procs, slots, base, observed, proof)
     finally:
+        BITS.reset(mark)
         RANGES.reset(token)
 
+    def finish(share: bool) -> Reordered:
+        mine = dict(known)
+        token, mark = RANGES.set(mine), BITS.set(marks)
+        try:
+            return replace(later(share, mine), fixed=fixed)
+        finally:
+            BITS.reset(mark)
+            RANGES.reset(token)
 
-def _reorder(program, body, slots, base, observed, known, proof) -> Reordered:
-    # pylint: disable=too-many-arguments
-    for s in statements(body):
+    return native, finish
+
+
+def _reorder(program, body, procs, slots, base, observed, proof):
+    # pylint: disable=too-many-arguments,too-many-locals,too-many-positional-arguments
+    for s in (s for b in [body, *procs.values()] for s in statements(b)):
         if s[0] == "obj" and any(base <= a < base + REGS for a in s[6]):
             raise OrderError(f"object {s[1]} writes the SID: state it with stores")
     keep = np.zeros(0x10000, bool)
@@ -1231,34 +1782,154 @@ def _reorder(program, body, slots, base, observed, known, proof) -> Reordered:
     for cell in program.cells:
         if "volatile" in cell.attrs:
             keep[cell.extent()] = True
-    cells = frame_local(body, keep)
-    split_body = split(promote(body, cells), base)
-    native = native_regs(split_body, slots, base)
-    live = live_slots(slots, native)
-    placed = place(instrument(split_body, slots, base, native), slots, base, native)
-    paths = flush_order(placed, live)
-    if paths != {live}:
-        raise OrderError("a path flushes the slots out of order")
+    cells = frame_local(inline(body, procs), keep)
+    count = [0]
+    split_body = split(promote(body, cells), base, count)
+    split_procs = {
+        pid: split(promote(b, cells), base, count) for pid, b in procs.items()
+    }
+    native = native_regs(split_body, slots, base, split_procs)
     end = frozenset(n for n, _w, _d in program.controls)
-    proof["placed"], proof["forward"] = placed, []
-    proof["forwarded"] = forward(placed, proof=proof["forward"])
-    out = eliminate(proof["forwarded"], end, end)[0]
-    out = rewrite(out, tidy, lambda s: [] if s[0] == "hook" else None)
-    out = declared(eliminate(out, end, end)[0], [*end, *program.inputs])
-    staged = sorted({s[1] for s in statements(out) if s[0] == "set" and staging(s[1])})
-    every = program.body + [s for p in program.procs.values() for s in p]
-    return Reordered(
-        replace(program, body=out, procs={}),
-        slots,
-        cells,
-        staged,
-        counts(every, base),
-        counts(inline(program.body, program.procs), base),
-        counts(out, base),
-        paths,
-        native,
-        known,
-    )
+    cache: dict = {}
+
+    def first():
+        if not cache:
+            live = live_slots(slots, native)
+            inst = instrument(split_body, slots, base, native)
+            inst_procs = {
+                pid: instrument(b, slots, base, native, False)
+                for pid, b in split_procs.items()
+            }
+            placed = place(inst, slots, base, native, inst_procs)
+            cache["paths"] = flush_order(placed, live)
+            if cache["paths"] != {live}:
+                raise OrderError("a path flushes the slots out of order")
+            proof["placed"], proof["placed_procs"] = placed, inst_procs
+            trace: list = []
+            cache["trace"] = trace
+            cache["forwarded"] = forward(placed, proof=trace, procs=inst_procs)
+            cache["common"] = shared_exprs(*cache["forwarded"])
+        return cache["forwarded"], cache["trace"], cache["common"], cache["paths"]
+
+    def later(share: bool, known: dict) -> Reordered:
+        (forwarded, forwarded_procs), trace, common, paths = first()
+        proof["forward"], proof["shared"], proof["shared_procs"] = [*trace], [], {}
+        if share and common:
+            forwarded, forwarded_procs = forward(
+                forwarded, proof=proof["forward"], procs=forwarded_procs, share=common
+            )
+            proof["shared"], proof["shared_procs"] = forwarded, forwarded_procs
+            forwarded, forwarded_procs = eliminate_all(
+                forwarded, forwarded_procs, end, end
+            )
+            forwarded, forwarded_procs = forward(
+                forwarded, proof=proof["forward"], procs=forwarded_procs
+            )
+        proof["forwarded"], proof["forwarded_procs"] = forwarded, forwarded_procs
+        out, outs = finalize(forwarded, forwarded_procs, program)
+        staged = sorted(
+            {
+                s[1]
+                for b in [out, *outs.values()]
+                for s in statements(b)
+                if s[0] == "set" and staging(s[1])
+            }
+        )
+        every = program.body + [s for p in program.procs.values() for s in p]
+        return Reordered(
+            replace(program, body=out, procs=outs),
+            slots,
+            cells,
+            staged,
+            counts(every, base),
+            counts(inline(program.body, program.procs), base),
+            counts(out + [s for b in outs.values() for s in b], base),
+            paths,
+            native,
+            known,
+        )
+
+    return native, later
+
+
+def shared(body, procs: Dict[str, list]) -> FrozenSet[str]:
+    """The variables more than one of ``body`` and ``procs`` use."""
+    users: Dict[str, int] = {}
+    for stmts in [body, *procs.values()]:
+        found: set = set()
+        for s in statements(stmts):
+            found.update(*map(names, stmt_exprs(s)))
+            found.update(s[8] if s[0] == "obj" else ())
+            found.update(s[1:2] if s[0] == "set" else s[3:4] if s[0] == "obj" else ())
+        for n in found:
+            users[n] = users.get(n, 0) + 1
+    return frozenset(n for n, k in users.items() if k > 1 and n is not None)
+
+
+def exposure(stmts, defs: FrozenSet[str], summary: dict) -> Tuple[set, FrozenSet[str]]:
+    """``(read, assigned)``: the variables ``stmts`` may read before assigning them,
+    given those ``defs`` assigned, and those they assign on every path; ``summary`` holds
+    each proc's pair from no ``defs``."""
+    read: set = set()
+    for s in stmts:
+        tag = s[0]
+        read |= set().union(*map(names, stmt_exprs(s))) - defs
+        if tag == "obj":
+            read |= set(s[8]) - defs
+            defs = defs | set(s[3:4]) - {None}
+        elif tag == "set":
+            defs = defs | {s[1]}
+        elif tag == "if":
+            (r1, d1), (r2, d2) = (exposure(a, defs, summary) for a in s[2:4])
+            read, defs = read | r1 | r2, d1 & d2
+        elif tag in ("loop", "fire"):
+            inner, after = exposure(s[2], defs, summary)
+            read |= inner
+            defs = after if tag == "fire" else defs
+        elif tag == "call":
+            read |= summary[s[1]][0] - defs
+            defs = defs | summary[s[1]][1]
+    return read, defs
+
+
+def finalize(forwarded, procs, program: Program) -> Tuple[list, Dict[str, list]]:
+    """The reordered ``(body, procs)`` from the forwarded ones: dead code removed, hooks
+    dropped, expressions tidied and the variables declared. A variable used by the body
+    and a proc, or by two procs, is declared by the body (``v := 0``) where a path may
+    read it first."""
+    end = frozenset(n for n, _w, _d in program.controls)
+    hook = lambda s: [] if s[0] == "hook" else None  # noqa: E731
+    out, outs = eliminate_all(forwarded, procs, end, end)
+    out = rewrite(out, tidy, hook)
+    outs = {pid: rewrite(b, tidy, hook) for pid, b in outs.items()}
+    out, outs = eliminate_all(out, outs, end, end)
+    common = shared(out, outs)
+    keep = [*end, *program.inputs, *common]
+    summary: dict = {}
+    for pid in reversed(reached(out, outs)):
+        summary[pid] = exposure(outs[pid], frozenset(), summary)
+    first = exposure(out, frozenset(), summary)[0] & common - end - set(program.inputs)
+    wide = var_widths(out, *outs.values())
+    head = [("set", n, K(0, wide[n])) for n in sorted(first)]
+    return head + declared(out, keep), {
+        pid: declared(b, keep) for pid, b in outs.items()
+    }
+
+
+def var_widths(*bodies) -> Dict[str, int]:
+    """The width of each variable the statements ``bodies`` assign or read."""
+    out: Dict[str, int] = {}
+    for body in bodies:
+        for s in statements(body):
+            if s[0] == "set":
+                out.setdefault(s[1], width(s[2]))
+            if s[0] == "obj" and s[3]:
+                out.setdefault(s[3], 1)
+            for e in stmt_exprs(s):
+                for n in walk(e):
+                    if isinstance(n, V):
+                        out[n.n] = n.w
+    return out
 
 
 # ---- evidence ------------------------------------------------------------------------
@@ -1278,9 +1949,12 @@ def log_size(body, result: "Reordered", base: int) -> int:
     return size
 
 
-def _logged(body, size: int, base: int, cells: Sequence[int]) -> list:
+def _logged(
+    body, size: int, base: int, cells: Sequence[int], head: bool = True
+) -> list:
     """``body`` with each SID store appended to the ``size`` log variables instead of
-    memory, and ``alias`` set where an unbounded read may hit one of ``cells``."""
+    memory, and ``alias`` set where an unbounded read may hit one of ``cells``; the log
+    is cleared first if ``head``."""
     regs = frozenset(range(base, base + REGS))
 
     def log(reg, value) -> list:
@@ -1319,9 +1993,9 @@ def _logged(body, size: int, base: int, cells: Sequence[int]) -> list:
             return alias(s) + [("loop", s[1], s[2] + alias(s), s[3], s[4])]
         return alias(s) + [s]
 
-    head = [("set", "alias", FALSE), ("set", "log_n", K(0, 8))]
-    head += [("set", f"log_{c}{i}", K(0, 8)) for i in range(size) for c in "rv"]
-    return head + rewrite(body, lambda e: e, stmt)
+    first = [("set", "alias", FALSE), ("set", "log_n", K(0, 8))]
+    first += [("set", f"log_{c}{i}", K(0, 8)) for i in range(size) for c in "rv"]
+    return first * head + rewrite(body, lambda e: e, stmt)
 
 
 def check(
@@ -1361,6 +2035,7 @@ def _check(original, result, base, timeout_ms, progress) -> Optional[tuple]:
         original,
         (reference, result.program.body),
         result,
+        procs=({}, result.program.procs),
         base=base,
         timeout_ms=timeout_ms,
         progress=progress,
@@ -1372,27 +2047,32 @@ def equal(
     bodies: tuple,
     result: Reordered,
     *,
+    procs: tuple = ({}, {}),
     base: int = SID,
     timeout_ms: int = 0,
     progress: bool = False,
 ) -> Optional[tuple]:
-    """None if the two instrumented ``bodies`` log the same SID writes and leave the
+    """None if the two instrumented ``bodies`` (with their ``procs``) log the same SID writes and leave the
     same memory and controls outside the SID and ``result``'s promoted cells, under
     ``result``'s premises; else ``(what differs, z3 model or None)``."""
     cells = result.promoted
     size = log_size(bodies[0], result, base)
     memo: dict = {}
+    watch = [*cells, *range(base, base + REGS)]
     a, b = (
         smt.step(
             replace(
                 original,
-                body=_logged(body, size, base, [*cells, *range(base, base + REGS)]),
-                procs={},
+                body=_logged(body, size, base, watch),
+                procs={
+                    pid: _logged(p, size, base, watch, False)
+                    for pid, p in table.items()
+                },
             ),
             smt.symbolic_memory("pre"),
             smt.initial_env(original, "pre_"),
         )
-        for body in bodies
+        for body, table in zip(bodies, procs)
     )
     runs = (a, b)
     stored = {x for st in runs for x in st.writes}
@@ -1476,8 +2156,9 @@ def compare(make, order, frames: int, base: int = SID, **options) -> Tuple:
         result = reorder(program, slots, base=base, memory=memory, **options)
         result.text = emit(result.program, f"{program.name}_ordered", base)
         back = elaborate(parse(result.text), {}, standard=program.standard)
+        flat = pruned(result.program)
         result.roundtrip = isomorphic(
-            pruned(result.program).body,
+            inline(flat.body, flat.procs),
             inline(back.body, back.procs),
             (result.program.objects, back.objects),
         )

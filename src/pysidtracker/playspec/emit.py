@@ -158,6 +158,7 @@ def declared(body, keep: Iterable[str] = ()) -> list:
     that does not itself assign ``v`` a value not reading ``v`` (``keep``: variables
     defined outside the body)."""
     keep = frozenset(keep)
+    wide = _widths(body)
     inserts: Dict[tuple, Dict[int, list]] = {}
     for name, places in _occurrences(body).items():
         if name in keep:
@@ -171,28 +172,31 @@ def declared(body, keep: Iterable[str] = ()) -> list:
         ):
             if (block + ((index, None),)) in places:
                 continue
-        w = next(width(v) for v in _vars(body, name))
         inserts.setdefault(block, {}).setdefault(index, []).append(
-            ("set", name, K(0, w))
+            ("set", name, K(0, wide[name]))
         )
     return _insert(body, (), inserts)
 
 
-def _vars(body, name):
+def _widths(body) -> Dict[str, int]:
+    """The width of each variable at its first mention in ``body``: an assigned value,
+    an object's wrap flag or an expression's read."""
+    out: Dict[str, int] = {}
     for s in _walk(body):
-        if s[0] == "set" and s[1] == name:
-            yield s[2]
-        if s[0] == "obj" and s[3] == name:
-            yield K(0, 1)
+        if s[0] == "set":
+            out.setdefault(s[1], width(s[2]))
+        if s[0] == "obj" and s[3]:
+            out.setdefault(s[3], 1)
         for e in _exprs(s):
             stack = [e]
             while stack:
                 n = stack.pop()
-                if isinstance(n, V) and n.n == name:
-                    yield n
+                if isinstance(n, V):
+                    out.setdefault(n.n, n.w)
                 stack.extend(
                     n.a if isinstance(n, Op) else (n.a,) if isinstance(n, Rd) else ()
                 )
+    return out
 
 
 def _walk(stmts):
@@ -232,6 +236,11 @@ def _stem(name: str, reg: Dict[int, str]) -> str:
     return stem or "v"
 
 
+def _proc(pid: str) -> str:
+    """A readable base name for proc ``pid``."""
+    return _ident(pid.rpartition("#")[0]) or "proc"
+
+
 def _ident(text: str) -> str:
     text = re.sub(r"\W", "", text.replace("[", "").replace("]", "").replace(".", "_"))
     return text if text and not text[0].isdigit() else f"v{text}"
@@ -256,6 +265,7 @@ class _Writer:
         self.events = program.events
         self.named: Dict[str, str] = {}
         self.controls = program.controls
+        self.procs: Dict[str, str] = {}
 
     def states(self) -> List[str]:
         """The ``state`` declarations of the program's controls."""
@@ -282,6 +292,12 @@ class _Writer:
                 out.append(emitobj.cell(cells[role], loc))
             out += emitobj.declare(obj, cells, name) + [""]
         return out
+
+    def callee(self, pid: str) -> str:
+        """The source name of proc ``pid``."""
+        if pid not in self.procs:
+            self.procs[pid] = self.fresh(_proc(pid))
+        return self.procs[pid]
 
     def fresh(self, stem: str) -> str:
         """``stem``, suffixed until unused."""
@@ -424,6 +440,8 @@ class _Writer:
                 out += self.block(s[2], depth + 1) + [f"{pad}}}"]
             elif tag == "assert":
                 out.append(f"{pad}assert {self.ex(s[1])};")
+            elif tag == "call":
+                out.append(f"{pad}{self.callee(s[1])}();")
             elif tag == "finish":
                 out.append(f"{pad}finish;")
             elif tag == "fire":
@@ -469,49 +487,80 @@ def _lets(body, keep: Iterable[str] = ()) -> Dict[int, None]:
     return out
 
 
-def _reads(body) -> set:
-    """The variables ``body`` reads, an object's owned state among them."""
+def _reads(*bodies) -> set:
+    """The variables ``bodies`` read, an object's owned state among them."""
     found: set = set()
-    for s in _walk(body):
-        for e in _exprs(s):
-            _names(e, found)
-        if s[0] == "obj":
-            found.update(s[8])
+    for body in bodies:
+        for s in _walk(body):
+            for e in _exprs(s):
+                _names(e, found)
+            if s[0] == "obj":
+                found.update(s[8])
     return found
 
 
 def pruned(program: Program) -> Program:
     """``program`` without the controls nothing reads and the assignments feeding only
     them: a state no statement reads is not observable, and cannot be stated."""
-    from .outorder import eliminate  # pylint: disable=import-outside-toplevel
+    from .outorder import (
+        eliminate_all,
+        shared,
+    )  # pylint: disable=import-outside-toplevel
 
-    body, live = program.body, frozenset()
+    body, procs, live = program.body, program.procs, frozenset()
     every = frozenset(n for n, _w, _d in program.controls)
     while True:
-        out = eliminate(body, live, live)[0]
-        now = live | (every & _reads(out))
+        out, outs = eliminate_all(body, procs, live, live)
+        now = live | (every & _reads(out, *outs.values()))
         if now == live:
             break
         live = now
-    if out == body and len(live) == len(program.controls):
+    if out == body and outs == procs and len(live) == len(program.controls):
         return program
     keep = [c for c in program.controls if c[0] in live]
-    return replace(program, body=declared(out, [*live, *program.inputs]), controls=keep)
+    names = [*live, *program.inputs, *shared(out, outs)]
+    return replace(
+        program,
+        body=declared(out, names),
+        procs={pid: declared(b, names) for pid, b in outs.items()},
+        controls=keep,
+    )
+
+
+def stated(program: Program) -> Program:
+    """``program`` with each variable its body and procs share a ``state`` of its own,
+    the only variable a proc and its callers see."""
+    from .outorder import shared, var_widths  # pylint: disable=import-outside-toplevel
+
+    if not program.procs:
+        return program
+    have = {n for n, _w, _d in program.controls} | set(program.inputs)
+    wide = var_widths(program.body, *program.procs.values())
+    extra = sorted(shared(program.body, program.procs) - have)
+    return replace(
+        program, controls=[*program.controls, *((n, wide[n], 0) for n in extra)]
+    )
 
 
 def emit(program: Program, name: Optional[str] = None, base: int = 0xD400) -> str:
-    """``program`` (a :func:`declared` body, no procs) as playspec source: each control
-    of :func:`pruned` is a top-level ``state``, which an object over it binds by name.
-    """
-    if program.procs:
-        raise EmitError("a program with procs is not emitted: inline them first")
-    program = pruned(program)
+    """``program`` (a :func:`declared` body) as playspec source: each control of
+    :func:`pruned` is a top-level ``state``, which an object over it binds by name, and
+    each proc a top-level ``proc`` without parameters, the variables it shares with
+    its callers ``state`` too (see :func:`stated`)."""
+    program = stated(pruned(program))
     name = _ident(name or program.name)
     body = program.body
     writer = _Writer(program, base)
-    writer.lets = _lets(body, [n for n, _w, _d in program.controls])
+    own = [n for n, _w, _d in program.controls]
+    writer.lets = _lets(body, own)
+    for b in program.procs.values():
+        writer.lets.update(_lets(b, own))
     writer.taken.add(name)
     lines = writer.block(body, 2)
+    procs = []
+    for pid, b in program.procs.items():
+        inner = writer.block(b, 1)
+        procs += [f"proc {writer.callee(pid)}() {{", *inner, "}", ""]
     objects = writer.declarations()
     states = writer.states()
     head = [f"spec {name};", ""]
@@ -537,7 +586,7 @@ def emit(program: Program, name: Optional[str] = None, base: int = 0xD400) -> st
         head.append(
             f"cell {cname}: {typ} @ {cell.place[0]:#06x}{''.join(' ' + a for a in attrs)};"
         )
-    head += states + [""] * bool(states) + objects
+    head += states + [""] * bool(states) + objects + procs
     return "\n".join(
         head
         + ["", f"machine {name} {{", "  step {"]
