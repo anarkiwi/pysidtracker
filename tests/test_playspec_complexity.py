@@ -2,7 +2,11 @@
 
 import dataclasses
 import json
+import re
 from collections import Counter
+
+import pytest
+from jennings import memory as jennings_memory
 
 from pysidtracker import jobs
 from pysidtracker.asm6502 import assemble
@@ -10,7 +14,10 @@ from pysidtracker.maincli import main
 from pysidtracker.playspec import SpecPlayer, complexity, elaborate, parse
 from pysidtracker.playspec.pyexec import compile_program, controls
 
+from .conftest import BACKENDS
 from .helpers import build_psid
+
+ENGINE = "native" if "native" in BACKENDS and jennings_memory.NATIVE else "python"
 
 STATIC = """spec t;
 layout { base, tab_lo, tab_hi, out: addr; fx, alt: flag; }
@@ -52,22 +59,51 @@ schedule { m; }
 """
 
 
+@pytest.fixture(autouse=True)
+def one_engine(backend):
+    """The measures do not depend on jennings' engine: run each test on one."""
+    if backend != ENGINE:
+        pytest.skip("measured on the other engine")
+
+
 def lines_of(text: str, needle: str) -> list:
     return [i for i, line in enumerate(text.splitlines(), 1) if needle in line]
 
 
-def test_units_and_decisions():
+def test_static_measures():
     analysis = complexity.analyse(parse(STATIC))
     units = analysis.units
     assert set(units) == {"decls", "m.one", "m.two", "m.three", "m.step", "schedule"}
-    assert units["m.one"].decisions == 1
-    assert units["m.step"].decisions == 2
+    assert (units["m.one"].decisions, units["m.step"].decisions) == (1, 2)
     assert units["m.one"].depth == 1
     assert units["m.one"].nodes == units["m.two"].nodes
     assert units["m.one"].statements == ["t:10:assign", "t:10:if"]
     totals = analysis.totals()
     assert totals["decisions"] == sum(u.decisions for u in units.values())
     assert totals["statements"] == sum(len(u.statements) for u in units.values())
+    assert totals["multi_writer_state"] == 2
+    assert analysis.layout["fx"] == {
+        "kind": "flag",
+        "guard": 2,
+        "code": 0,
+        "decl": 0,
+        "units": ["m.one", "m.two"],
+    }
+    assert analysis.layout["alt"]["guard"] == 2
+    assert analysis.layout["base"]["code"] == 1
+    assert analysis.layout["tab_lo"]["decl"] == 1
+    assert analysis.coupling["a"]["writers"] == ["m.one", "m.two"]
+    assert analysis.coupling["p"]["writers"] == ["m.step"]
+    assert "m.step" in analysis.coupling["a"]["readers"]
+    assert Counter(f["kind"] for f in analysis.addressing) == {
+        "relocation": 1,
+        "word assembly": 1,
+        "split pointer table": 1,
+        "pointer state": 1,
+    }
+    text = "\n".join(complexity.render(analysis, complexity.report(analysis), top=3))
+    assert text.startswith("spec t: units 6")
+    assert re.search(r"split pointer table +1 +lines 3\n", text)
 
 
 def test_clones_are_maximal_and_shape_matches_renamed_state():
@@ -81,31 +117,6 @@ def test_clones_are_maximal_and_shape_matches_renamed_state():
     assert shaped[0]["count"] == 3
     assert {u for u, _ in shaped[0]["at"]} == {"m.one", "m.two", "m.three"}
     assert not complexity.analyse(parse(STATIC), min_nodes=10_000).clones
-
-
-def test_layout_contexts_coupling_and_addressing():
-    analysis = complexity.analyse(parse(STATIC))
-    layout = analysis.layout
-    assert layout["fx"] == {
-        "kind": "flag",
-        "guard": 2,
-        "code": 0,
-        "decl": 0,
-        "units": ["m.one", "m.two"],
-    }
-    assert layout["alt"]["guard"] == 2
-    assert layout["base"]["code"] == 1 and layout["tab_lo"]["decl"] == 1
-    assert analysis.coupling["a"]["writers"] == ["m.one", "m.two"]
-    assert analysis.coupling["p"]["writers"] == ["m.step"]
-    assert "m.step" in analysis.coupling["a"]["readers"]
-    kinds = Counter(f["kind"] for f in analysis.addressing)
-    assert kinds == {
-        "relocation": 1,
-        "word assembly": 1,
-        "split pointer table": 1,
-        "pointer state": 1,
-    }
-    assert analysis.totals()["multi_writer_state"] == 2
 
 
 def _frames(program, count):
@@ -230,31 +241,13 @@ def test_cover_skips_other_specs_and_reports_errors(tmp_path, monkeypatch):
     assert table["corpus"]["skipped"] == 1
 
 
-def test_delta_and_render():
-    old = complexity.report(complexity.analyse(parse(STATIC)))
-    smaller = STATIC.replace("one(); two(); three();", "one(); three();").replace(
-        "  proc two() { if L.fx { a := a + 1; o := (a & 0x0f) | 0x10; } }\n", ""
-    )
-    analysis = complexity.analyse(parse(smaller))
-    new = complexity.report(analysis)
-    diff = complexity.delta(old, new)
-    assert diff["units"]["m.two"] == {
-        "nodes": (old["units"][2]["nodes"], None),
-        "decisions": (1, None),
-        "depth": (1, None),
-    }
-    assert diff["totals"]["units"] == (6, 5)
-    text = "\n".join(complexity.render(analysis, new, top=3))
-    assert text.startswith("spec t: units 5")
-    assert "relocation" in text and "split pointer table" in text
-
-
-def test_cli_writes_report(tmp_path, capsys):
-    spec, older, out = tmp_path / "t.play", tmp_path / "o.play", tmp_path / "r.json"
-    spec.write_text(STATIC)
-    older.write_text(STATIC.replace("one(); two();", "one(); two(); one();"))
+def test_cli_reports_and_compares(tmp_path, capsys):
+    spec, older, out = tmp_path / "p.play", tmp_path / "o.play", tmp_path / "r.json"
+    spec.write_text(PLAY)
+    older.write_text(PLAY.replace("    n += 1;\n", "    n += 1;\n    n += 1;\n"))
     main(["playspec", "complexity", str(spec), "--diff", str(older), "--out", str(out)])
     table = json.loads(out.read_text())
-    assert table["totals"]["units"] == 6
-    assert "delta" in table
-    assert "units by decisions" in capsys.readouterr().out
+    assert table["delta"]["totals"]["statements"] == [7, 6]
+    assert table["delta"]["units"]["m.step"]["nodes"][0] > table["units"][1]["nodes"]
+    shown = capsys.readouterr().out
+    assert "units by decisions" in shown and re.search(r"statements +7 -> 6", shown)
