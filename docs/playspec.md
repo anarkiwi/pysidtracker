@@ -320,6 +320,16 @@ replaces cells declared as `L.base + 7 * x + k` and is checked for overlaps and 
 held in a cell: `view instrument @ zp { ad @ 3; sr @ 4; }` makes `instrument.ad` the byte at
 `zp + 3`, read through the pointer as it stands in the proc that reads it.
 
+### Nibble fields
+
+`x.hi` and `x.lo` are the high and low nibble of a `u8` cell, local or parameter, and
+`view.field.hi` / `view.field.lo` those of a view field. Both are targets: `x.hi := v` stores
+`(x & 0x0F) | ((v & 0x0F) << 4)`, `x.lo := v` stores `(x & 0xF0) | (v & 0x0F)`, and `+=` and
+the like read then write the nibble. A nibble is syntax over `>> 4`, `& 0x0F` and the or of the
+masked halves, so the IR, native code, `emit` and proofs are those of that arithmetic. A view
+field is read through its pointer; it is not a target. `.hi` and `.lo` of a `u16` cell are its
+bytes (`cutoff.hi` in a walker), and of any other operand than a `u8` an error.
+
 ### u16 cells
 
 A `u16` cell is a word at adjacent bytes or at `(lo, hi)` addresses; reads and stores combine the

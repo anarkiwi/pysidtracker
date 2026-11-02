@@ -19,6 +19,27 @@ from .syntax import OBJECTS, Spec, SpecError
 WIDTHS = {"u8": 8, "u16": 16, "bool": 1, "ptr": 16}
 ARITH = {"+": "add", "-": "sub", "*": "mul", "&": "and", "|": "or", "^": "xor"}
 SHIFT = {"<<": "shl", ">>": "shr"}
+NIBBLES = ("hi", "lo")
+
+
+def nibble_read(node, part: str):
+    """``node.hi`` / ``node.lo``: the high or low nibble of a byte, as shift or mask nodes."""
+    line = node[1]
+    if part == "hi":
+        return (">>", line, node, ("num", line, 4))
+    return ("&", line, node, ("num", line, 0x0F))
+
+
+def nibble_write(node, part: str, value):
+    """``node.hi := value`` / ``node.lo := value``: ``node`` with that nibble replaced."""
+    line = node[1]
+    low = ("&", line, value, ("num", line, 0x0F))
+    if part == "hi":
+        keep = ("&", line, node, ("num", line, 0x0F))
+        return ("|", line, keep, ("<<", line, low, ("num", line, 4)))
+    return ("|", line, ("&", line, node, ("num", line, 0xF0)), low)
+
+
 COMPARE = {"==": "eq", "!=": "ne", "<": "ult", "<=": "ule", ">": "ugt", ">=": "uge"}
 COMPOUND = {
     "+=": "+",
@@ -517,6 +538,9 @@ class Lowerer(ViewLowering, ObjectLowering):
             return self.name_value(node[2], scope, line)
         if tag == "attr":
             return self.attr_value(node[2], node[3], scope, line)
+        if tag == "attr2":
+            field = ("attr", line, node[2], node[3])
+            return self.nibble(field, node[4], scope)
         if tag == "index":
             return self.index_value(node[2], node[3], scope, line)
         if tag == "row_attr":
@@ -656,6 +680,8 @@ class Lowerer(ViewLowering, ObjectLowering):
             return self.bit_value(left, None, attr, scope, line)
         if left in self.views:
             return self.view_value(left, attr, scope, line)
+        if attr in NIBBLES and self.lookup(left, scope) is not None:
+            return self.nibble(("name", line, left), attr, scope)
         owner = self.owner_value(left, attr, scope, line) or self.cursor_value(
             left, attr, scope, line
         )
@@ -663,6 +689,12 @@ class Lowerer(ViewLowering, ObjectLowering):
             return owner
         inst = self.machine_instance(left, None, line)
         return K(None, 8) if inst is None else self.member(inst, attr, line)
+
+    def nibble(self, node, part: str, scope: Scope):
+        """``node.hi`` / ``node.lo``: a nibble of a one-byte operand."""
+        if width(self.expr(node, scope)) not in (0, 8):
+            self.error(node[1], f".{part} is the nibble of a u8")
+        return self.expr(nibble_read(node, part), scope)
 
     def index_value(self, name: str, index_node, scope: Scope, line: int):
         """``name[index]``: a cell element or a stream byte relative to its cursor."""
@@ -968,6 +1000,13 @@ class Lowerer(ViewLowering, ObjectLowering):
                 return []
             return self.write_bits(lval[2], index, lval[-1], value, scope, line)
         if tag == "attr":
+            if lval[3] in NIBBLES and self.lookup(lval[2], scope) is not None:
+                name = ("name", line, lval[2])
+                self.nibble(name, lval[3], scope)
+                new = nibble_write(name, lval[3], ("_v", line, value))
+                return self.assign(
+                    ("name", line, lval[2]), self.expr(new, scope), scope, line
+                )
             found = scope.names.get(lval[2])
             if found is not None and found[0] == "stream" and lval[3] == "pos":
                 return [("set", found[2], self.coerce(value, 8, line))]
