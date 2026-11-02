@@ -588,6 +588,7 @@
     "tests/test_playspec_emit.py::test_emitted_spec_elaborates_to_the_reordered_program[python-text1]",
     "tests/test_playspec_emit.py::test_isomorphic_reports_the_first_difference[native]",
     "tests/test_playspec_emit.py::test_obligations_discharge_the_same_over_processes[native]",
+    "tests/test_playspec_emit.py::test_obligations_discharge_the_same_over_processes[python]",
     "tests/test_playspec_emit.py::test_prove_discharges_every_obligation[native-text0]",
     "tests/test_playspec_emit.py::test_prove_discharges_every_obligation[native-text1]",
     "tests/test_playspec_emit.py::test_prove_discharges_every_obligation[python-text0]",

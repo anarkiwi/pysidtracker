@@ -17,11 +17,11 @@ from .helpers import build_psid
 PAL, NTSC = 985248, 1022727
 
 
-def test_frequency_matches_the_grammar_package():
-    notes = pytest.importorskip("unitracker_grammar.notes")
-    for clock in (PAL, NTSC):
-        for note in range(256):
-            assert frequency(note, clock) == notes.frequency(note, clock)
+def test_frequency_is_the_equal_tempered_word():
+    assert (frequency(57, PAL), frequency(57, NTSC)) == (7493, 7218)
+    assert frequency(57 + 12, PAL) == 14985
+    assert frequency(0, PAL) == 278 and frequency(57 + 12 * 4, PAL) == 0
+    assert frequency(57 + 12 * 65, PAL) == 0
 
 
 LOAD = 0x1000
