@@ -311,6 +311,11 @@ the table), a `u16` array a table of tables, an index choosing the sub-table: `p
 `offset` is a layout expression added to the pointer, so pointer relocation is in the binding. A
 table is syntax over `mem[...]`.
 
+Words that start a declaration (`counter`, `owner`, `accum`, `cursor`, `event`, `fire`, `handler`,
+`latch`, `output`, `record`, `signal`, `state`, `stream`, `table`, `view`, `control`) and `match` are
+keywords only where an identifier follows them (`match`: an expression); anywhere else they are
+ordinary names for cells, procs, lets and states (`syntax.SOFT`).
+
 ### State
 
 `state name: type = initial;` is a variable the spec owns, kept from call to call at no address:

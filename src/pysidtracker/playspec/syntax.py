@@ -8,6 +8,7 @@ one flat spec.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from importlib import resources
@@ -407,9 +408,7 @@ class _ToAst(Transformer):
         return self._n("table", meta, str(c[0]), base, via, c[2], c[3], list(c[4:]))
 
     def output(self, meta, c):
-        if c[0] != "output":
-            raise SpecError(f"playspec syntax: unknown declaration {c[0]!r}")
-        return self._n("output", meta, str(c[1]), c[2], c[3][1:-1], c[4])
+        return self._n("output", meta, str(c[0]), c[1], c[2][1:-1], c[3])
 
     def latch(self, meta, c):
         line = _line(meta, self.origin)
@@ -803,9 +802,31 @@ class _ToAst(Transformer):
         return self._n("func", meta, str(c[0]), [a for a in c[1:] if a is not None])
 
 
+SOFT = (
+    "accum control counter cursor event fire handler latch output owner record signal"
+    " state stream table view"
+).split()
+"""Words that start a declaration or statement and are otherwise ordinary names."""
+
+
+def soft(text: str) -> str:
+    """``text`` with each :data:`SOFT` keyword a terminal that matches only where an
+    identifier (or ``@``) follows it, so that the word anywhere else lexes as a ``NAME``
+    even in a parser state that could also start a declaration; ``match`` likewise only
+    before an expression, never as a call or an assignment target."""
+    follow = {w: r"(?=\s+[A-Za-z_@])" for w in SOFT}
+    follow["match"] = r"(?=\s+[A-Za-z0-9_(~!-])(?!\s+[-+*&|^<>]?=)"
+    defs = []
+    for word, ahead in follow.items():
+        name = f"_KW_{word.upper()}"
+        text = re.sub(rf'(?<!STREAM: )"{word}"', name, text)
+        defs.append(f"{name}.2: /{word}(?![A-Za-z0-9_]){ahead}/")
+    return text + "\n" + "\n".join(defs) + "\n"
+
+
 @lru_cache(maxsize=None)
 def _parser() -> Lark:
-    text = resources.files(__package__).joinpath("playspec.lark").read_text()
+    text = soft(resources.files(__package__).joinpath("playspec.lark").read_text())
     options = dict(parser="lalr", propagate_positions=True, maybe_placeholders=True)
     try:
         return Lark(text, cache=True, **options)
