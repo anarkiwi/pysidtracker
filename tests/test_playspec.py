@@ -140,6 +140,9 @@ def test_static_checks(body, message):
 UNREAD = "cell o: u8 @ L.a;\n{}\nschedule {{ m; }}"
 
 
+@pytest.mark.strain_exempt(
+    reason="each kind of unread name is reported with its own message"
+)
 @pytest.mark.parametrize(
     "decl, message",
     [
@@ -160,6 +163,9 @@ def test_unread_variables_are_errors(decl, message):
         lower(UNREAD.format(decl))
 
 
+@pytest.mark.strain_exempt(
+    reason="a read inside a build-flag branch is a read; asserts acceptance, not a branch"
+)
 def test_a_variable_read_only_in_a_build_branch_is_read():
     text = UNREAD.format(
         "machine m { step { let v = 1; if L.f { o := v; } } }\n"
@@ -1095,3 +1101,19 @@ def test_hosted_native_hook_runs_the_tune_code(monkeypatch):
     grid = player.render_grid(frames)
     assert grid == InterruptPlayer(data).render_grid(frames)
     assert 0 in {row[0] for row in grid[1:]} and len({row[0] for row in grid}) > 10
+
+
+@pytest.mark.strain_exempt(
+    reason="an unread state is still reported when only a list is indexed"
+)
+def test_state_read_through_another_instance_or_an_index_or_an_object_is_read():
+    text = (
+        "cell o: u8 @ L.a;\n"
+        "machine m[x in 0..2] { state n: u8 = 0; step { n := 1; } }\n"
+        "machine r { step { o := m[1].n; } }\n"
+        "schedule { m[0]; m[1]; r; }"
+    )
+    assert lower(text)
+    listed = text.replace("o := m[1].n;", "o := L.l[0];")
+    with pytest.raises(SpecError, match="state n is never read"):
+        lower(listed)

@@ -19,6 +19,8 @@ def _reads(node) -> Iterator[str]:
     elif isinstance(node, tuple) and node:
         if node[0] == "name":
             yield node[2]
+        elif node[0] == "attr_index":
+            yield from _reads(node[4])
         elif node[0] in ("let", "own"):
             yield from _reads(node[4])
         elif node[0] == "proc":
