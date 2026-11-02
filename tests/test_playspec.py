@@ -57,6 +57,9 @@ def test_syntax_error_is_a_spec_error():
         parse("spec x; cell")
 
 
+@pytest.mark.strain_exempt(
+    reason="each case pins one diagnostic message; elaboration is shared by both engines"
+)
 @pytest.mark.parametrize(
     "body, message",
     [
