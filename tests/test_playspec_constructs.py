@@ -61,6 +61,9 @@ def body(decls="", stmts="", top=""):
     return top + M.format(decls, stmts)
 
 
+@pytest.mark.strain_exempt(
+    reason="each case pins one diagnostic message; elaboration is shared by both engines"
+)
 @pytest.mark.parametrize(
     "spec, message",
     [
