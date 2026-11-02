@@ -84,6 +84,7 @@ schedule {
   - `:=` and compound assignment (`+= -= &= |= ^= <<= >>=`).
   - `let`.
   - `if`/`elif`/`else`.
+  - `match e { arm... [_ => body] }` dispatches on one value (see [match](#match)).
   - `while c bound N`: running past the bound is a runtime error and a proof obligation.
   - Static `for`, `in`, `goto`, `assert`.
   - `native addr(a = e, x = e, y = e) resumes pc;` runs the tune's own 6502 code (a documented hook a rip patches) from `addr` with those registers (each optional). If the code reaches `pc` the spec carries on with the registers restored; if the call returns first, the CPU has finished it and the spec's call ends. It needs a `SpecPlayer` (`run` raises) and is opaque to `check` and `tv`, which refuse it.
@@ -104,6 +105,20 @@ schedule {
   - Statics: `len`, `member`.
   - Memory: `mem[a]`, `mem16[a]`.
   - Entry registers: `cpu.a/x/y/c/z/n/v/d/i`.
+
+### match
+
+```
+match n {
+  1 => wfghost := wave | 2;                  // one value, one statement
+  2, 3 => { a := 0; b += 1; }                // a list of values, a block
+  5..9 => c := 1;                            // an inclusive range
+  0x0D if L.detune => detuner := v << 3;     // static guard on a build flag
+  _ => { ngateof(); }                        // optional default, last
+}
+```
+
+The first matching arm runs. An arm body is a block or one of `:=`/compound assignment, a call, `return`, `finish`, `goto`. A guard (`if cond`) is evaluated after the value matches and is meant for build flags, so an arm whose guard is false at bind time disappears. A value that is not a plain name or literal is evaluated once, into a hidden local. `match` is syntax over the `if`/`elif` chain `n == 1`, `n == 2 || n == 3`, `n >= 5 && n <= 9`, `n == 0x0D && L.detune`, so the IR, native code, `emit` and proofs are those of that chain; `emit` prints the chain.
 
 ### Memory semantics
 

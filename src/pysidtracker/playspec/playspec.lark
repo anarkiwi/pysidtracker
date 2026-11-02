@@ -107,7 +107,7 @@ invariant: "invariant" NAME ":" expr ";"
 assume: "assume" expr ";"
 
 block: "{" _stmt* "}"
-_stmt: assign | let | next_let | next_set | if_ | while_ | for_ | call
+_stmt: assign | let | next_let | next_set | if_ | match_ | while_ | for_ | call
      | return_ | finish | goto | in_ | stream | assert_ | native
      | labeled | group | fire | fire_block | react
 fire: "fire" NAME ";"
@@ -121,6 +121,11 @@ next_let: "let" NAME "=" "next" NAME ";"
 next_set: lval ASSIGNOP "next" NAME ";"
 if_: "if" expr block elif_* ("else" block)?
 elif_: "elif" expr block
+match_: "match" expr "{" marm* mdefault? "}"
+marm: mpat ("," mpat)* ["if" expr] "=>" _mbody
+mdefault: "_" "=>" _mbody
+mpat: expr [".." expr]
+_mbody: block | assign | call | next_set | return_ | finish | goto
 while_: "while" expr "bound" INT block
 for_: "for" NAME "in" iter block
 call: NAME "(" [expr ("," expr)*] ")" ";"

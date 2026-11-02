@@ -104,12 +104,17 @@ def _int(text: str) -> int:
     return int(text, 0)
 
 
+def _mbody(body) -> list:
+    return body if isinstance(body, list) else [body]
+
+
 @v_args(meta=True)
 class _ToAst(Transformer):
     # pylint: disable=missing-function-docstring,too-many-public-methods
     def __init__(self, origin: str = ""):
         super().__init__()
         self.origin = origin
+        self.temps = 0
 
     def _n(self, tag, meta, *fields):
         return (tag, _line(meta, self.origin), *fields)
@@ -456,6 +461,52 @@ class _ToAst(Transformer):
             arms.append((rest[0][2], rest[0][3]))
             rest = rest[1:]
         return self._n("if", meta, arms, rest[0] if rest else [])
+
+    def match_(self, meta, c):
+        line = _line(meta, self.origin)
+        value = c[0]
+        arms = [a for a in c[1:] if a[0] != "default"]
+        other = next((a[1] for a in c[1:] if a[0] == "default"), [])
+        pre = []
+        if value[0] not in ("name", "num"):
+            self.temps += 1
+            tmp = f"_match{self.temps}"
+            pre = [("let", line, tmp, None, value)]
+            value = ("name", line, tmp)
+        chain = []
+        for pats, guard, body in arms:
+            tests = [self._mtest(line, value, lo, hi) for lo, hi in pats]
+            test = tests[0]
+            for more in tests[1:]:
+                test = ("||", line, test, more)
+            chain.append((("&&", line, test, guard) if guard else test, body))
+        stmt = ("if", line, chain, other) if chain else ("group", line, other)
+        return ("group", line, pre + [stmt]) if pre else stmt
+
+    @staticmethod
+    def _mtest(line, value, lo, hi):
+        if hi is None:
+            return ("==", line, value, lo)
+        return (
+            "&&",
+            line,
+            (">=", line, value, lo),
+            ("<=", line, value, hi),
+        )
+
+    def marm(self, meta, c):
+        del meta
+        pats = [p for p in c[:-1] if isinstance(p, tuple) and p[0] == "pat"]
+        rest = [p for p in c[:-1] if not (isinstance(p, tuple) and p[0] == "pat")]
+        return [p[1:] for p in pats], (rest[0] if rest else None), _mbody(c[-1])
+
+    def mdefault(self, meta, c):
+        del meta
+        return "default", _mbody(c[0])
+
+    def mpat(self, meta, c):
+        del meta
+        return "pat", c[0], c[1]
 
     def elif_(self, meta, c):
         return self._n("elif", meta, c[0], c[1])
