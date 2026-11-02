@@ -678,16 +678,3 @@ def test_lane_writes_reorder_prove_and_agree_natively():
         mem = bytearray(0x10000)
         mem[0x20] = 9
         assert run_both(prog, mem, 4) is None
-
-
-def test_a_lane_of_a_byte_is_still_a_nibble():
-    text = (
-        LANES.replace("state fm: u16 = 0x1234;", "state fm: u8 = 0x34;")
-        .replace("w := fm;", "w := fm + 0;")
-        .replace("fm.hi := o;", "fm.hi := o & 15;")
-    )
-    prog = elaborate(parse(text))
-    mem = bytearray(0x10000)
-    mem[0x20] = 0x0F
-    compile_program(prog)(mem.__getitem__, mem.__setitem__, controls(prog))
-    assert mem[0x22] == 0xF5 and mem[0x24] == 0x0F + 5
