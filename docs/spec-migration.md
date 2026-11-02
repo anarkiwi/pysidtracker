@@ -40,6 +40,9 @@ differs and no refusal changes. Record once from the starting spec; never move t
 
 | 13 | a spec covering several builds through `flag` layout fields | `tools/spec_specialise.py SPEC TUNE` fixes the flags the binder gives the tune, keeps the branches the build takes (`if`/`elif`, `ite`, arm and `then` guards, `&&`/`||`) and drops what nothing names any more (procs, cells, events, layout fields) | gated on the tunes of that build |
 
+| 14 | a cell that holds the player's own working state, its address meaningful only to the 6502 (a zero-page pointer kept as an index) | `state name: type = initial;`, at no address | the gate |
+| 15 | handlers and objects reacting to one event | declare them in the order the player does the work: reactions run in declaration order | the gate |
+
 ## Detecting the candidates
 
 - Rules 1 and 3: bind every corpus tune and compare the addresses the binder gives the names of

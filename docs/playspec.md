@@ -309,6 +309,13 @@ the table), a `u16` array a table of tables, an index choosing the sub-table: `p
 `offset` is a layout expression added to the pointer, so pointer relocation is in the binding. A
 table is syntax over `mem[...]`.
 
+### State
+
+`state name: type = initial;` is a variable the spec owns, kept from call to call at no address:
+at the top level one for the whole player, in a machine one per instance. It is the player's
+state that has no meaning as memory (which instrument was last used, a running count), where a
+`cell` is state the tune's data or the chip places. Both executors and the native core keep it.
+
 ### Registers wider than a byte
 
 `cell pw: u12 @ L.sid + 2;` is a 12-bit register over two bytes, the low byte then the low four

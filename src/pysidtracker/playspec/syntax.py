@@ -64,6 +64,7 @@ class Spec:
     layout: Dict[str, str] = field(default_factory=dict)
     consts: List[Tuple] = field(default_factory=list)
     cells: List[Tuple] = field(default_factory=list)
+    states: List[Tuple] = field(default_factory=list)
     procs: Dict[str, Tuple] = field(default_factory=dict)
     machines: Dict[str, Tuple] = field(default_factory=dict)
     events: List[Tuple] = field(default_factory=list)
@@ -135,6 +136,8 @@ class _ToAst(Transformer):
                 spec.consts.append(item)
             elif tag == "cell":
                 spec.cells.append(item)
+            elif tag == "own":
+                spec.states.append(item)
             elif tag == "proc":
                 spec.procs[item[2]] = item
             elif tag == "machine":
@@ -507,6 +510,9 @@ class _ToAst(Transformer):
 
     def signal(self, meta, c):
         return self._n("signal", meta, str(c[0]), str(c[1]), c[2])
+
+    def own(self, meta, c):
+        return self._n("own", meta, str(c[0]), str(c[1]), c[2])
 
     def control(self, meta, c):
         if isinstance(c[1], Token):
@@ -951,6 +957,7 @@ class _Deriver:
         ]:
             self.put(self.top[item[0]], item, False, f"base {base.name}")
         declared = {
+            "own": [*base.states, *own.states],
             "event": [*base.events, *own.events],
             "object": [*base.objects, *own.objects],
             "record": [*base.records, *own.records],
@@ -992,6 +999,7 @@ class _Deriver:
             layout=layout,
             consts=list(self.top["const"].values()),
             cells=list(self.top["cell"].values()),
+            states=declared["own"],
             procs=self.top["proc"],
             machines=self.top["machine"],
             events=declared["event"],

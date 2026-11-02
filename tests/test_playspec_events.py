@@ -517,6 +517,26 @@ def test_a_view_through_a_pointer_table_reads_the_record_an_index_chooses():
         build(text.replace("ins[0].ad", "ins.ad"))
 
 
+def test_spec_owned_state_lasts_from_call_to_call_at_no_address():
+    text = """spec s;
+    state last: u8 = 7;
+    cell out: u8[4] @ 0x40;
+    machine m[x in 0..2] {
+      state count: u16 = 0x00FF;
+      step {
+        count += 1;
+        out[x] := last;
+        out[2 + x] := hi(count);
+        last := x;
+      }
+    }
+    schedule { m[0]; m[1]; }
+    """
+    prog = build(text)
+    assert frames(prog, {}, 2, (0x40, 0x41, 0x42, 0x43)) == [(7, 0, 1, 1), (1, 0, 1, 1)]
+    assert not any(c.name in ("last", "count") for c in prog.cells)
+
+
 def test_a_u16_cell_carries_into_its_high_byte_without_help():
     text = """spec u;
     cell w: u16 @ (0x10, 0x20);

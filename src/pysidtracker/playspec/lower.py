@@ -77,6 +77,7 @@ class Instance:
         self.cells: Dict[str, Cell] = {}
         self.signals: Dict[str, Tuple[str, int]] = {}
         self.controls: Dict[str, tuple] = {}
+        self.states: Dict[str, tuple] = {}
         self.procs: Dict[str, tuple] = {}
         self.objects: Dict[str, Obj] = {}
 
@@ -97,6 +98,7 @@ class Lowerer(ViewLowering, ObjectLowering):
         self.natives: list = []
         self.consts: Dict[str, K] = {}
         self.shared: Dict[str, Cell] = {}
+        self.states: Dict[str, tuple] = {}
         self.instances: Dict[str, Instance] = {}
         self.signals: List[Tuple[str, int, int]] = []
         self.controls: List[Tuple[str, int, int]] = []
@@ -135,6 +137,8 @@ class Lowerer(ViewLowering, ObjectLowering):
             self.consts[name] = value
         for decl in spec.cells:
             self.shared[decl[2]] = self.bind_cell(decl, "", Scope())
+        for decl in spec.states:
+            self.bind_state(self.states, decl, Scope())
         self.bind_tables(Scope())
         self.bind_output(Scope())
         for record in spec.records:
@@ -293,6 +297,8 @@ class Lowerer(ViewLowering, ObjectLowering):
                 inst.cells[item[2]] = self.bind_cell(item, ident, scope)
             elif tag == "signal":
                 self.bind_signal(inst, item, scope)
+            elif tag == "own":
+                self.bind_state(inst.states, item, scope)
             elif tag == "control":
                 self.bind_control(inst, item, scope)
             elif tag == "proc":
@@ -316,6 +322,18 @@ class Lowerer(ViewLowering, ObjectLowering):
         ir = self.fresh(f"sig_{name}")
         inst.signals[name] = (ir, w)
         self.signals.append((ir, w, value.v or 0))
+
+    def bind_state(self, states: dict, item, scope: Scope) -> None:
+        """Declare spec-owned state: a variable kept from call to call, at no address."""
+        _tag, line, name, typ, initial = item
+        w = WIDTHS.get(typ, 8)
+        value = self.coerce(self.expr(initial, scope), w, line)
+        if not isinstance(value, K):
+            self.error(line, f"state {name}'s initial value must be static")
+            value = K(0, w)
+        ir = self.fresh(f"state_{name}")
+        states[name] = ("var", ir, w)
+        self.controls.append((ir, w, value.v or 0))
 
     def bind_control(self, inst: Instance, item, scope: Scope) -> None:
         """Declare a control state set, memory-mapped or hidden."""
@@ -456,13 +474,15 @@ class Lowerer(ViewLowering, ObjectLowering):
             return ("static", inst.x)
         if name in inst.signals:
             return ("signal", inst, name)
+        if name in inst.states:
+            return inst.states[name]
         if name in inst.cells:
             return ("cell", inst.cells[name])
         if name in self.consts:
             return ("static", self.consts[name])
         if name in self.shared:
             return ("cell", self.shared[name])
-        return None
+        return self.states.get(name)
 
     def signal_read(self, inst: Instance, name: str, line: int):
         """A signal of ``inst``; a foreign read must follow its writer in the schedule."""
