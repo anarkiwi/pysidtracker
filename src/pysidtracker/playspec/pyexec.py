@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..errors import SidError
 from ..notes import table
@@ -55,7 +55,7 @@ _VAR = re.compile(r"\bv_\w+")
 class _Gen:
     """Python source for one program."""
 
-    def __init__(self, program: Program):
+    def __init__(self, program: Program, slots: Dict[str, int]):
         self.helpers: List[List[str]] = []
         self.tables: Dict[tuple, str] = {}
         self.reactions: Dict[tuple, str] = {}
@@ -65,9 +65,7 @@ class _Gen:
             for i, pid in enumerate(program.procs)
         }
         self.finishing: Dict[str, bool] = {}
-        self.controls: Dict[str, int] = {
-            n: i for i, (n, _w, _d) in enumerate(program.controls)
-        }
+        self.controls = slots
 
     def name(self, ident: str) -> str:
         """The Python spelling of an IR variable."""
@@ -216,7 +214,9 @@ def indent(lines: List[str]) -> List[str]:
     return ["    " + line for line in lines]
 
 
-def _generate(program: Program) -> Tuple[str, Dict[str, tuple], Dict[tuple, str]]:
+def _generate(
+    program: Program, slots: Dict[str, int]
+) -> Tuple[str, Dict[str, tuple], Dict[tuple, str]]:
     """``(source, tables, reactions)``: the frame function, the ``table`` arguments of the
     note tables (``T0``, ...) it reads and the ``(object, event)`` of each reaction
     function (``OB0``, ...) it calls.
@@ -225,7 +225,7 @@ def _generate(program: Program) -> Tuple[str, Dict[str, tuple], Dict[tuple, str]
     (``_f0`` ...) so no code object is large; a
     variable used by more than one function lives in the list ``V``.
     """
-    gen = _Gen(program)
+    gen = _Gen(program, slots)
     prelude = [f"{gen.name(name)} = P[{name[4:]!r}]" for name in program.inputs]
     procs = [
         [f"def {gen.names[pid]}(R, W, C, G, N, V):"] + indent(gen.block(body))
@@ -254,7 +254,9 @@ def _generate(program: Program) -> Tuple[str, Dict[str, tuple], Dict[tuple, str]
 
 def source(program: Program) -> str:
     """The Python source of ``program``'s frame function."""
-    return _generate(program)[0]
+    return _generate(program, {n: i for i, (n, _w, _d) in enumerate(program.controls)})[
+        0
+    ]
 
 
 def _own(R, W, C):
@@ -272,18 +274,22 @@ def _own(R, W, C):
     return read, write
 
 
-def compile_program(program: Program) -> Callable:
-    """``frame(R, W, C, G=None, P=None, N=None)`` running one call of ``program``."""
-    text, tables, reactions = _generate(program)
+def compile_program(
+    program: Program, slots: Optional[Dict[str, int]] = None
+) -> Callable:
+    """``frame(R, W, C, G=None, P=None, N=None)`` running one call of ``program``; its
+    control ``n`` is ``C[slots[n]]`` (default: its place in ``program.controls``)."""
+    if slots is None:
+        slots = {n: i for i, (n, _w, _d) in enumerate(program.controls)}
+    text, tables, reactions = _generate(program, slots)
     namespace = {"SpecRuntimeError": SpecRuntimeError, "OWN": _own}
     namespace.update((name, table(*key)) for name, key in tables.items())
-    slot = {n: i for i, (n, _w, _d) in enumerate(program.controls)}
     lanes = {
         name: dataclasses.replace(
             obj,
             locs={
                 role: tuple(
-                    (slot[a.n], 8 * a.lane) if isinstance(a, Own) else a for a in loc
+                    (slots[a.n], 8 * a.lane) if isinstance(a, Own) else a for a in loc
                 )
                 for role, loc in obj.locs.items()
             },

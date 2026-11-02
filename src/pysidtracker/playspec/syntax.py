@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 from lark import Lark, Token, Transformer, v_args
-from lark.exceptions import LarkError
+from lark.exceptions import LarkError, VisitError
 
 from ..errors import SidError
 
@@ -407,7 +407,9 @@ class _ToAst(Transformer):
         return self._n("table", meta, str(c[0]), base, via, c[2], c[3], list(c[4:]))
 
     def output(self, meta, c):
-        return self._n("output", meta, str(c[0]), c[1], c[2][1:-1], c[3])
+        if c[0] != "output":
+            raise SpecError(f"playspec syntax: unknown declaration {c[0]!r}")
+        return self._n("output", meta, str(c[1]), c[2], c[3][1:-1], c[4])
 
     def latch(self, meta, c):
         line = _line(meta, self.origin)
@@ -823,7 +825,10 @@ def parse(text: str, resolve: Optional[Resolver] = None) -> Spec:
     except LarkError as exc:
         raise SpecError(f"playspec syntax: {exc}") from exc
     decl = next(tree.find_data("spec_decl"), None)
-    spec = _ToAst(str(decl.children[0]) if decl else "").transform(tree)
+    try:
+        spec = _ToAst(str(decl.children[0]) if decl else "").transform(tree)
+    except VisitError as exc:
+        raise exc.orig_exc if isinstance(exc.orig_exc, SpecError) else exc
     spec.source = text
     spec.sources = {spec.name: text}
     if not spec.base:

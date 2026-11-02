@@ -103,6 +103,7 @@ class Lowerer(ViewLowering, ObjectLowering):
         self.instances: Dict[str, Instance] = {}
         self.signals: List[Tuple[str, int, int]] = []
         self.controls: List[Tuple[str, int, int]] = []
+        self.keys: Dict[str, str] = {}
         self.state_widths: Dict[str, int] = {}
         self.grammars: List[Tuple[str, int]] = []
         self.ran: set = set()
@@ -300,7 +301,7 @@ class Lowerer(ViewLowering, ObjectLowering):
             elif tag == "signal":
                 self.bind_signal(inst, item, scope)
             elif tag == "own":
-                self.bind_state(inst.states, item, scope)
+                self.bind_state(inst.states, item, scope, inst.ident)
             elif tag == "control":
                 self.bind_control(inst, item, scope)
             elif tag == "proc":
@@ -325,8 +326,9 @@ class Lowerer(ViewLowering, ObjectLowering):
         inst.signals[name] = (ir, w)
         self.signals.append((ir, w, value.v or 0))
 
-    def bind_state(self, states: dict, item, scope: Scope) -> None:
-        """Declare spec-owned state: a variable kept from call to call, at no address."""
+    def bind_state(self, states: dict, item, scope: Scope, owner: str = "") -> None:
+        """Declare spec-owned state: a variable kept from call to call, at no address; its
+        key is ``name``, qualified by the instance ``owner`` of a machine's."""
         _tag, line, name, typ, initial = item
         w = WIDTHS.get(typ) or int(typ[1:])
         value = self.coerce(self.expr(initial, scope), w, line)
@@ -335,6 +337,7 @@ class Lowerer(ViewLowering, ObjectLowering):
             value = K(0, w)
         ir = self.fresh(f"state_{name}")
         self.state_widths[ir] = w
+        self.keys[ir] = f"{owner}.{name}" if owner else name
         states[name] = ("var", ir, w)
         self.controls.append((ir, w, value.v or 0))
 
@@ -353,6 +356,7 @@ class Lowerer(ViewLowering, ObjectLowering):
         else:
             ir = self.fresh(f"ctl_{name}")
             self.controls.append((ir, 8, next(iter(values.values()), 0) or 0))
+            self.keys[ir] = f"{inst.ident}.{name}"
             inst.controls[name] = ("hidden", ir, 0xFF, values)
 
     def cell_access(self, cell: Cell, index, line: int):
@@ -1657,6 +1661,7 @@ def elaborate(
         body=body,
         signals=low.signals,
         controls=low.controls,
+        keys=low.keys,
         cells=low.cells(),
         invariants=invariants,
         assumes=assumes,

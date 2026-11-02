@@ -50,6 +50,7 @@ enum Action {
     },
     Sweep {
         into: usize,
+        part: i64,
         count: Xf,
         step: Xf,
         frac: u32,
@@ -251,10 +252,14 @@ impl Step {
                     Action::Set(sets, take) => sets.iter().any(bad) || *take < 1,
                     Action::Run(_, sets) => run.is_none() || sets.iter().any(bad),
                     Action::Call(_) | Action::Return => ret.is_none(),
-                    Action::Sweep { into, frac, .. } => {
+                    Action::Sweep {
+                        into, part, frac, ..
+                    } => {
                         cnt.is_none()
                             || *into >= values.len()
-                            || (*frac > 0 && values[*into].hi.is_none())
+                            || (*frac > 0 && (values[*into].hi.is_none() || *part != 0))
+                            || *part > 2
+                            || (*part == 2 && values[*into].hi.is_none())
                             || *frac > 24
                     }
                     Action::Delay(_) => cnt.is_none(),
@@ -293,8 +298,14 @@ impl Step {
                 Ok((col, mask, value, equal))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let (kind, take, into, frac, base) =
-            (r.next()?, r.next()?, r.count()?, r.next()?, r.next()?);
+        let (kind, take, into, frac, base, part) = (
+            r.next()?,
+            r.next()?,
+            r.count()?,
+            r.next()?,
+            r.next()?,
+            r.next()?,
+        );
         let (a, b) = (r.xf()?, r.xf()?);
         let sets = r.assigns()?;
         let then = r.assigns()?;
@@ -308,6 +319,7 @@ impl Step {
             },
             2 => Action::Sweep {
                 into,
+                part,
                 count: a,
                 step: b,
                 frac: u32::try_from(frac).map_err(|_| "a negative fraction")?,
@@ -627,6 +639,7 @@ fn cursor(m: &mut Mem, c: &Cursor, ops: &[i64]) -> Result<i64, Bail> {
             }
             Action::Sweep {
                 into,
+                part,
                 count,
                 step,
                 frac,
@@ -634,7 +647,19 @@ fn cursor(m: &mut Mem, c: &Cursor, ops: &[i64]) -> Result<i64, Bail> {
                 if left != xf(*count, here) {
                     left = (left + 1) & 0xFF;
                     let d = xf(*step, here);
-                    carry = sweep(m, c.values[*into], *frac, d - 256 * (d >> 7))?;
+                    let whole = c.values[*into];
+                    let loc = match part {
+                        0 => whole,
+                        1 => Loc {
+                            lo: whole.lo,
+                            hi: None,
+                        },
+                        _ => Loc {
+                            lo: whole.hi.ok_or(Bail::Range)?,
+                            hi: None,
+                        },
+                    };
+                    carry = sweep(m, loc, *frac, d - 256 * (d >> 7))?;
                     done = true;
                     break;
                 }

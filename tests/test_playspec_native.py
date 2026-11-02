@@ -832,7 +832,8 @@ def cursors(draw, name):
             action = ("call", draw(transforms(columns)))
         elif kind == "sweep":
             count, step = draw(transforms(columns)), draw(transforms(columns))
-            action = ("sweep", into, count, step, frac, assigns())
+            part = 0 if frac else draw(st.integers(0, 2 if wide[into] else 1))
+            action = ("sweep", into, count, step, frac, part, assigns())
         elif kind == "delay":
             action = ("delay", draw(transforms(columns)), assigns())
         elif kind == "set":

@@ -30,7 +30,7 @@ from ..poweron import psid_init_bank, psid_play_bank
 from . import native as native_module
 from .ir import Program
 from .lower import elaborate
-from .pyexec import compile_program, controls
+from .pyexec import compile_program
 from .syntax import Spec
 from .validate import StreamValidator
 
@@ -160,6 +160,9 @@ class SpecPlayer(EmuPlayer):
         self._psid = psid
         self._bus = None
         self._compiled: Dict[Tuple[int, int], tuple] = {}
+        self._state: List[int] = []
+        self._places: Dict[Tuple[int, int], List[int]] = {}
+        self._slot: Dict[str, int] = {}
         self._entry_sets: Dict[int, frozenset] = {}
         self.validator = StreamValidator() if validate else None
         self._native_state: Optional[dict] = None
@@ -221,8 +224,39 @@ class SpecPlayer(EmuPlayer):
             program = elaborate(spec, binding, standard=self._standard)
             if self._transform is not None:
                 program = self._transform(program, self.view())
-            self._compiled[key] = (program, compile_program(program), controls(program))
+            slots = self._slots(program, key)
+            self._compiled[key] = (
+                program,
+                compile_program(program, slots),
+                self._state,
+            )
+            self._places[key] = list(slots.values())
         return self._compiled[key]
+
+    def _slots(self, program: Program, key: Tuple[int, int]) -> Dict[str, int]:
+        """Each control of ``program`` at its place in the state every entry shares."""
+        out = {}
+        for name, _w, start in program.controls:
+            ident = program.keys.get(name, f"{key[0]}:{key[1]}:{name}")
+            if ident not in self._slot:
+                self._slot[ident] = len(self._state)
+                self._state.append(start)
+            out[name] = self._slot[ident]
+        return out
+
+    def state(self, name: str) -> int:
+        """The value of the ``state`` or ``control`` ``name`` (``machine[i].name`` for a
+        machine's), shared by all the entries of the tune."""
+        return self._state[self._slot_of(name)]
+
+    def set_state(self, name: str, value: int) -> None:
+        """Sets the ``state`` or ``control`` ``name`` to ``value``."""
+        self._state[self._slot_of(name)] = value
+
+    def _slot_of(self, name: str) -> int:
+        if name not in self._slot:
+            raise KeyError(f"no state {name!r} (known once its entry has run)")
+        return self._slot[name]
 
     def _init(self, subtune: int) -> None:
         if not self._play_addr:
@@ -507,11 +541,14 @@ class SpecPlayer(EmuPlayer):
                 if bits not in self._registered:
                     core.add_bank(bits, *self._bank_pages(bits), sorted(entries))
                     self._registered.add(bits)
-            for key, (program, _frame, state) in list(self._compiled.items()):
+            for key, (program, _frame, _state) in list(self._compiled.items()):
                 if key not in self._registered and key[0] in self._registered:
-                    core.add(key[0], key[1], *native_module.encode(program))
-                    if state:
-                        core.set_controls(key[0], key[1], state)
+                    core.add(
+                        key[0],
+                        key[1],
+                        *native_module.encode(program),
+                        slots=self._places[key],
+                    )
                     self._registered.add(key)
         except native_module.Unsupported:
             self._fast, self._core = False, None
@@ -562,9 +599,7 @@ class SpecPlayer(EmuPlayer):
             core.set_cpu(
                 (mpu.pc, mpu.sp, mpu.a, mpu.x, mpu.y, mpu.p, mpu.processorCycles)
             )
-            for (bits, entry), (_p, _f, state) in self._compiled.items():
-                if state:
-                    core.set_controls(bits, entry, state)
+            core.set_store(self._state)
             limit = frames - done
             if self.play_after:
                 limit = min(limit, max(self.play_after[0] - self._frames, 1))
@@ -574,9 +609,8 @@ class SpecPlayer(EmuPlayer):
                 done if out is not None else 0,
             )
             mpu.pc, mpu.sp, mpu.a, mpu.x, mpu.y, mpu.p, mpu.processorCycles = core.cpu()
-            for (bits, entry), (_p, _f, state) in self._compiled.items():
-                if state:
-                    state[:] = core.controls(bits, entry)
+            shared = core.store()
+            self._state[: len(shared)] = shared
             self._remap()
             done += played
             self._played += played

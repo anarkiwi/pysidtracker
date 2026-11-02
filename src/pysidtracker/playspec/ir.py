@@ -195,6 +195,7 @@ class Program:
     body: list
     signals: List[Tuple[str, int, int]] = field(default_factory=list)
     controls: List[Tuple[str, int, int]] = field(default_factory=list)
+    keys: Dict[str, str] = field(default_factory=dict)
     cells: List[Cell] = field(default_factory=list)
     invariants: List[Tuple[str, object]] = field(default_factory=list)
     assumes: List[object] = field(default_factory=list)

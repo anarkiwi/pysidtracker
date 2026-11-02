@@ -223,7 +223,7 @@ cursor name {
 |---|---|
 | `value(v = op, v.hi = op, ...) [take n]` | assigns, advances `n` bytes (default `width`) |
 | `hold(op)` | counts `count` up to `op`, then advances; the flag is 1 on that step |
-| `sweep(into=v, count=op, step=op [, frac=n])` | like `hold`, adding the signed `step` to `v` each step; `v` may be a `u16` and with `frac` its low byte holds the fraction |
+| `sweep(into=v, count=op, step=op [, frac=n])` | like `hold`, adding the signed `step` to `v` each step; `v` may be a `u16` and with `frac` its low byte holds the fraction; `into=v.lo` or `v.hi` sweeps one byte lane of a word, carrying nowhere |
 | `jump(op) [hold lo..hi] [as c0]` | loads `pos` and decodes there in the same step; a jump to itself stays; `hold` stops at a target whose first byte is in the range; `as` decodes the target as another first byte |
 | `call(op)` / `return` | `call` saves the next row in `ret` and jumps; `return` jumps to `ret` |
 | `run(base)` | a run of `c0 - base + 1` empty rows (every byte reads 0): the rows after the first count `run` down and leave `pos` where it is; `then` items apply to each empty row |
@@ -322,6 +322,12 @@ A `u8`/`u16` state serves everywhere a scalar cell does: an object's position, c
 (`voice[v].n`, `voice[v].n := e`). Its initial value is static, so a player's variables start
 from what its init left by way of the binding: `state seqpos: u8 = L.init_seqpos[x];` reads item
 `x` of the layout list `init_seqpos` (`L.list[i]` takes a static index).
+
+State belongs to the tune, not to an entry: a `SpecPlayer` keeps one value per state and hidden
+`control`, keyed by its declaration (`name`, or `machine[i].name` for a machine's; `Program.keys`),
+and every entry's program, Python or native, reads and sets that one value. A state set by one
+entry is read by the next call of another. `SpecPlayer.state(name)` and `set_state(name, value)`
+read and set it by that key once the entry that declares it has run.
 
 ### Registers wider than a byte
 

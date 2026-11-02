@@ -405,9 +405,14 @@ class ObjectLowering:
                 if index < count and part == 2 and len(locs[f"v{index}"]) < 2:
                     self.error(line, f"cursor {name}: value {index} has no high byte")
             if kind == "sweep":
-                frac, wide = action[4], len(locs[f"v{action[1]}"]) == 2
-                if frac and not (wide and 0 < frac <= 24):
+                frac, part = action[4:6]
+                wide = len(locs[f"v{action[1]}"]) == 2
+                if frac and not (wide and 0 < frac <= 24 and not part):
                     self.error(line, f"cursor {name}: frac needs a word and 1..24")
+                if part == 2 and not wide:
+                    self.error(
+                        line, f"cursor {name}: value {action[1]} has no high byte"
+                    )
 
     def tests(self, node, cols, scope, line: int) -> tuple:
         """The conjunction of row-byte tests ``node`` states: ``a && b && ...``."""
@@ -436,15 +441,19 @@ class ObjectLowering:
             take = self.static(wanted, scope, line) or 1
         if kind == "sweep":
             into = args.get("into")
-            if not {"into", "count", "step"} <= set(args) or into[0] != "name":
+            if not {"into", "count", "step"} <= set(args) or into[0] not in (
+                "name",
+                "attr",
+            ):
                 self.error(line, "sweep(into=, count=, step=[, frac=])")
                 return (low, high, (), ("stop",))
             index = names.index(into[2]) if into[2] in names[:-1] else 0
+            part = (None, "lo", "hi").index(into[3]) if into[0] == "attr" else 0
             frac = self.static(args["frac"], scope, line) if "frac" in args else 0
             count, delta = (
                 self.xform(args[k], cols, scope, line) for k in ("count", "step")
             )
-            action = ("sweep", index, count, delta, frac or 0, after)
+            action = ("sweep", index, count, delta, frac or 0, part, after)
         elif kind == "delay":
             action = ("delay", self.xform(act[2][0][2], cols, scope, line), after)
         elif kind == "set":

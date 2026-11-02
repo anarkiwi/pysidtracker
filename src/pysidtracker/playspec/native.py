@@ -110,7 +110,7 @@ def _row(row) -> List[int]:
     lo, hi, tests, action = row
     kind = action[0]
     blank = (0, 0, 0, 0)
-    into = frac = base = 0
+    into = frac = base = part = 0
     take = 1
     first = second = blank
     sets: tuple = ()
@@ -121,7 +121,7 @@ def _row(row) -> List[int]:
         hold = action[2] or hold
         via = -1 if action[3] is None else action[3]
     elif kind == "sweep":
-        into, first, second, frac, then = action[1:]
+        into, first, second, frac, part, then = action[1:]
     elif kind == "delay":
         first, then = action[1:]
     elif kind == "set":
@@ -142,6 +142,7 @@ def _row(row) -> List[int]:
         into,
         frac,
         base,
+        part,
         *_xf(first),
         *_xf(second),
         *_assigns(sets),

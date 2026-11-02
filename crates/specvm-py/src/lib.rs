@@ -72,7 +72,7 @@ impl Core {
     /// little-endian `(op: u64, arg: i64)` pairs, `inputs` the `(variable, register)` of the
     /// entry registers it reads and `objects` the flat descriptions of the object reactions
     /// its `Obj` instructions step.
-    #[pyo3(signature = (bits, entry, code, tables, inputs, variables, controls, objects=Vec::new()))]
+    #[pyo3(signature = (bits, entry, code, tables, inputs, variables, controls, objects=Vec::new(), slots=None))]
     #[allow(clippy::too_many_arguments)]
     fn add(
         &mut self,
@@ -84,6 +84,7 @@ impl Core {
         variables: usize,
         controls: usize,
         objects: Vec<Vec<i64>>,
+        slots: Option<Vec<usize>>,
     ) -> PyResult<()> {
         let (pairs, rest) = code.as_chunks::<16>();
         if !rest.is_empty() {
@@ -100,7 +101,7 @@ impl Core {
             ins.push(Ins { op, arg });
         }
         let vm = Vm::new(ins, tables, inputs, variables, controls, &objects).map_err(invalid)?;
-        self.machine.add(bits, entry, vm).map_err(invalid)
+        self.machine.add(bits, entry, vm, slots).map_err(invalid)
     }
 
     /// Sets where the stores of a build land: `(from, to or None, mask, forced bits)` and the
@@ -129,20 +130,25 @@ impl Core {
     }
 
     /// The control states of the program of `entry` under port setting `bits`.
-    fn controls(&mut self, bits: usize, entry: u16) -> PyResult<Vec<i64>> {
-        let vm = self
-            .machine
-            .vm(bits, entry)
-            .ok_or_else(|| invalid("no such program"))?;
-        Ok(vm.controls().to_vec())
+    fn controls(&self, bits: usize, entry: u16) -> PyResult<Vec<i64>> {
+        self.machine
+            .controls(bits, entry)
+            .ok_or_else(|| invalid("no such program"))
     }
 
     fn set_controls(&mut self, bits: usize, entry: u16, values: Vec<i64>) -> PyResult<()> {
-        let vm = self
-            .machine
-            .vm(bits, entry)
-            .ok_or_else(|| invalid("no such program"))?;
-        vm.set_controls(&values).map_err(invalid)
+        self.machine
+            .set_controls(bits, entry, &values)
+            .map_err(invalid)
+    }
+
+    /// The control values every program shares.
+    fn store(&self) -> Vec<i64> {
+        self.machine.store().to_vec()
+    }
+
+    fn set_store(&mut self, values: Vec<i64>) {
+        self.machine.set_store(&values);
     }
 
     /// Plays up to `frames` frames, writing each one's 25 SID registers to `out` from frame

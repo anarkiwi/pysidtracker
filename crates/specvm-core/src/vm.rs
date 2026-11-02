@@ -1163,7 +1163,7 @@ mod tests {
         let x = |c: i64| [c, 0xFF, 0, 0];
         let none = [0, 0, 0, 0];
         let row = |lo: i64, hi: i64, kind: i64, a: [i64; 4], b: [i64; 4], sets: Vec<i64>| {
-            let mut r = vec![lo, hi, 0, kind, 2, 0, 0, 0];
+            let mut r = vec![lo, hi, 0, kind, 2, 0, 0, 0, 0];
             r.extend(a);
             r.extend(b);
             r.extend(sets);
@@ -1243,7 +1243,7 @@ mod tests {
             |lo: i64, hi: i64, tests: &[i64], kind: i64, take: i64, base: i64, sets: &[i64]| {
                 let mut r = vec![lo, hi, (tests.len() / 4) as i64];
                 r.extend(tests);
-                r.extend([kind, take, 0, 0, base]);
+                r.extend([kind, take, 0, 0, base, 0]);
                 r.extend(blank);
                 r.extend(blank);
                 r.extend(sets);
