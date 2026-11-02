@@ -169,6 +169,7 @@ ASSIGNOP.3: ":=" | "+=" | "-=" | "&=" | "|=" | "^=" | "<<=" | ">>="
      | NAME "[" expr "]"        -> index
      | NAME "[" expr "]" "." NAME -> inst_attr
      | NAME "." NAME            -> attr
+     | NAME "." NAME "." NAME   -> attr2
      | "mem" "[" expr "]"       -> mem
      | "mem16" "[" expr "]"     -> mem16
      | NAME "(" [expr ("," expr)*] ")" -> func
