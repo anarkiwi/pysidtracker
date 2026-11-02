@@ -211,7 +211,14 @@ def _cursor(obj: Obj, action: tuple) -> Step:
                     carry = 0
                     if kind == "sweep":
                         delta = to_signed(xf(row[3], cols))
-                        carry = _sweep(R, W, values[row[1]], row[4], delta)
+                        loc = values[row[1]]
+                        carry = _sweep(
+                            R,
+                            W,
+                            loc[row[5] - 1 :][:1] if row[5] else loc,
+                            row[4],
+                            delta,
+                        )
                     break
                 left[0], carry = 0, 1
             elif kind == "set":

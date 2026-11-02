@@ -230,6 +230,9 @@ pub struct Machine {
     mem: FlatMemory,
     pub cpu: Cpu,
     vms: Vec<Vm>,
+    /// The control values every program shares: each program's controls live at its `slots`.
+    store: Vec<i64>,
+    slots: Vec<Vec<usize>>,
     banks: Vec<Option<Bank>>,
     bits: usize,
     mapped: bool,
@@ -260,6 +263,8 @@ impl Machine {
             mem,
             cpu: Cpu::new(),
             vms: Vec::new(),
+            store: Vec::new(),
+            slots: Vec::new(),
             banks: (0..8).map(|_| None).collect(),
             bits: 0,
             mapped: false,
@@ -337,8 +342,25 @@ impl Machine {
         Ok(())
     }
 
-    /// Adds the program of the modelled entry `entry` under port setting `bits`.
-    pub fn add(&mut self, bits: usize, entry: u16, vm: Vm) -> Result<(), String> {
+    /// Adds the program of the modelled entry `entry` under port setting `bits`; its controls
+    /// live at `slots` of the shared store (default: new ones).
+    pub fn add(
+        &mut self,
+        bits: usize,
+        entry: u16,
+        vm: Vm,
+        slots: Option<Vec<usize>>,
+    ) -> Result<(), String> {
+        let n = vm.controls().len();
+        let slots = slots.unwrap_or_else(|| (self.store.len()..self.store.len() + n).collect());
+        if slots.len() != n {
+            return Err("wrong number of control slots".into());
+        }
+        if let Some(&top) = slots.iter().max() {
+            if top >= self.store.len() {
+                self.store.resize(top + 1, 0);
+            }
+        }
         let bank = self
             .banks
             .get_mut(bits)
@@ -347,16 +369,49 @@ impl Machine {
         match bank.slot[entry as usize] {
             FREE => {
                 self.vms.push(vm);
+                self.slots.push(slots);
                 bank.slot[entry as usize] = self.vms.len() as u16;
             }
-            n => self.vms[n as usize - 1] = vm,
+            n => {
+                self.vms[n as usize - 1] = vm;
+                self.slots[n as usize - 1] = slots;
+            }
         }
         Ok(())
     }
 
-    pub fn vm(&mut self, bits: usize, entry: u16) -> Option<&mut Vm> {
+    fn program(&self, bits: usize, entry: u16) -> Option<usize> {
         let n = self.banks.get(bits)?.as_ref()?.slot[entry as usize];
-        (n != FREE).then(|| &mut self.vms[n as usize - 1])
+        (n != FREE).then_some(n as usize - 1)
+    }
+
+    /// The control values of the program of `entry` under `bits`.
+    pub fn controls(&self, bits: usize, entry: u16) -> Option<Vec<i64>> {
+        let n = self.program(bits, entry)?;
+        Some(self.slots[n].iter().map(|&s| self.store[s]).collect())
+    }
+
+    /// Sets the control values of the program of `entry` under `bits`.
+    pub fn set_controls(&mut self, bits: usize, entry: u16, values: &[i64]) -> Result<(), String> {
+        let n = self.program(bits, entry).ok_or("no such program")?;
+        if values.len() != self.slots[n].len() {
+            return Err("wrong number of control states".into());
+        }
+        for (&s, &v) in self.slots[n].iter().zip(values) {
+            self.store[s] = v;
+        }
+        Ok(())
+    }
+
+    /// The shared control values.
+    pub fn store(&self) -> &[i64] {
+        &self.store
+    }
+
+    /// Sets every shared control value (the store grows to hold them all).
+    pub fn set_store(&mut self, values: &[i64]) {
+        self.store.clear();
+        self.store.extend_from_slice(values);
     }
 
     /// The port setting the memory is mapped under.
@@ -390,9 +445,7 @@ impl Machine {
         let cpu = self.cpu.clone();
         let bits = self.bits;
         self.saved.clear();
-        for vm in &self.vms {
-            self.saved.extend_from_slice(vm.controls());
-        }
+        self.saved.extend_from_slice(&self.store);
         let played = if self.play == self.entry {
             self.spec(self.entry, false).map(|_| ())
         } else {
@@ -406,12 +459,7 @@ impl Machine {
             if self.bits != bits {
                 self.select(bits).expect("the bank it began in");
             }
-            let mut at = 0;
-            for vm in &mut self.vms {
-                let n = vm.controls().len();
-                vm.vars[..n].copy_from_slice(&self.saved[at..at + n]);
-                at += n;
-            }
+            self.store.copy_from_slice(&self.saved);
         }
         played
     }
@@ -461,7 +509,14 @@ impl Machine {
             sid: &mut self.sid,
             native: &mut machine,
         };
-        let flow = self.vms[n - 1].exec(&mut env, &regs)?;
+        let (vm, slots) = (&mut self.vms[n - 1], &self.slots[n - 1]);
+        for (var, &s) in slots.iter().enumerate() {
+            vm.vars[var] = self.store[s];
+        }
+        let flow = vm.exec(&mut env, &regs)?;
+        for (var, &s) in slots.iter().enumerate() {
+            self.store[s] = vm.vars[var];
+        }
         if let Some(saved) = machine.saved {
             if flow == Flow::Done || !in_call {
                 let cpu = &mut *machine.cpu;

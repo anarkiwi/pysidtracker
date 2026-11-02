@@ -59,8 +59,9 @@ def row(spec: tuple, values: List[str]) -> str:
     kind = action[0]
     then = ()
     if kind == "sweep":
-        _k, into, count, step, frac, then = action
-        args = [f"into={values[into]}", f"count={op(count)}", f"step={op(step)}"]
+        _k, into, count, step, frac, part, then = action
+        lane = ("", ".lo", ".hi")[part]
+        args = [f"into={values[into]}{lane}", f"count={op(count)}", f"step={op(step)}"]
         body = f"sweep({', '.join(args + [f'frac={frac}'] * bool(frac))})"
     elif kind == "delay":
         body, then = f"hold({op(action[1])})", action[2]
