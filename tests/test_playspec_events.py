@@ -1,5 +1,7 @@
 """Events and event-driven objects: counters, owners, cursors and records."""
 
+import re
+
 import pytest
 
 from pysidtracker.playspec import (
@@ -469,7 +471,7 @@ def test_an_instance_writes_another_instances_cell():
     schedule { m[0]; }
     """
     assert frames(build(text), {}, 1, (0x40, 0x41, 0x42)) == [(7, 8, 9)]
-    with pytest.raises(SpecError, match="has no cell 'd'"):
+    with pytest.raises(SpecError, match="has no state or cell 'd'"):
         build(text.replace("m[v].c :=", "m[v].d :="))
 
 
@@ -535,6 +537,65 @@ def test_spec_owned_state_lasts_from_call_to_call_at_no_address():
     prog = build(text)
     assert frames(prog, {}, 2, (0x40, 0x41, 0x42, 0x43)) == [(7, 0, 1, 1), (1, 0, 1, 1)]
     assert not any(c.name in ("last", "count") for c in prog.cells)
+    wide = build(text.replace("count: u16 = 0x00FF", "count: u12 = 0x0FFF"))
+    assert frames(wide, {}, 1, (0x42, 0x43)) == [(0, 0)]
+
+
+STATED_WALKER = (
+    WALKER.replace("cell pos: u8 @ 0x20;", "state pos: u8 = 0;")
+    .replace("cell cnt: u8 @ 0x21;", "state cnt: u8 = 0;")
+    .replace("cell pw: u16 @ (0x22, 0x23);", "state pw: u16 = 0;")
+    .replace("cell band: u8 @ 0x24;", "state band: u8 = 0;")
+    .replace(
+        "cell fine: u16 @ (0x25, 0x26);", "state fine: u16 = 0;\ncell o: u8[5] @ 0x20;"
+    )
+    .replace(
+        "step { fire frame; }",
+        "step { fire frame; o[0] := pos; o[1] := cnt; o[2] := lo(pw); o[3] := hi(pw);"
+        " o[4] := band; }",
+    )
+)
+
+
+def test_objects_keep_state_as_they_keep_cells():
+    memory = {0x2000: TABLE}
+    watch = (0x20, 0x21, 0x22, 0x23, 0x24)
+    prog = build(STATED_WALKER, tab=0x2000)
+    assert frames(prog, memory, 14, watch) == frames(
+        build(WALKER, tab=0x2000), memory, 14, watch
+    )
+    assert {c.name for c in prog.cells} == {"o"}
+
+
+def test_state_starts_from_the_binding_points_a_table_and_is_reached_by_instance():
+    text = """spec v;
+    layout { starts: list; }
+    cell out: u8[4] @ 0x40;
+    state ptr: u16 = 0x2000;
+    table seq via ptr stride 1 { b: u8; }
+    machine m[x in 0..2] {
+      state n: u8 = L.starts[x];
+      step { out[x] := n; n += 1; }
+    }
+    machine k { step { out[2] := m[0].n; m[1].n := 9; out[3] := seq[1].b; ptr += 1; } }
+    schedule { m[0]; m[1]; k; }
+    """
+    prog = build(text, starts=[5, 7])
+    memory = {0x2000: [10, 11, 12]}
+    assert frames(prog, memory, 2, (0x40, 0x41, 0x42, 0x43)) == [
+        (5, 7, 6, 11),
+        (6, 9, 7, 12),
+    ]
+    with pytest.raises(SpecError, match=r"L.starts\[2\] is past its 2 items"):
+        build(text.replace("L.starts[x]", "L.starts[x + 2]"), starts=[5, 7])
+    with pytest.raises(SpecError, match="state n is not a u8 or u16"):
+        wide = text.replace("state n: u8", "state n: u12")
+        build(
+            wide.replace(
+                "step { out", "counter c: n { on frame += 1; }\n      step { out"
+            ),
+            starts=[5, 7],
+        )
 
 
 def test_a_u16_cell_carries_into_its_high_byte_without_help():
@@ -636,10 +697,18 @@ machine clock { step { fire frame; if tick == 3 { fire note; } } }
 schedule { clock; for v in 0..2 { voice[v]; } }
 """
 BINDING = {"sid": 0xD400, "tab": 0x2000}
+STATED_FULL = FULL
+for _name, _typ in [("tick", "u8"), ("spdc", "u8"), ("wpos", "u8"), ("wcnt", "u8"),
+                    ("pw", "u16"), ("band", "u8"), ("cpos", "u8"), ("crun", "u8"),
+                    ("cnote", "u8"), ("owned", "u8")]:  # fmt: skip
+    STATED_FULL = re.sub(
+        rf"cell {_name}: \w+ @ [^;]*;", f"state {_name}: {_typ} = 0;", STATED_FULL
+    )
 
 
-def test_reorder_keeps_the_objects_and_proves_the_simplified_code_around_them():
-    prog = elaborate(parse(FULL), BINDING)
+@pytest.mark.parametrize("text", [FULL, STATED_FULL], ids=["cells", "state"])
+def test_reorder_keeps_the_objects_and_proves_the_simplified_code_around_them(text):
+    prog = elaborate(parse(text), BINDING)
     result = O.reorder(prog, O.ORDER)
     before = [s for s in O.statements(O.inline(prog.body, prog.procs)) if s[0] == "obj"]
     after = [s for s in O.statements(result.program.body) if s[0] == "obj"]

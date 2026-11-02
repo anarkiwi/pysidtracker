@@ -103,6 +103,7 @@ class Lowerer(ViewLowering, ObjectLowering):
         self.instances: Dict[str, Instance] = {}
         self.signals: List[Tuple[str, int, int]] = []
         self.controls: List[Tuple[str, int, int]] = []
+        self.state_widths: Dict[str, int] = {}
         self.grammars: List[Tuple[str, int]] = []
         self.ran: set = set()
         self.writers: Dict[str, set] = {}
@@ -327,12 +328,13 @@ class Lowerer(ViewLowering, ObjectLowering):
     def bind_state(self, states: dict, item, scope: Scope) -> None:
         """Declare spec-owned state: a variable kept from call to call, at no address."""
         _tag, line, name, typ, initial = item
-        w = WIDTHS.get(typ, 8)
+        w = WIDTHS.get(typ) or int(typ[1:])
         value = self.coerce(self.expr(initial, scope), w, line)
         if not isinstance(value, K):
             self.error(line, f"state {name}'s initial value must be static")
             value = K(0, w)
         ir = self.fresh(f"state_{name}")
+        self.state_widths[ir] = w
         states[name] = ("var", ir, w)
         self.controls.append((ir, w, value.v or 0))
 
@@ -500,9 +502,11 @@ class Lowerer(ViewLowering, ObjectLowering):
         """``instance.attr``: a signal or private cell of another instance."""
         if attr in inst.signals:
             return self.signal_read(inst, attr, line)
+        if attr in inst.states:
+            return V(*inst.states[attr][1:])
         if attr in inst.cells:
             return self.read_cell(inst.cells[attr], None, line)
-        self.error(line, f"{inst.ident} has no signal or cell {attr!r}")
+        self.error(line, f"{inst.ident} has no signal, state or cell {attr!r}")
         return K(None, 8)
 
     def machine_instance(self, name: str, index, line: int) -> Optional[Instance]:
@@ -592,6 +596,8 @@ class Lowerer(ViewLowering, ObjectLowering):
             return self.name_value(node[2], scope, line)
         if tag == "attr":
             return self.attr_value(node[2], node[3], scope, line)
+        if tag == "attr_index":
+            return self.list_item(node, scope)
         if tag == "attr2":
             field = ("attr", line, node[2], node[3])
             return self.nibble(field, node[4], scope)
@@ -785,6 +791,18 @@ class Lowerer(ViewLowering, ObjectLowering):
             return K(None, 8)
         self.error(line, f"undefined cell {name!r}")
         return K(None, 8)
+
+    def list_item(self, node, scope: Scope):
+        """``L.<list>[i]``, ``i`` static."""
+        _tag, line, left, name, index = node
+        values = self.list_value(("attr", line, left, name), scope)
+        i = self.static(index, scope, line)
+        if values is UNKNOWN_LIST or i is None:
+            return K(None, 0)
+        if not 0 <= i < len(values):
+            self.error(line, f"L.{name}[{i}] is past its {len(values)} items")
+            return K(None, 0)
+        return K(values[i], 0)
 
     def list_value(self, node, scope: Scope):
         """A static list: ``L.<list>`` or a range."""
@@ -1069,10 +1087,13 @@ class Lowerer(ViewLowering, ObjectLowering):
             return self.table_write(lval[2], pick, lval[4], value, scope, line)
         if tag == "inst_attr" and lval[2] in self.spec.machines:
             inst = self.machine_instance(lval[2], self.expr(lval[3], scope), line)
+            if inst is not None and lval[4] in inst.states:
+                _kind, ir, w = inst.states[lval[4]]
+                return [("set", ir, self.coerce(value, w, line))]
             if inst is not None and lval[4] in inst.cells:
                 return self.write_cell(inst.cells[lval[4]], None, value, line)
             if inst is not None:
-                self.error(line, f"{inst.ident} has no cell {lval[4]!r}")
+                self.error(line, f"{inst.ident} has no state or cell {lval[4]!r}")
             return []
         if (
             tag == "inst_attr"
@@ -1664,7 +1685,7 @@ def _argument(text: str):
 def layout_names(node) -> frozenset:
     """The layout fields ``L.name`` the syntax ``node`` reads."""
     if isinstance(node, tuple):
-        if len(node) > 3 and node[0] == "attr" and node[2] == "L":
+        if len(node) > 3 and node[0] in ("attr", "attr_index") and node[2] == "L":
             return frozenset((node[3],))
         return frozenset().union(*(layout_names(n) for n in node[2:]))
     if isinstance(node, list):

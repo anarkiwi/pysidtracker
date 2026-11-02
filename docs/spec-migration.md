@@ -42,6 +42,7 @@ differs and no refusal changes. Record once from the starting spec; never move t
 
 | 14 | a cell that holds the player's own working state, its address meaningful only to the 6502 (a zero-page pointer kept as an index) | `state name: type = initial;`, at no address | the gate |
 | 15 | handlers and objects reacting to one event | declare them in the order the player does the work: reactions run in declaration order | the gate |
+| 16 | every player variable, counters, positions and operands included | `state`, its initial value what the init left, from the binder (`L.init_<name>[x]`); two names the player gives one byte are one variable | the gate |
 
 ## Detecting the candidates
 

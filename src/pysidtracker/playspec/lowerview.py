@@ -151,7 +151,14 @@ class ViewLowering:
         else:
             found = self.lookup(via, scope)
             cell = self.in_proc(found[1]) if found and found[0] == "cell" else None
-            if cell is None or cell.typ not in ("u16", "ptr"):
+            if (
+                found
+                and found[0] == "var"
+                and found[1] in self.state_widths
+                and found[2] == 16
+            ):
+                start = V(found[1], 16)
+            elif cell is None or cell.typ not in ("u16", "ptr"):
                 self.error(line, f"table {name}: {via} is not a u16 cell")
             else:
                 wanted = 1 + (cell.length is not None)

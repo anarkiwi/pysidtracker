@@ -8,12 +8,13 @@ the entry registers the spec reads (``a``, ``x``, ``y``, flag letters) and
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from typing import Callable, Dict, List, Tuple
 
 from ..errors import SidError
 from ..notes import table
-from .ir import K, Program, Rd, V, width
+from .ir import K, Own, Program, Rd, V, width
 from .objects import SpecRuntimeError, steps
 
 _BIN = {
@@ -188,7 +189,8 @@ class _Gen:
             return self.block(s[2])
         if tag == "obj":
             name = self.reactions.setdefault(s[1:3], f"OB{len(self.reactions)}")
-            call = f"{name}(R, W, ({''.join(self.ex(o) + ', ' for o in s[4])}))"
+            rw = "*OWN(R, W, C)" if s[8] else "R, W"
+            call = f"{name}({rw}, ({''.join(self.ex(o) + ', ' for o in s[4])}))"
             return [f"{self.name(s[3])} = {call}" if s[3] else call]
         return []
 
@@ -255,12 +257,40 @@ def source(program: Program) -> str:
     return _generate(program)[0]
 
 
+def _own(R, W, C):
+    """``R`` and ``W`` that also reach a ``state``'s byte, ``(slot, shift)`` in ``C``."""
+
+    def read(a):
+        return R(a) if a.__class__ is int else C[a[0]] >> a[1] & 0xFF
+
+    def write(a, v):
+        if a.__class__ is int:
+            W(a, v)
+        else:
+            C[a[0]] = C[a[0]] & ~(0xFF << a[1]) | v << a[1]
+
+    return read, write
+
+
 def compile_program(program: Program) -> Callable:
     """``frame(R, W, C, G=None, P=None, N=None)`` running one call of ``program``."""
     text, tables, reactions = _generate(program)
-    namespace = {"SpecRuntimeError": SpecRuntimeError}
+    namespace = {"SpecRuntimeError": SpecRuntimeError, "OWN": _own}
     namespace.update((name, table(*key)) for name, key in tables.items())
-    bound = steps(program)
+    slot = {n: i for i, (n, _w, _d) in enumerate(program.controls)}
+    lanes = {
+        name: dataclasses.replace(
+            obj,
+            locs={
+                role: tuple(
+                    (slot[a.n], 8 * a.lane) if isinstance(a, Own) else a for a in loc
+                )
+                for role, loc in obj.locs.items()
+            },
+        )
+        for name, obj in program.objects.items()
+    }
+    bound = steps(dataclasses.replace(program, objects=lanes))
     namespace.update((name, bound[key]) for key, name in reactions.items())
     exec(
         compile(text, f"<playspec {program.name}>", "exec"), namespace

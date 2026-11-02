@@ -317,6 +317,11 @@ table is syntax over `mem[...]`.
 at the top level one for the whole player, in a machine one per instance. It is the player's
 state that has no meaning as memory (which instrument was last used, a running count), where a
 `cell` is state the tune's data or the chip places. Both executors and the native core keep it.
+A `u8`/`u16` state serves everywhere a scalar cell does: an object's position, count or values
+(each byte a lane of the variable), the pointer of a `via` table, and another instance's member
+(`voice[v].n`, `voice[v].n := e`). Its initial value is static, so a player's variables start
+from what its init left by way of the binding: `state seqpos: u8 = L.init_seqpos[x];` reads item
+`x` of the layout list `init_seqpos` (`L.list[i]` takes a static index).
 
 ### Registers wider than a byte
 

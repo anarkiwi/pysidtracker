@@ -785,6 +785,9 @@ class _ToAst(Transformer):
     def attr(self, meta, c):
         return self._n("attr", meta, str(c[0]), str(c[1]))
 
+    def attr_index(self, meta, c):
+        return self._n("attr_index", meta, str(c[0]), str(c[1]), c[2])
+
     def attr2(self, meta, c):
         return self._n("attr2", meta, str(c[0]), str(c[1]), str(c[2]))
 

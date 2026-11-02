@@ -201,6 +201,7 @@ ASSIGNOP.3: ":=" | "+=" | "-=" | "&=" | "|=" | "^=" | "<<=" | ">>="
      | NAME "[" expr "]" "." NAME -> inst_attr
      | NAME "[" expr "]" "[" expr "]" "." NAME -> row_attr
      | NAME "." NAME            -> attr
+     | NAME "." NAME "[" expr "]" -> attr_index
      | NAME "." NAME "." NAME   -> attr2
      | "mem" "[" expr "]"       -> mem
      | "mem16" "[" expr "]"     -> mem16

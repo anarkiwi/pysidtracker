@@ -460,7 +460,8 @@ class Effects:
             "set": lambda: Effect(frozenset((s[1],))),
             "wr": lambda: Effect(stores=(span(s[1]),)),
             "obj": lambda: Effect(
-                frozenset(s[3:4]) - {None}, tuple((a, a) for a in s[6])
+                (frozenset(s[3:4]) | frozenset(s[8])) - {None},
+                tuple((a, a) for a in s[6]),
             ),
             "finish": lambda: Effect(finishes=True),
         }.get(s[0], Effect)()
@@ -1123,7 +1124,7 @@ def eliminate(
         elif tag == "finish":
             live = end
         elif tag == "obj":
-            live = (live - set(s[3:4])).union(*map(names, s[4]))
+            live = (live - set(s[3:4])).union(*map(names, s[4]), s[8])
         else:
             live = live.union(*map(names, stmt_exprs(s)))
         out.append(s)

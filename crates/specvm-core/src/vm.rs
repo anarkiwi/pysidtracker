@@ -595,7 +595,7 @@ impl Vm {
                     let step = unsafe { objects.get_unchecked((arg & TARGET) as usize) };
                     sp -= step.operands;
                     let ops = unsafe { std::slice::from_raw_parts(stack.add(sp), step.operands) };
-                    let flag = step.run(env, ram, slow, ops)?;
+                    let flag = step.run(env, ram, slow, vars, ops)?;
                     if let Some(out) = step.out {
                         unsafe { *vars.add(out) = flag };
                     }
@@ -1112,6 +1112,34 @@ mod tests {
         assert_eq!(mem.ram(0x10), 7);
         assert_eq!(react(&operands(&[9, 0], 0), &up, 1, &mem)[0], 0);
         assert_eq!(mem.ram(0x10), 8);
+    }
+
+    #[test]
+    fn a_counter_on_a_variable_counts_its_low_byte_and_keeps_the_high() {
+        let mem = FlatMemory::new();
+        let word = crate::objects::OWN + 2;
+        let up = vec![0, 0, 2, word, word + 1, 1, 1];
+        let ins: Vec<Ins> = operands(&[0x1FF, 0], 0)
+            .iter()
+            .map(|&(op, arg)| Ins { op, arg })
+            .collect();
+        let mut vm = Vm::new(ins, vec![], vec![], 2, 2, &[up]).unwrap();
+        vm.set_controls(&[0, 0x1FE]).unwrap();
+        let (mut log, mut sid) = (Vec::new(), Vec::new());
+        let mut hook = Hook::default();
+        let mut env = Env {
+            routes: &Routes::default(),
+            mem: &mem,
+            io: false,
+            overlay: 0,
+            log: &mut log,
+            sid: &mut sid,
+            native: &mut hook,
+        };
+        vm.exec(&mut env, &[0; REGISTERS]).unwrap();
+        assert_eq!(vm.controls(), &[0, 0x1FF]);
+        assert!(log.is_empty());
+        assert!(Step::parse(&[0, -1, 2, word + 2, -1, 1, 1], 2).is_err());
     }
 
     #[test]
