@@ -4,7 +4,7 @@ emits as the original."""
 
 import pytest
 
-from pysidtracker.playspec import elaborate, parse
+from pysidtracker.playspec import elaborate, native, parse
 from pysidtracker.playspec import outorder as O
 from pysidtracker.playspec import outproof
 from pysidtracker.playspec.emit import emit, isomorphic, pruned
@@ -113,7 +113,8 @@ def test_the_result_plays_the_original_writes_in_order(procs):
     new = play(result.program, mem, 6)[1]
     slots = result.slots
     assert new == [O.kept(w, slots, result.native) for w in old]
-    assert run_both(result.program, bytearray(mem), 6) is None
+    if native.available():
+        assert run_both(result.program, bytearray(mem), 6) is None
 
 
 def test_a_value_read_before_a_call_is_not_forwarded_past_what_it_changes(procs):
