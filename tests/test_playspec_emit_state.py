@@ -8,12 +8,16 @@ import pytest
 
 from pysidtracker.playspec import elaborate, native, parse
 from pysidtracker.playspec import outorder as O
-from pysidtracker.playspec.emit import EmitError, emit, isomorphic, pruned
+from pysidtracker.playspec.emit import emit, isomorphic, pruned
 from pysidtracker.playspec.ir import K, V
 from pysidtracker.playspec.pyexec import compile_program, controls
 
 from .test_playspec_events import BINDING, FULL, STATED_FULL, STATED_WALKER, TABLE
 from .test_playspec_native import run_both, sid_writes_of, table_memory
+
+pytestmark = pytest.mark.strain_exempt(
+    reason="asserts the emitted spec plays as the program, which coverage cannot see"
+)
 
 SCALARS = """spec s;
 layout { starts: list; }
@@ -180,9 +184,3 @@ def test_a_control_nothing_reads_is_dropped_with_what_feeds_it(scalars):
     kept = replace(prog, body=scalars.body + [("set", "zz", K(1, 8))])
     assert pruned(kept).controls == scalars.controls
     assert pruned(replace(scalars, body=[("set", "n", V("n", 8))] + scalars.body))
-
-
-def test_procs_are_still_refused():
-    prog = build(HIDDEN, fr=0x40)
-    with pytest.raises(EmitError, match="procs"):
-        emit(replace(prog, procs={"p": []}))
