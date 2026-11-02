@@ -19,6 +19,12 @@ from that operand's address up to ``extra`` above it, and ``owns`` names the ``s
 variables it reads and may assign (an object's byte :class:`Own` of one). So a pass that has not seen the object's
 kind can still treat it as one opaque, deterministic step.
 
+``Op("lut", w, (K(table, w), index))`` is item ``index`` of the constant ``table`` (a ``K`` whose
+``v`` is the tuple of items: a ``ro`` array state); ``Op("aget", w, (index, e0, ..., en))`` is
+``e_index``, the elements being the array state's variables (so a pass sees what it reads). An
+index past the items is a ``SpecRuntimeError``; ``Program.arrays`` maps an array's key to its element
+variables, which are controls keyed ``key[i]``.
+
 ``Op("note", w, (K(clock), K(part), K(offset), index))`` (standard note mode only) is
 the :func:`~pysidtracker.notes.table` entry at ``index``, which the solver rejects.
 """
@@ -30,7 +36,8 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 
 class K(NamedTuple):
-    """A constant of width ``w`` (0: untyped static integer; ``v`` None: unknown)."""
+    """A constant of width ``w`` (0: untyped static integer; ``v`` None: unknown; a tuple of
+    ints: the table of a ``lut``)."""
 
     v: Optional[int]
     w: int
@@ -99,6 +106,8 @@ _FOLD = {
     "lor": lambda m, a, b: a | b,
     "lnot": lambda m, a: a ^ 1,
     "own": lambda m, a, b: int(a == b),
+    "lut": lambda m, table, i: table[i],
+    "aget": lambda m, i, *items: items[i],
 }
 
 
@@ -162,6 +171,7 @@ class Obj:
     fires: Optional[str] = None
     grammar: Optional[int] = None
     line: int = 0
+    tabs: tuple = ()
 
     def arity(self) -> int:
         """The operands a reaction takes."""
@@ -196,6 +206,7 @@ class Program:
     signals: List[Tuple[str, int, int]] = field(default_factory=list)
     controls: List[Tuple[str, int, int]] = field(default_factory=list)
     keys: Dict[str, str] = field(default_factory=dict)
+    arrays: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
     cells: List[Cell] = field(default_factory=list)
     invariants: List[Tuple[str, object]] = field(default_factory=list)
     assumes: List[object] = field(default_factory=list)

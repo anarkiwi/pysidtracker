@@ -251,6 +251,10 @@ class _ToAst(Transformer):
         width = c[-1] and c[-1][2]
         return self._n("w_table", meta, list(c[:-1]), width)
 
+    def w_atable(self, meta, c):
+        width = c[-1] and c[-1][2]
+        return self._n("w_atable", meta, [str(n) for n in c[:-1]], width)
+
     def w_width(self, meta, c):
         return self._n("w_width", meta, c[0])
 
@@ -400,12 +404,20 @@ class _ToAst(Transformer):
         del meta
         return c[0]
 
+    def v_in(self, meta, c):
+        return self._n("in", meta, str(c[0]), c[1])
+
     def v_via(self, meta, c):
         return self._n("via", meta, str(c[0]), c[1])
 
     def table(self, meta, c):
-        base, via = (c[1][2], None) if c[1][0] == "t_at" else (None, c[1][2])
-        return self._n("table", meta, str(c[0]), base, via, c[2], c[3], list(c[4:]))
+        kind, ref = c[1][0], c[1][2]
+        base = ref if kind == "t_at" else None
+        via = ref if kind == "t_via" else None
+        within = ref if kind == "t_in" else None
+        return self._n(
+            "table", meta, str(c[0]), base, via, c[2], c[3], list(c[4:]), within
+        )
 
     def output(self, meta, c):
         return self._n("output", meta, str(c[0]), c[1], c[2][1:-1], c[3])
@@ -427,6 +439,9 @@ class _ToAst(Transformer):
 
     def t_at(self, meta, c):
         return self._n("t_at", meta, c[0])
+
+    def t_in(self, meta, c):
+        return self._n("t_in", meta, str(c[0]))
 
     def t_via(self, meta, c):
         return self._n("t_via", meta, str(c[0]))
@@ -513,7 +528,16 @@ class _ToAst(Transformer):
         return self._n("signal", meta, str(c[0]), str(c[1]), c[2])
 
     def own(self, meta, c):
-        return self._n("own", meta, str(c[0]), str(c[1]), c[2])
+        name, typ, size, attr, initial = c
+        return self._n(
+            "own", meta, str(name), str(typ), initial, size, attr and str(attr)
+        )
+
+    def alen(self, meta, c):
+        return self._n("alen", meta, c[0])
+
+    def alist(self, meta, c):
+        return self._n("alist", meta, list(c))
 
     def control(self, meta, c):
         if isinstance(c[1], Token):

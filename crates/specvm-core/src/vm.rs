@@ -38,13 +38,15 @@ macro_rules! ops {
 // mask names (in that order) and the address to resume at, and runs the tune's own code.
 // `Obj` pops the operands of the object reaction its argument names (index in the low 24 bits,
 // operand count above) and steps it.
+// `VarX` replaces an index by the variable that many places past the first of a run (slot in the low
+// 24 bits, length above); an index past the run is a range bail, as for `Note`.
 // `JzKeep` and `JnzKeep` jump keeping the top value if it is zero (non-zero), else pop it: the
 // short-circuit of `and`/`or`, with `Jz`/`Jmp` around the arms of a conditional expression.
 ops!(
     Konst, Var, Rd, RdK, Add, Sub, Mul, And, Or, Xor, Shl, Shr, Eq, Ne, Ult, Ule, Slt, Sle, Word,
     AddK, SubK, ShlK, AndK, OrK, XorK, ShrK, EqK, NeK, UltK, UleK, Not, Neg, Lo, Hi, Lnot, Sext,
     Note, Wr, WrK, Set, SetK, Jmp, Jz, Jnz, JzKeep, JnzKeep, JEq, JNe, JLt, JLe, JGe, JGt, JEqK,
-    JNeK, JLtK, JLeK, JGeK, JGtK, Call, Ret, Halt, Assert, Fail, Native, Obj,
+    JNeK, JLtK, JLeK, JGeK, JGtK, Call, Ret, Halt, Assert, Fail, Native, Obj, VarX,
 );
 
 pub const SID_BASE: i64 = 0xD400;
@@ -216,7 +218,7 @@ fn effect(ins: &Ins) -> (usize, usize, bool) {
     match op {
         Konst | Var | RdK => (0, 1, false),
         Rd | AddK | SubK | ShlK | AndK | OrK | XorK | ShrK | EqK | NeK | UltK | UleK | Not
-        | Neg | Lo | Hi | Lnot | Sext | Note => (1, 1, false),
+        | Neg | Lo | Hi | Lnot | Sext | Note | VarX => (1, 1, false),
         Add | Sub | Mul | And | Or | Xor | Shl | Shr | Eq | Ne | Ult | Ule | Slt | Sle | Word => {
             (2, 1, false)
         }
@@ -269,6 +271,7 @@ fn verify(code: &[Ins], vars: usize, tables: usize, objects: &[Step]) -> Result<
             Op::Var | Op::Set => (0..vars as i64).contains(&ins.arg),
             Op::SetK => (ins.arg & SETK_VAR) < vars as i64,
             Op::Note => (0..tables as i64).contains(&ins.arg),
+            Op::VarX => (ins.arg & TARGET) + (ins.arg >> 24) <= vars as i64,
             Op::Native => (0..8).contains(&ins.arg),
             Op::Obj => objects
                 .get((ins.arg & TARGET) as usize)
@@ -527,6 +530,13 @@ impl Vm {
                         .ok()
                         .and_then(|i| table.get(i))
                         .ok_or(Bail::Range)?;
+                }
+                Op::VarX => {
+                    let i = top!();
+                    if *i as u64 >= (arg >> 24) as u64 {
+                        return Err(Bail::Range);
+                    }
+                    *i = unsafe { *vars.add(((arg & TARGET) + *i) as usize) };
                 }
                 Op::Wr => {
                     let v = pop!();
@@ -1038,6 +1048,49 @@ mod tests {
     }
 
     #[test]
+    fn indexed_variables_are_range_checked() {
+        let at = |index: i64| {
+            let ins = [
+                (Op::SetK, 1 | 5 << 20),
+                (Op::SetK, 2 | 9 << 20),
+                (Op::Konst, index),
+                (Op::VarX, 1 | 2 << 24),
+                (Op::Set, 0),
+                (Op::Halt, 0),
+            ]
+            .iter()
+            .map(|&(op, arg)| Ins { op, arg })
+            .collect();
+            let mut vm = Vm::new(ins, vec![], vec![], 3, 3, &[]).unwrap();
+            let mem = FlatMemory::new();
+            let (mut log, mut sid) = (Vec::new(), Vec::new());
+            let mut hook = Hook::default();
+            let mut env = Env {
+                routes: &Routes::default(),
+                mem: &mem,
+                io: false,
+                overlay: 0,
+                log: &mut log,
+                sid: &mut sid,
+                native: &mut hook,
+            };
+            vm.exec(&mut env, &[0; REGISTERS]).map(|_| vm.vars[0])
+        };
+        assert_eq!((at(0), at(1)), (Ok(5), Ok(9)));
+        assert_eq!((at(2), at(-1)), (Err(Bail::Range), Err(Bail::Range)));
+        let past = [
+            (Op::Konst, 0),
+            (Op::VarX, 2 | 2 << 24),
+            (Op::Set, 0),
+            (Op::Halt, 0),
+        ]
+        .iter()
+        .map(|&(op, arg)| Ins { op, arg })
+        .collect();
+        assert!(Vm::new(past, vec![], vec![], 3, 3, &[]).is_err());
+    }
+
+    #[test]
     fn controls_persist_and_locals_reset() {
         let ins = [
             (Op::Var, 0),
@@ -1158,6 +1211,11 @@ mod tests {
     }
 
     fn walker(reset: i64) -> Vec<i64> {
+        walker_over(reset, &[])
+    }
+
+    /// The walker reading both columns from the constant table `tab` (memory when empty).
+    fn walker_over(reset: i64, tab: &[i64]) -> Vec<i64> {
         // two columns, rows of width 2: 0..=0x7f sweeps value 0 by column 1 (count column 0),
         // 0x80 sets it, 0xfe jumps to column 1, anything else stops
         let x = |c: i64| [c, 0xFF, 0, 0];
@@ -1178,6 +1236,15 @@ mod tests {
         d.extend(row(0x80, 0x80, 4, none, none, set));
         d.extend(row(0xFE, 0xFE, 1, x(1), none, vec![0]));
         d.extend(row(0xFF, 0xFF, 0, none, none, vec![0]));
+        for _ in 0..2 {
+            match tab {
+                [] => d.push(-1),
+                _ => {
+                    d.push(tab.len() as i64);
+                    d.extend(tab);
+                }
+            }
+        }
         d[6] = reset;
         d
     }
@@ -1201,6 +1268,38 @@ mod tests {
         assert_eq!(seen, [(0, 1, 16), (2, 0, 16), (4, 0, 0x55), (0, 1, 0x65)]);
         react(&operands(&[0x2000, 0x2001, 6], 0), &walker(1), 0, &mem);
         assert_eq!((mem.ram(0x30), mem.ram(0x32)), (6, 0));
+    }
+
+    #[test]
+    fn walkers_read_constant_tables_in_place_of_memory() {
+        let mem = FlatMemory::new();
+        let tab = [1, 0x10, 0x80, 0x55, 0xFE, 0, 0xFF, 0];
+        let d = walker_over(0, &tab);
+        let step = operands(&[0, 1, 0], 0);
+        let seen: Vec<_> = (0..4)
+            .map(|_| {
+                react(&step, &d, 0, &mem);
+                (mem.ram(0x30), mem.ram(0x32), mem.ram(0x34))
+            })
+            .collect();
+        assert_eq!(seen, [(0, 1, 16), (2, 0, 16), (4, 0, 0x55), (0, 1, 0x65)]);
+        let ins = operands(&[0, 1, 0], 0)
+            .iter()
+            .map(|&(op, arg)| Ins { op, arg })
+            .collect();
+        let mut vm = Vm::new(ins, vec![], vec![], 0, 0, &[walker_over(0, &tab[..1])]).unwrap();
+        let (mut log, mut sid) = (Vec::new(), Vec::new());
+        let mut hook = Hook::default();
+        let mut env = Env {
+            routes: &Routes::default(),
+            mem: &mem,
+            io: false,
+            overlay: 0,
+            log: &mut log,
+            sid: &mut sid,
+            native: &mut hook,
+        };
+        assert_eq!(vm.exec(&mut env, &[0; REGISTERS]), Err(Bail::Range));
     }
 
     #[test]
@@ -1273,6 +1372,7 @@ mod tests {
         ));
         let both: Vec<i64> = [&[2][..], &field0[1..], &field1[..]].concat();
         d.extend(row(0, 255, &[0, 0x80, 0, 0], 4, 2, 0, &both));
+        d.extend([-1, -1]);
         let step = operands(&[0x2000, 0x2001, 0], 0);
         react(&step, &d, 0, &mem);
         assert_eq!((mem.ram(0x40), mem.ram(0x42), mem.ram(0x43)), (2, 2, 5));

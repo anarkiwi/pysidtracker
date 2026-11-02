@@ -123,6 +123,36 @@ class Executor:
         self.procs = procs or {}
         self.quiet = quiet
         self.guard = None
+        self.tables: Dict[tuple, object] = {}
+
+    def indexed(self, e, st: State):
+        """``lut`` (a constant table as a z3 array) and ``aget`` (a chain over the elements);
+        an index past the items is an obligation."""
+        if e.op == "lut":
+            items, w = e.a[0].v, e.a[0].w
+            index = self.expr(e.a[1], st)
+            key = (items, w, index.size())
+            if key not in self.tables:
+                table = z3.K(z3.BitVecSort(index.size()), z3.BitVecVal(0, w))
+                for i, item in enumerate(items[: 1 << index.size()]):
+                    table = z3.Store(table, i, item)
+                self.tables[key] = table
+            value = z3.Select(self.tables[key], index)
+        else:
+            index = self.expr(e.a[0], st)
+            items = e.a[1:]
+            value = self.expr(items[-1], st)
+            for i in range(len(items) - 2, -1, -1):
+                value = z3.If(index == i, self.expr(items[i], st), value)
+        if not self.quiet and len(items) < 1 << index.size():
+            past = z3.UGE(index, len(items))
+            st.obligations.append(
+                (
+                    _and(self.guard, past),
+                    f"an index past the {len(items)} items of a table",
+                )
+            )
+        return value
 
     def volatile(self, addr, st: State):
         """A volatile read: the next value of the input stream, logged with its
@@ -174,6 +204,8 @@ class Executor:
             raise SidError("standard note mode is not supported by the solver")
         if op == "vol":
             return self.volatile(self.expr(args[0], st), st)
+        if op in ("lut", "aget"):
+            return self.indexed(e, st)
         if op in ("land", "lor", "ite"):
             return self.lazy(op, args, st)
         if op == "old":

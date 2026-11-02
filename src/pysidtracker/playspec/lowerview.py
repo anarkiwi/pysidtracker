@@ -111,6 +111,7 @@ class ViewLowering:
             stride,
             _offset,
             fields,
+            within,
         ) in self.tables.values():
             size = self.static(stride, scope, line)
             placed: Dict[str, Tuple[int, str]] = {}
@@ -133,13 +134,13 @@ class ViewLowering:
             self.table_fields[name] = placed
             if name in self.shared:
                 self.error(line, f"table {name} is already a cell")
-            if (base is None) == (via is None):
-                self.error(line, f"table {name}: `@ base` or `via pointer`")
+            if [base, via, within].count(None) != 2:
+                self.error(line, f"table {name}: `@ base`, `via pointer` or `in array`")
 
     def table_ref(self, name: str, picks, field: str, scope, line: int):
         """``(address, type)`` of ``name[picks...].field``: the row index last, a pointer
         table's sub-table index first."""
-        _tag, _l, _name, base, via, stride, offset, _fields = self.tables[name]
+        _tag, _l, _name, base, via, stride, offset, _fields, _within = self.tables[name]
         where = self.table_fields[name].get(field)
         if where is None:
             self.error(line, f"table {name} has no field {field!r}")
@@ -148,7 +149,7 @@ class ViewLowering:
         wanted = 1
         if base is not None:
             start = self.coerce(self.expr(base, scope), 16, line)
-        else:
+        elif via is not None:
             found = self.lookup(via, scope)
             cell = self.in_proc(found[1]) if found and found[0] == "cell" else None
             if (
@@ -183,14 +184,27 @@ class ViewLowering:
     def table_value(self, name: str, picks, field: str, scope, line: int):
         """The value of ``name[picks...].field``."""
         addr, typ = self.table_ref(name, picks, field, scope, line)
+        read = self.rd
+        within = self.tables[name][8]
+        if within is not None:
+            arr = self.array_ref(within, scope, line, ro=True)
+            if arr is None:
+                return K(None, 8)
+
+            def read(at):
+                return self.array_read(arr, at, line)
+
         if typ == "u8":
-            return self.rd(addr)
-        return word(self.rd(addr), self.rd(mk("add", 16, addr, K(1, 16))))
+            return read(addr)
+        return word(read(addr), read(mk("add", 16, addr, K(1, 16))))
 
     def table_write(
         self, name: str, picks, field: str, value, scope, line: int
     ) -> list:
         """Statements storing ``value`` to ``name[picks...].field``."""
+        if self.tables[name][8] is not None:
+            self.error(line, f"write to table {name}, which reads a ro array")
+            return []
         addr, typ = self.table_ref(name, picks, field, scope, line)
         if typ == "u8":
             return [("wr", addr, self.coerce(value, 8, line))]

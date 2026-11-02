@@ -27,7 +27,9 @@ def _reads(node) -> Iterator[str]:
             yield from _reads(node[-1])
         elif node[0] == "assign":
             lval = node[2]
-            if not (lval[0] == "name" and node[3] == ":="):
+            if lval[0] == "index" and node[3] == ":=":
+                yield from _reads(lval[3])
+            elif not (lval[0] == "name" and node[3] == ":="):
                 yield from _reads(lval)
             yield from _reads(node[4])
         else:

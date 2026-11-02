@@ -103,6 +103,8 @@ struct Cursor {
     ret: Option<Loc>,
     values: Vec<Loc>,
     rows: Vec<Row>,
+    /// Per column, the constant table it reads in place of memory.
+    tabs: Vec<Option<Vec<u8>>>,
 }
 
 /// One reaction of an object.
@@ -239,6 +241,18 @@ impl Step {
         let rows = (0..r.count()?)
             .map(|_| Self::row(r))
             .collect::<Result<Vec<_>, String>>()?;
+        let tabs = (0..columns)
+            .map(|_| match r.next()? {
+                n if n < 0 => Ok(None),
+                n => (0..n)
+                    .map(|_| {
+                        u8::try_from(r.next()?)
+                            .map_err(|_| "a table item is not a byte".to_string())
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+                    .map(Some),
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         let bad = |a: &Assign| {
             a.index > values.len()
                 || (a.index == values.len() && cnt.is_none())
@@ -287,6 +301,7 @@ impl Step {
             ret,
             values,
             rows,
+            tabs,
         })))
     }
 
@@ -534,6 +549,15 @@ fn sweep(m: &mut Mem, loc: Loc, frac: u32, delta: i64) -> Result<i64, Bail> {
     Ok(0)
 }
 
+/// Column `j` of the row at `addr`: memory, or its constant table (an address past it is a range bail).
+fn fetch(m: &mut Mem, c: &Cursor, j: usize, addr: i64) -> Result<i64, Bail> {
+    let addr = addr & 0xFFFF;
+    match &c.tabs[j] {
+        Some(tab) => tab.get(addr as usize).map(|&b| b as i64).ok_or(Bail::Range),
+        None => m.get(addr),
+    }
+}
+
 fn cursor(m: &mut Mem, c: &Cursor, ops: &[i64]) -> Result<i64, Bail> {
     let room = if c.pos.hi.is_some() { 0xFFFF } else { 0xFF };
     let mut left = 0;
@@ -582,7 +606,7 @@ fn cursor(m: &mut Mem, c: &Cursor, ops: &[i64]) -> Result<i64, Bail> {
     let mut done = false;
     for _ in 0..JUMPS {
         for (j, col) in cols.iter_mut().enumerate().take(c.columns) {
-            *col = m.get((ops[j] + at) & 0xFFFF)?;
+            *col = fetch(m, c, j, ops[j] + at)?;
         }
         let first = via.unwrap_or(cols[0]);
         let row = c
@@ -627,7 +651,7 @@ fn cursor(m: &mut Mem, c: &Cursor, ops: &[i64]) -> Result<i64, Bail> {
                 {
                     via = *next;
                     if hold.0 <= hold.1 {
-                        let c0 = m.get((ops[0] + at) & 0xFFFF)?;
+                        let c0 = fetch(m, c, 0, ops[0] + at)?;
                         if hold.0 <= c0 && c0 <= hold.1 {
                             left = 0;
                             break;
