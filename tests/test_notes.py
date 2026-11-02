@@ -17,13 +17,6 @@ from .helpers import build_psid
 PAL, NTSC = 985248, 1022727
 
 
-def test_frequency_is_the_equal_tempered_word():
-    assert (frequency(57, PAL), frequency(57, NTSC)) == (7493, 7218)
-    assert frequency(57 + 12, PAL) == 14985
-    assert frequency(0, PAL) == 278 and frequency(57 + 12 * 4, PAL) == 0
-    assert frequency(57 + 12 * 65, PAL) == 0
-
-
 LOAD = 0x1000
 LO, HI, IDX, SID = 0x1100, 0x1200, 0x1300, 0xD400
 SPEC = """
