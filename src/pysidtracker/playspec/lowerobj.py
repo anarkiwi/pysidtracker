@@ -667,8 +667,9 @@ class ObjectLowering:
         return self.step_stmt(obj, event, ops, flag)
 
     def cursor_value(self, name: str, attr: str, scope, line: int):
-        """``cursor.ahead`` (the byte the next row starts with) or ``cursor.idle`` (no run of
-        empty rows is pending), if ``name`` is a cursor."""
+        """``cursor.ahead`` (the byte the next row starts with), ``cursor.cN`` (byte ``N`` of
+        that row) or ``cursor.idle`` (no run of empty rows is pending), if ``name`` is a
+        cursor."""
         obj = self.find_object(name)
         if obj is None or obj.kind != "cursor":
             return None
@@ -676,15 +677,18 @@ class ObjectLowering:
             if "run" not in obj.locs:
                 return K(1, 1)
             return mk("eq", 1, self.rd(K(obj.locs["run"][0], 16)), K(0, 8))
-        if attr == "ahead":
-            base = next(iter(self.asts[obj.name].values()))[0]
-            start = self.coerce(self.expr(self.given(base), type(scope)()), 16, line)
-            pos = mk(
-                "add", 8, self.rd(K(obj.locs["pos"][0], 16)), K(int(obj.spec[0] > 0), 8)
+        column = 0 if attr == "ahead" else int(attr[1:]) if attr[1:].isdigit() else -1
+        if attr[:1] not in "ac" or not 0 <= column < obj.spec[2]:
+            self.error(
+                line, f"cursor {name} has ahead, idle and c0..c{obj.spec[2] - 1}"
             )
-            return self.rd(add16(start, pos))
-        self.error(line, f"cursor {name} has ahead and idle")
-        return K(None, 8)
+            return K(None, 8)
+        base = next(iter(self.asts[obj.name].values()))[column]
+        start = self.coerce(self.expr(self.given(base), type(scope)()), 16, line)
+        pos = mk(
+            "add", 8, self.rd(K(obj.locs["pos"][0], 16)), K(int(obj.spec[0] > 0), 8)
+        )
+        return self.rd(add16(start, pos))
 
     def owner_value(self, name: str, attr: str, scope, line: int):
         """``owner.mine`` (the owner cell holds this instance's id) or ``owner.free``

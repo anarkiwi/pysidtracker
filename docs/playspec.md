@@ -243,8 +243,10 @@ cursor name {
 - **Streams.** `stream @ base [grammar "m:a:r" [if e], ...];` in place of `table` reads a
   byte stream instead: `pos cell [last];`, `on row next;`, `run lo..hi base b -> cell;` and
   `field f [when cond] [-> cell = op [when test], ...];`. Fields chain into arms whose `when`
-  tests the previous byte, `last` is `advance pre` with a `settle` reaction, and `cursor.ahead`
-  and `cursor.idle` read the byte the next row starts with and whether no run is pending.
+  tests the previous byte and `last` is `advance pre` with a `settle` reaction.
+- **Reads.** `cursor.c0`, `cursor.c1`, ... read the bytes of the row at the cursor's position,
+  the row its next step decodes (`cursor.ahead` is `cursor.c0`); `cursor.idle` is whether no run
+  is pending.
 
 The pulse table of `examples/events/pulse-filter.play`:
 

@@ -209,6 +209,38 @@ def test_a_table_cursor_sweeps_delays_sets_and_jumps_on_each_frame():
     ]
 
 
+ROW_READS = """
+spec r;
+cell pos: u8 @ 0x20; cell a: u8 @ 0x21; cell b: u8 @ 0x22; cell c: u8 @ 0x23;
+cell q: u8 @ 0x24; cell p: u8 @ 0x25;
+cursor t { table @ %s; pos %s; on frame step;
+  match c0 { 0xff => stop; _ => value(); } }
+machine m { step { a := t.c0; b := t.c1; c := t.c2; fire frame; } }
+schedule { m; }
+"""
+
+
+@pytest.mark.parametrize(
+    "table, memory, pos",
+    [
+        ("0x2000 width 3", {0x2000: [1, 2, 3, 4, 5, 6, 0xFF, 7, 8]}, "pos"),
+        (
+            "0x2000, 0x2100, 0x2200",
+            {0x2000: [1, 4, 0xFF], 0x2100: [2, 5, 7], 0x2200: [3, 6, 8]},
+            "p",
+        ),
+    ],
+)
+def test_a_cursor_reads_the_bytes_of_the_row_at_its_position(table, memory, pos):
+    seen = frames(build(ROW_READS % (table, pos)), memory, 4, (0x21, 0x22, 0x23))
+    assert seen == [(1, 2, 3), (4, 5, 6), (0xFF, 7, 8), (0xFF, 7, 8)]
+
+
+def test_a_cursor_has_no_column_past_its_row():
+    with pytest.raises(SpecError, match="c0..c2"):
+        build((ROW_READS % ("0x2000 width 3", "pos")).replace("t.c2", "t.c3"))
+
+
 def test_a_table_cursor_sweeps_a_fixed_point_word_and_stops():
     prog = build(WALKER, tab=0x2000)
     rows = [0x51, 0xFE, 0, 0xFF, 0, 0]
