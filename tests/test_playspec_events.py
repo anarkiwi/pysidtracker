@@ -431,8 +431,8 @@ def test_a_record_places_each_voices_fields_at_a_stride():
 @pytest.mark.parametrize(
     "fields, message",
     [
-        ("a: u8; b: u16 @ 5;", "ends past the stride"),
-        ("a: u16; b: u8 @ 1;", "overlaps a"),
+        ("a: u16 @ 4; b: u8;", "ends past the stride"),
+        ("a: u16 @ 1; b: u8 @ 0; c: u8;", "overlaps a"),
         ("a: bool;", "u8 or u16"),
         ("dur: u8;", "already a cell"),
     ],
@@ -446,6 +446,18 @@ def test_record_declarations_are_checked(fields, message):
     """
     with pytest.raises(SpecError, match=message):
         build(text)
+
+
+def test_a_record_field_placed_by_hand_may_alias_and_sit_past_the_stride():
+    text = """spec r;
+    machine m[x in 0..2] {
+      record r @ 0 stride 7 { lo: u8 @ 0x40; hi: u8 @ 0x41; w: u16 @ 0x40; far: u8 @ 0x90; }
+      step { w := 0x1234 + x; far := x + 1; }
+    }
+    schedule { m[0]; m[1]; }
+    """
+    seen = frames(build(text), {}, 1, (0x40, 0x41, 0x47, 0x48, 0x90, 0x97))
+    assert seen == [(0x34, 0x12, 0x35, 0x12, 1, 2)]
 
 
 def test_a_u16_cell_carries_into_its_high_byte_without_help():

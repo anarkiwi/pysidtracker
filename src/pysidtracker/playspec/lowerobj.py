@@ -92,10 +92,10 @@ class ObjectLowering:
                 self.error(fline, f"record field {name}: u8 or u16 only")
                 continue
             end = offset + SIZES[typ]
-            if size is not None and end > size:
+            if where is None and size is not None and end > size:
                 self.error(fline, f"record field {name} ends past the stride {size}")
             for byte in range(offset, end):
-                if taken.setdefault(byte, name) != name:
+                if taken.setdefault(byte, name) != name and where is None:
                     self.error(fline, f"record field {name} overlaps {taken[byte]}")
             if name in cells:
                 self.error(fline, f"record field {name} is already a cell")

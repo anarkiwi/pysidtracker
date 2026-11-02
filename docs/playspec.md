@@ -351,7 +351,9 @@ the same test on two values.
 
 `record name @ base stride s { f: u8; g: u16 [@ offset]; }` in a machine gives each instance the
 cells `f`, `g` at `base + x * s + offset` (fields follow one another unless `@` places them). It
-replaces cells declared as `L.base + 7 * x + k` and is checked for overlaps and the stride.
+replaces cells declared as `L.base + 7 * x + k`. Fields that follow one another are checked for
+overlaps and the stride; a field placed with `@` may alias others or lie past the stride, as a
+cell may (`record v @ 0 stride 7 { lo: u8 @ L.lo; w: u16 @ L.lo; }`).
 
 ### view
 
