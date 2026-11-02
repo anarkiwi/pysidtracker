@@ -12,4 +12,4 @@ path = "src/lib.rs"
 
 [dependencies]
 specvm-core = { path = "../specvm-core" }
-pyo3 = { version = "0.30", features = ["abi3-py311"] }
+pyo3 = { version = "0.30", features = ["abi3-py312"] }
