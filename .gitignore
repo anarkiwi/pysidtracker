@@ -239,3 +239,6 @@ core
 
 # built wheels (never committed)
 *.whl
+
+# playspec complexity reports
+.complexity/

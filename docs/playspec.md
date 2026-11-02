@@ -13,6 +13,7 @@ cells, plus its toolchain:
 | Translation validation against 6502 code | `tv.validate`, `tv.replay` | `tv TUNE --binder ... --routine ... --pc ...` |
 | Replace `native` hooks with spec statements | `unnative`, `equivalent` | `unnative SPEC TUNE --binder ... -o OUT` |
 | Reschedule SID writes into a canonical order, emit and prove | `outorder.reorder`, `emit.emit`, `outproof.prove` | `reorder TUNES... [--order ORDER] [--prove MS] [--emit OUT]` |
+| Measure where a spec's complexity is, over tunes | `complexity.analyse`, `cover`, `report` | `complexity SPEC [TUNES...] [--root DIR] [--diff OLD] [--out JSON]` |
 
 pysidtracker ships the language and tooling only. Specs of particular players
 belong to their format packages, which bind a spec to a build's layout and run it
@@ -844,6 +845,37 @@ construction and `check`, and `tools/proofbench.py` times whole tunes.
 
 `tools/spec_compare.py` plays tunes with two specs (and the tune's own 6502 with `--oracle`) call by call
 and reports the first difference in writes, registers or memory, or with `--bench` the time per call.
+
+## Complexity
+
+`complexity.analyse(spec)` measures a spec as written, every build's branches included, to
+triage what to simplify. A unit is a top-level object or proc, a machine's proc, handler or
+object, a machine's declarations, or the schedule. Per unit:
+
+- **nodes**: AST nodes; **decisions**: `if`/`elif` arms, `sif`, loops, `&&`/`||`, `ite`,
+  object rows and each `if`/`when` of a row's assignments; **depth**: the deepest nesting
+  of branches and loops.
+- **clones**: subtrees that repeat with line numbers ignored (`--shape`: with state, signal
+  and cell names ignored too), of at least `--min-nodes`. A group whose every occurrence sits
+  in an occurrence of one other group of the same count is left out; one whose occurrences
+  all sit in other groups kept is `nested`, and only the rest add to `clone_savings`, the
+  nodes saved by stating each once: `(count - 1) * size`.
+- **layout**: each `L.` field's uses as a condition (`guard`), elsewhere in code (`code`) and
+  in declarations (`decl`), with the units using it.
+- **coupling**: the units that write and that name each `state`, signal and cell.
+- **addressing**: what a binding could hand over instead: relocation (`+` an `addr` field
+  outside a cell's placement), split pointer tables, `word(...)` in code, and tables, views
+  and object tables placed at a `u16` state.
+
+`complexity.cover(spec, tunes, frames)` plays each tune its installed format binds to that
+spec, with the spec substituted, on the Python backend. Under `complexity.probing()` every
+statement first sets a probe control (`Lowerer.probe`), so after each frame the tool
+reads which statements ran; a statement is named `origin:line:tag`, so statements of one kind
+on one line count as one. `report` adds per unit the statements no tune ran, those at most
+`--rare` tunes reached (with the tunes), and the frames run, plus each flag's tunes where it
+is true, the flags constant over the tunes and how many flag combinations occur. Object rows
+are counted in `decisions` but not probed. `delta(old, new)` lists the totals and unit
+measures that differ between two reports (`--diff OLD.play`).
 
 ## Proof tooling
 
