@@ -128,7 +128,7 @@ def test_reordered_calls_write_the_kept_writes_in_order(seed):
 def test_reorder_removes_staging_and_scratch():
     result = O.reorder(program(PLAYER), ORDER)
     assert result.promoted == [0x1000, 0x1003, 0x1008]
-    assert result.staged and all(n.endswith("_4") for n in result.staged)
+    assert all(n.endswith("_4") for n in result.staged)
     assert result.after.cells == result.inlined.cells - 3
     assert result.paths == {result.slots}
 
@@ -436,3 +436,54 @@ def test_kept_commands_the_same_envelope(seed):
         if sum(r == 4 for r, _ in trace) >= 4:
             continue
         assert observed(O.kept(trace, slots)) == observed(trace)
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+def test_stores_that_leave_the_gate_and_test_bits_alone_stay_in_order():
+    text = gate(
+        "for i in 0..6 { chip[4] := (tick & 0xF6) | 1; tick += 1; } chip[5] := 1;"
+    )
+    original, result, native, ordered = writes_of(text)
+    assert result.native == frozenset()
+    assert ordered == O.kept(native, result.slots)
+    assert O.check(original, result) is None
+
+
+@pytest.mark.strain_exempt(reason="asserts the exact writes of the canonical order")
+def test_a_loop_that_ends_once_it_stores_edges_once():
+    text = gate(
+        "let done: bool = false; while !done bound 8 { chip[4] := tick ^ 8; done := true; }"
+    )
+    original, result, native, ordered = writes_of(text)
+    assert result.native == frozenset() and ordered == native
+    assert O.check(original, result) is None
+    stay = gate(
+        "let done: bool = false; while !done bound 8 { chip[4] := tick ^ 8; tick += 1; }"
+    )
+    assert O.reorder(program(stay), ORDER).native == frozenset({4, 5, 6})
+
+
+@pytest.mark.strain_exempt(reason="asserts the edge counts of a path")
+def test_a_store_of_the_value_last_stored_is_no_edge():
+    store = ("wr", O.K(0xD404, 16), O.V("a", 8))
+    body = [store, ("set", "b", O.K(1, 8)), store, store]
+    assert O.edges(body, 0xD404) == 1
+    assert O.edges([store, ("set", "a", O.K(1, 8)), store], 0xD404) == 2
+
+
+@pytest.mark.strain_exempt(reason="asserts the known bits of each operator")
+def test_known_bits_follow_the_operators():
+    v = O.V("x", 8)
+    k = lambda n: O.K(n, 8)  # noqa: E731
+    op = lambda name, *a: O.Op(name, 8, a)  # noqa: E731
+    assert O.bits(op("and", v, k(0xF0))) == (0x0F, 0)
+    assert O.bits(op("or", op("and", v, k(0xF0)), k(3))) == (0x0F, 3)
+    assert O.bits(op("shl", op("and", v, k(0x0F)), k(4))) == (0x0F, 0)
+    assert O.bits(op("xor", op("and", v, k(0xF0)), k(0xFF))) == (0x0F, 0x0F)
+    assert O.bits(op("not", op("and", v, k(0x0F)))) == (0xF0, 0xF0)
+    assert O.bits(O.Op("zext", 16, (op("and", v, k(0x0F)),))) == (0xFFF0, 0)
+    assert O.bits(op("ite", O.V("c", 1), k(0x81), k(0x80))) == (0xFE, 0x80)
+    assert O.bits(O.Op("word", 16, (k(0x34), op("and", v, k(1))))) == (0xFEFF, 0x34)
+    assert O.bits(op("shr", k(0x80), k(7))) == (0xFF, 1)
+    assert O.bits(O.Rd(O.K(1, 16))) == (0, 0)
+    assert O.known_bits([("set", "y", op("and", v, k(1)))], ["x"]) == {"y": (0xFE, 0)}

@@ -19,8 +19,7 @@ from tqdm import tqdm
 from . import outorder as O
 from . import smt
 from ..jobs import imap
-from .emit import declared
-from .ir import Op, Program, Rd, V, width
+from .ir import Op, Program, Rd, V
 
 
 class _Env(dict):
@@ -38,21 +37,6 @@ class _Env(dict):
             self.symbols[name] = value
         self[name] = value
         return value
-
-
-def var_widths(*bodies) -> Dict[str, int]:
-    out: Dict[str, int] = {}
-    for body in bodies:
-        for s in O.statements(body):
-            if s[0] == "set":
-                out.setdefault(s[1], width(s[2]))
-            if s[0] == "obj" and s[3]:
-                out.setdefault(s[3], 1)
-            for e in O.stmt_exprs(s):
-                for n in O.walk(e):
-                    if isinstance(n, V):
-                        out[n.n] = n.w
-    return out
 
 
 @dataclass
@@ -327,10 +311,10 @@ def _raise(error):
     raise error
 
 
-def flushed_last(placed: list, slots) -> Optional[str]:
+def flushed_last(placed: list, slots, procs=None) -> Optional[str]:
     """None if no statement after a slot's flush, on any path, assigns its output or
     flag; else the slot's flag."""
-    effects = O.Effects()
+    effects = O.Effects(procs)
     owned = {O.flag_var(s).n: {O.out_var(s).n, O.flag_var(s).n} for s in slots}
 
     def run(stmts, after: frozenset) -> Optional[str]:
@@ -397,20 +381,29 @@ def prove(
     until = None if budget_s is None else start + budget_s
     stages: dict = {}
     result = O.reorder(program, order, memory=memory, observed=observed, proof=stages)
-    end = frozenset(n for n, _w, _d in program.controls)
-    tidied = O.rewrite(
-        O.eliminate(stages["forwarded"], end, end)[0],
-        O.tidy,
-        lambda s: [] if s[0] == "hook" else None,
-    )
-    final = declared(O.eliminate(tidied, end, end)[0], [*end, *program.inputs])
+    final = O.finalize(stages["forwarded"], stages["forwarded_procs"], program)
     live = O.live_slots(result.slots, result.native)
     checks = {
         "flush order": None if result.paths == {live} else "out of order",
-        "flushed after the last store": flushed_last(stages["placed"], live),
-        "result": None if final == result.program.body else "differs from the passes",
+        "flushed after the last store": flushed_last(
+            stages["placed"], live, stages["placed_procs"]
+        ),
+        "result": (
+            None
+            if final == (result.program.body, result.program.procs)
+            else "differs from the passes"
+        ),
     }
-    sizes = var_widths(stages["nested"], stages["placed"], stages["forwarded"])
+    sizes = O.var_widths(
+        stages["nested"],
+        stages["placed"],
+        stages["forwarded"],
+        stages["shared"],
+        *stages["shared_procs"].values(),
+        *stages["nested_procs"].values(),
+        *stages["placed_procs"].values(),
+        *stages["forwarded_procs"].values(),
+    )
     passes = {
         name: discharge(
             stages[name],
@@ -438,4 +431,4 @@ def prove(
     return Proof(holds, checks, passes, time.monotonic() - start, peak)
 
 
-__all__ = ["Discharged", "Proof", "discharge", "flushed_last", "prove", "var_widths"]
+__all__ = ["Discharged", "Proof", "discharge", "flushed_last", "prove"]

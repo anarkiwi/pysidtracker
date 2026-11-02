@@ -70,8 +70,6 @@ def test_declared_initialises_a_variable_read_before_it_is_assigned():
 
 def test_emit_refuses_what_it_cannot_state():
     prog = program(STALE)
-    with pytest.raises(EmitError, match="procs"):
-        emit(prog)
     flat = O.replace(prog, body=[("native", K(1, 16), (), K(2, 16))], procs={})
     with pytest.raises(EmitError):
         emit(flat)
@@ -96,7 +94,7 @@ def test_census_lists_what_is_left():
     result.text = emit(result.program, "ordered")
     found = O.census(result)
     assert found["voices"] == [0, 1, 2] and found["song_registers"] == [21, 22, 23, 24]
-    assert found["finish"] and found["promoted_cells"] == 3 and found["counters"] == 4
+    assert found["finish"] and found["promoted_cells"] == 3 and found["counters"] == 3
 
 
 def test_a_spent_budget_leaves_obligations_open():
@@ -107,7 +105,9 @@ def test_a_spent_budget_leaves_obligations_open():
 def test_obligations_discharge_the_same_over_processes():
     stages = {}
     result = O.reorder(program(PLAYER), ORDER, proof=stages)
-    sizes = outproof.var_widths(stages["nested"], stages["placed"], stages["forwarded"])
+    sizes = O.var_widths(
+        stages["nested"], stages["placed"], stages["shared"], stages["forwarded"]
+    )
     cond = next(item for item in stages["forward"] if item[0] == "cond")
     wrong = ("cond", cond[1], cond[2], O.fold("lnot", 1, (cond[3],)))
     items = stages["forward"] + [wrong]

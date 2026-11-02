@@ -686,11 +686,25 @@ segment as the gate does.
 `outorder.kept(writes, slots, native)` is the definition above on the writes of one call.
 A voice whose ctrl a path may store as many times as the order has segments (a loop,
 sample playback by test-bit toggling) cannot be bounded: its `sr`, `ad` and `ctrl` stay
-in place in the program's order (`Reordered.native`), before every other flush.
+in place in the program's order (`Reordered.native`), before every other flush. "As many
+times" counts gate and test edges, not stores: a store makes an edge unless its value is
+the last one stored (no assignment or store to what it reads in between), or the gate
+and test bits of both are known (`outorder.bits`, the bits a value has whatever the state:
+constants, `&`, `|`, `^`, shifts, `ite`; a variable's from `known_bits`). A loop leaves
+once its condition, a one-bit variable the body sets to a constant, is false, so a body
+that stores only on the path that ends it edges once.
 
 The transform:
 1. **Inline** the procs and **nest** each lowered `return` guard into the arm of the
-   branch that does not return.
+   branch that does not return. A proc with several call sites stays a proc when a call
+   is smaller than its body (`outorder.outlined`: call sites times statements above
+   their sum) and it cannot `finish` or run native code, the only things no flush can
+   be placed around. Variables are global, so a call passes and returns by name; every
+   later step runs on the body and on each proc once, and a call's effect is its proc's
+   (`Effects`). Inlining lets the constants at a call site fold its body and unroll its
+   loops, so when the procs kept leave registers `native`, the program is also
+   scheduled with every proc inlined and the schedule with fewer `native` registers
+   wins.
 2. **Fix and unroll**: forward values (step 7) with each fixed-address read of a declared
    byte replaced by its byte in the bound `memory`, and each loop whose condition is then
    known unrolled, until no bounded store of the result reaches a byte so replaced (a
@@ -720,10 +734,16 @@ The transform:
    once, in order (`flush_order`).
 7. **Forward** values: constants, copies and single-use expressions propagate to their
    uses under the conditions known to hold in each arm; at a join, a variable assigned in
-   either arm becomes an `ite` on a snapshot of the condition.
-8. **Eliminate** dead assignments and empty branches, and **declare**: each variable is
+   either arm becomes an `ite` on a snapshot of the condition. A call keeps the facts
+   its proc cannot change. A second pass computes each subexpression that repeats enough
+   to repay a variable (`(uses - 1) * (nodes - 1) > 2`, `shared_exprs`) once into a
+   `cse_N` variable, for as long as nothing it reads is assigned or stored, and a third
+   forwards the variables left with one use back.
+8. **Eliminate** dead assignments and empty branches (a proc keeps what is live after any
+   call of it, and an empty one is not called), and **declare**: each variable is
    zero-initialised at the head of its innermost enclosing block outside any loop body
-   unless its first statement there assigns it.
+   unless its first statement there assigns it. A variable a proc shares with its callers
+   is declared by the body where a path may read it first (`exposure`).
 
 An output variable left after step 8 is a buffer the order forces: its value depends on
 state the call changes before the slot can be flushed, because a register earlier in the
@@ -735,7 +755,7 @@ rewrite. `OrderError` refuses what cannot be rescheduled: `native` code and a st
 through an unbounded pointer.
 
 `emit.emit(program)` writes a reordered program as playspec source: one machine whose
-step is the call, the cells it names declared at their bound addresses (owner-qualified
+step is the call and a top-level `proc name()` for each proc it keeps, the cells it names declared at their bound addresses (owner-qualified
 names, `ro`, `volatile` and `notes(...)` kept), SID stores as `sid[V0_AD]` with a
 `const` per register, and each variable `let`-declared at its first assignment (original
 names without their lowering suffix, `out_<register>`/`wrote_<register>` for an output
@@ -745,10 +765,9 @@ back up to variable names (`emit.isomorphic`), with the binding or without.
 Hidden controls (a `state`, a per-instance `state`, a hidden `control`) are written as
 top-level `state name: type = default;` declarations of their width (`bool`, `u8`..`u16`) and
 read and set by that name; an object whose locations are `Own` lanes binds to the state by
-name. Elaboration rejects a state nothing reads, so `emit.pruned` first removes the controls
+name. A variable a proc shares with its callers is a `state` too (`emit.stated`). Elaboration rejects a state nothing reads, so `emit.pruned` first removes the controls
 no statement or object reads (and the assignments feeding only them, to a fixed point); such
-a control cannot change memory or the SID. A program with procs is refused: inline them first
-(`reorder` already does).
+a control cannot change memory or the SID.
 
 `SpecPlayer(..., transform=f)` runs `f(program, view)` on each bound program, so a
 format's player plays the reordered spec. `outorder.compare(make, order, frames)` plays
@@ -784,7 +803,13 @@ unbounded pointer reads a promoted cell or the SID.
 The passes compose by transitivity; each is justified as follows.
 
 - **Inline, nest, split, instrument, declare, hook removal and `mk` normalisation** are
-  equivalences by the IR semantics. Procs share their variables, so a call is its body.
+  equivalences by the IR semantics. Procs share their variables, so a call is its body;
+  a call kept as one is a statement whose effect (`Effects`: variables assigned, address
+  intervals stored) is its proc's, whose body is rewritten by the same passes from no
+  facts, and whose own `step` obligation is none (as for a branch, the frame rule on
+  its effect is what lets the facts that survive it stand). A proc's stores are
+  instrumented once, in its body; placement treats a call as one statement storing what
+  its proc may.
   `nest` moves `if f {S}` into the arm of a preceding branch after which `f` is unknown,
   out of the arm that assigns `f` a constant making it false (its last assignment on
   every path of that arm). `split` replaces a store at `a` by
@@ -823,8 +848,12 @@ The passes compose by transitivity; each is justified as follows.
   reach, so they hold everywhere) and each variable's value range from `ranges`, which
   each `step` obligation re-proves for the variable it assigns (with 0, the initial
   value, in every range).
+- **Shared subexpressions** are forwarding: `set cse_N := e` assigns a fresh variable
+  (its range that of `e`), the fact `e == cse_N` then stands as any other, and the `step`
+  obligation of that assignment proves it.
 - **Elimination** removes an assignment only where its variable is dead (backward
-  liveness, with controls live at the end) and an `if` only where both arms are empty and
+  liveness, with controls live at the end, and a proc's what is live after any call of
+  it) and an `if` only where both arms are empty and
   its condition reads no volatile input; neither changes memory, controls or the writes.
 
 `prove` recomputes the passes, checks that they reproduce the result, runs the
