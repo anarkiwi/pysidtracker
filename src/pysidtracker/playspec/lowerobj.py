@@ -338,7 +338,7 @@ class ObjectLowering:
             if len(found) != 1:
                 self.error(line, f"cursor {name} needs exactly one {need} clause")
                 return Obj(oid, "cursor", "", {}, (0, 1, 1, ()), {}), {}
-        _t, tline, bases, width = tables[0]
+        _t, tline, bases, width, *origin = tables[0]
         arrays = bases if tables[0][0] == "w_atable" else None
         count = by_tag["w_count"][0][2] if "w_count" in by_tag else None
         declared = by_tag["w_values"][0][2] if "w_values" in by_tag else []
@@ -364,6 +364,8 @@ class ObjectLowering:
                 columns if len(found) == 1 else 1
             )
             bases = [const(j if len(found) == 1 else 0, 0) for j in range(columns)]
+            if origin and origin[0] is not None:
+                bases = [("+", tline, origin[0], b) for b in bases]
         elif len(bases) == 1 and columns > 1:
             bases = [("+", tline, bases[0], const(j, 0)) for j in range(columns)]
         cols = {f"c{j}": j for j in range(columns)}
@@ -461,6 +463,7 @@ class ObjectLowering:
             index = names.index(into[2]) if into[2] in names[:-1] else 0
             part = (None, "lo", "hi").index(into[3]) if into[0] == "attr" else 0
             frac = self.static(args["frac"], scope, line) if "frac" in args else 0
+            part = 0 if frac and part == 2 else part
             count, delta = (
                 self.xform(args[k], cols, scope, line) for k in ("count", "step")
             )
@@ -520,6 +523,12 @@ class ObjectLowering:
         """A ``cursor name { stream @ base; pos cell; ... }``: fields chained by their conditions are the
         arms of a cursor whose rows are the bytes read."""
         _tag, line, name, base, pos, last, grammar, clauses = item
+        arr = None
+        if base[0] == "in":
+            arr = self.array_ref(base[2], scope, line, ro=True)
+            if arr is None:
+                return Obj(oid, "cursor", "", {}, (0, 1, 1, ()), {}), {}
+            base = base[3]
         locs = {"pos": self.object_cell(pos, line, scope, 1)}
         reactions: dict = {}
         run = None
@@ -570,12 +579,12 @@ class ObjectLowering:
             sets = tuple(s for _c, mine in fields[:n] for s in mine)
             rows.append((0, 255, tuple(tests), ("set", sets, n, ())))
         spec = (2 if last else 0, 1, width, tuple(rows))
+        tabs = () if arr is None else (arr[4] or (),) * width
         chosen = self.select_grammar(grammar, scope, line) if grammar else None
         index = None
         if chosen is not None:
-            self.grammars.append((chosen, line))
-            index = len(self.grammars) - 1
-        obj = Obj(oid, "cursor", "", locs, spec, reactions, None, index)
+            index = self.add_grammar(chosen, line, arr)
+        obj = Obj(oid, "cursor", "", locs, spec, reactions, None, index, tabs=tabs)
         bases = [("+", line, base, const(j, 0)) for j in range(width)]
         return obj, dict.fromkeys(reactions, [*bases, const(0, 8)])
 

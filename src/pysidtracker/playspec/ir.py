@@ -211,6 +211,7 @@ class Program:
     invariants: List[Tuple[str, object]] = field(default_factory=list)
     assumes: List[object] = field(default_factory=list)
     grammars: List[Tuple[str, int]] = field(default_factory=list)
+    grammar_arrays: Dict[int, Tuple[str, tuple]] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
     order: List[str] = field(default_factory=list)
     inputs: Dict[str, int] = field(default_factory=dict)

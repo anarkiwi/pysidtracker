@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import re
 from contextvars import ContextVar
-from functools import partial
+from functools import partial, reduce
+from operator import or_
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
@@ -261,6 +262,10 @@ def bits(e) -> Tuple[int, int]:
         return BITS.get().get(e.n, (0, 0))
     if isinstance(e, Rd):
         return (0, 0)
+    if e.op == "lut":
+        items = e.a[0].v
+        known = top & ~reduce(or_, (item ^ items[0] for item in items), 0)
+        return known, items[0] & known
     op, args = e.op, [bits(a) for a in e.a]
     (m, v), rest = args[0], args[1:]
     if op in ("and", "or", "xor"):

@@ -464,6 +464,9 @@ def test_unreached_first_call_falls_back_to_the_lowest_entry():
         make(lambda view: set())
 
 
+@pytest.mark.strain_exempt(
+    reason="asserts which memory streams fail and the strict message, which coverage cannot see"
+)
 def test_stream_validator_reports_malformed_streams():
     spec = parse(
         "spec g;\nlayout { p: addr; }\ncell q: u8 @ L.p;\nmachine m { step { "

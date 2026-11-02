@@ -72,7 +72,7 @@ o_on: "on" events "claim" ["when" expr] ";"   -> o_claim
     | "on" events "release" ["when" expr] ";" -> o_release
 
 w_table: "table" "@" expr ("," expr)* [w_width] ";"
-w_atable: "table" NAME ("," NAME)* [w_width] ";"
+w_atable: "table" NAME ("," NAME)* ["@" expr] [w_width] ";"
 w_width: "width" expr
 w_pos: "pos" NAME [k_last] ";"
 w_count: "count" NAME ";"
@@ -86,14 +86,17 @@ wset: NAME ["." NAME] "=" expr ["if" expr] ["when" expr]
 cursor: "cursor" NAME "{" _uclause* "}"
 _uclause: w_table | w_atable | k_stream | w_pos | w_count | w_values | u_ret | u_run | k_run | u_adv | w_on
         | u_settle | k_next | w_start | c_wrap | u_match | k_field
-k_stream: "stream" "@" expr ("grammar" gsel ("," gsel)*)? ";"
+k_stream: "stream" k_base ("grammar" gsel ("," gsel)*)? ";"
+k_base: "@" expr          -> k_at
+      | "in" NAME "@" expr -> k_in
 k_next: "on" events "next" ";"
 u_ret: "ret" NAME ";"
 u_run: "run" NAME ";"
 u_adv: "advance" ADVANCE ";"
 ADVANCE: "pre" | "post"
 u_settle: "on" events "settle" ";"
-u_match: "match" NAME "{" urow* "}"
+u_match: "match" NAME "{" urow* "}" [m_then]
+m_then: w_then ";"
 urow: mpat ("," mpat)* ["if" expr] ["when" expr] "=>" u_act [w_then] ";"
     | "_" "=>" u_act [w_then] ";"    -> udefault
 u_act: "value" "(" [wset ("," wset)*] ")" ["take" expr]  -> u_value
@@ -113,7 +116,7 @@ kout: NAME "=" expr ["when" expr]
 
 table: "table" NAME (t_at | t_via | t_in) "stride" expr ["offset" expr] "{" rfield* "}"
 t_at: "@" expr
-t_in: "in" NAME
+t_in: "in" NAME ["via" NAME]
 t_via: "via" NAME
 output: "output" NAME "@" expr "order" STRING ["copy" "to" expr] ";"
 view: "view" NAME (v_at | v_via | v_in) "{" vfield* "}"
@@ -168,7 +171,9 @@ finish: "finish" ";"
 goto: "goto" NAME ";"
 in_: "in" NAME "{" arm+ "}"
 arm: NAME "=>" block
-stream: "stream" NAME "=" expr "@" expr ("grammar" gsel ("," gsel)*)? ";"
+stream: "stream" NAME s_base ("grammar" gsel ("," gsel)*)? ";"
+s_base: "=" expr "@" expr          -> s_at
+      | "in" NAME "=" expr "@" expr -> s_in
 gsel: STRING ("if" expr)?
 assert_: "assert" expr ";"
 native: "native" expr "(" [narg ("," narg)*] ")" "resumes" expr ";"

@@ -8,7 +8,7 @@ and the grammar is a static view used only to report malformed data.
 from __future__ import annotations
 
 import importlib
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Sequence, Tuple
 
 from ..bytegrammar import REACH
 from ..errors import SidError
@@ -30,15 +30,27 @@ class StreamValidator:
         self.results: Dict[Tuple[str, int], Optional[str]] = {}
         self._grammars: Dict[str, tuple] = {}
 
-    def check(self, ref: str, base: int, read: Callable[[int], int]) -> Optional[str]:
-        """Parse the stream at ``base`` (bytes from ``read``) as ``ref``."""
-        key = (ref, base)
+    def check(
+        self,
+        ref: str,
+        base: int,
+        read: Callable[[int], int],
+        array: Optional[Tuple[str, Sequence[int]]] = None,
+    ) -> Optional[str]:
+        """Parse the stream at ``base`` as ``ref``: bytes from ``read``, or from index
+        ``base`` of ``array`` (its name and items), where a short tail fails to parse.
+        """
+        where = f"${base:04x}" if array is None else f"{array[0]}[{base}]"
+        key = (ref if array is None else f"{ref} in {array[0]}", base)
         if key in self.results:
             return self.results[key]
         if ref not in self._grammars:
             self._grammars[ref] = resolve(ref)
         grammar, rule = self._grammars[ref]
-        data = bytes(read((base + i) & 0xFFFF) for i in range(REACH))
+        if array is None:
+            data = bytes(read((base + i) & 0xFFFF) for i in range(REACH))
+        else:
+            data = bytes(array[1][base : base + REACH])
         try:
             grammar.parse_prefix(data, rule)
             message = None
@@ -46,7 +58,7 @@ class StreamValidator:
             message = str(exc)
         self.results[key] = message
         if message is not None and self.strict:
-            raise SidError(f"stream at ${base:04x} is not {ref}: {message}")
+            raise SidError(f"stream at {where} is not {ref}: {message}")
         return message
 
     def hook(
@@ -56,7 +68,7 @@ class StreamValidator:
         refs = [ref for ref, _line in program.grammars]
 
         def _hook(index: int, base: int) -> None:
-            self.check(refs[index], base, read)
+            self.check(refs[index], base, read, program.grammar_arrays.get(index))
 
         return _hook
 
