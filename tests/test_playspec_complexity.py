@@ -293,11 +293,16 @@ machine m {
   }
   proc mark() { keep := carry(lo, dhi); }
   proc take() { hi += u8(keep); }
+  proc shadow() {
+    let keep = carry(lo, dhi);
+    keep := carry(lo, dlo);
+    hi += u8(keep);
+  }
   step {
     sub16(borrow(lo, dhi));
     if carry(dlo, dhi) { o := 1; }
     lo := lo + dlo + u8(carry(lo, dlo));
-    add16(); dec(); off(); raw(); mark(); take();
+    add16(); dec(); off(); raw(); mark(); take(); shadow();
   }
 }
 schedule { m; }
@@ -312,7 +317,7 @@ def test_carry_chains_are_followed_classified_proved_and_reported():
     found = chains.find(parse(CHAINS))
     add = _chain(found, "m.add16")
     assert add["kind"] == "width" and add["ends"] == ["internal"]
-    assert add["pairs"] == [["lo", "hi"]] and add["writes"] == {"hi": 6, "lo": 7}
+    assert add["pairs"] == [["lo", "hi"]] and add["writes"] == {"hi": 7, "lo": 7}
     assert add["proofs"]["m.add16"]["status"] == "proved: hi:lo = hi:lo + dhi:dlo"
     assert add["saved"] > 0
     sub = _chain(found, "m.sub16")
@@ -331,11 +336,13 @@ def test_carry_chains_are_followed_classified_proved_and_reported():
     assert set(escape["units"]) == {"m.mark", "m.take"}
     kinds = Counter(c["kind"] for c in found if c["units"] == ["m.step"])
     assert kinds == {"flag": 1, "n-ary": 1}
+    shadowed = _chain(found, "m.shadow")
+    assert shadowed["ends"] == ["internal"] and not shadowed["escapes"]
     condition = next(c for c in found if "condition" in c["ends"])
     assert condition["links"] == ["carry(dlo, dhi)"]
     analysis = complexity.analyse(parse(CHAINS))
     totals = analysis.totals()
-    assert totals["chains"] == len(analysis.chains) == 8
+    assert totals["chains"] == len(analysis.chains) == 10
     assert totals["chains_proved"] == 3 and totals["escaping_chains"] == 1
     assert totals["chain_savings"] == sum(c["saved"] for c in analysis.chains)
     text = "\n".join(complexity.render(analysis, complexity.report(analysis)))

@@ -105,6 +105,7 @@ class _Finder:
         self.params: Dict[Tuple[str, str], Set[int]] = {}
         self.assigns: Dict[Tuple[str, int, str], Assign] = {}
         self.unit = ""
+        self.local: Set[str] = set()
 
     def find(self, ident: int) -> int:
         """The chain ``ident`` belongs to."""
@@ -120,6 +121,7 @@ class _Finder:
                 self.unit = unit
                 params = item[3] if item[0] == "proc" else []
                 env = {p: set(self.params.get((unit, p), ())) for p, _t in params}
+                self.local = set(env)
                 self.block(item[-1], env, {})
 
     def link(self, node) -> int:
@@ -240,13 +242,13 @@ class _Finder:
         op, rhs = (":=", node[4]) if let else (node[3], node[4])
         ids = self.carry_of(rhs, env) if op == ":=" else set()
         adds = self.expr(rhs, env, alias, alias.get(target, target))
-        if ids and not adds:
-            if not let and name in self.shared:
-                self.use(ids, "escape", node[1], target)
-                self.carried.setdefault(name, set()).update(ids)
-            env[name] = ids
-        else:
-            env.pop(name, None)
+        if let:
+            self.local.add(name)
+        carries = ids if not adds else set()
+        if carries and name in self.shared and name not in self.local:
+            self.use(carries, "escape", node[1], target)
+            self.carried.setdefault(name, set()).update(carries)
+        env[name] = carries
         nodes = ([node[2]] if op in ("+=", "-=") else []) + _term_nodes(rhs)
         self.assigns[(self.unit, int(node[1]), target)] = Assign(
             self.unit,
