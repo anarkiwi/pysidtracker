@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
+from . import chains as carry_chains
 from .ir import K
 from .lower import Lowerer
 from .syntax import Loc, Spec, load
@@ -103,6 +104,7 @@ class Analysis:
     coupling: Dict[str, dict]
     addressing: List[dict]
     text: List[str]
+    chains: List[dict] = dataclasses.field(default_factory=list)
 
     def totals(self) -> dict:
         """Whole-spec counts."""
@@ -121,6 +123,14 @@ class Analysis:
                 len(c["writers"]) > 1 for c in self.coupling.values()
             ),
             "addressing": len(self.addressing),
+            "chains": len(self.chains),
+            "chains_proved": sum(
+                p["status"].startswith("proved")
+                for c in self.chains
+                for p in c["proofs"].values()
+            ),
+            "chain_savings": sum(c["saved"] for c in self.chains),
+            "escaping_chains": sum(bool(c["escapes"]) for c in self.chains),
         }
 
     def excerpt(self, line: int) -> str:
@@ -371,6 +381,7 @@ def analyse(spec: Spec, shape: bool = False, min_nodes: int = 8) -> Analysis:
         },
         addressing=walk.addressing,
         text=spec.sources.get(spec.name, spec.source).splitlines(),
+        chains=carry_chains.find(spec),
     )
 
 
@@ -465,6 +476,7 @@ def report(analysis: Analysis, corpus: Optional[dict] = None, rare: int = 3) -> 
         "layout": analysis.layout,
         "coupling": analysis.coupling,
         "addressing": analysis.addressing,
+        "chains": analysis.chains,
     }
     if corpus is None:
         return out
@@ -575,6 +587,24 @@ def render(analysis: Analysis, table: dict, top: int = 15) -> Iterator[str]:
     for kind, n in Counter(a["kind"] for a in table["addressing"]).most_common():
         lines = [str(a["line"]) for a in table["addressing"] if a["kind"] == kind]
         yield f"{kind:20s} {n:3d}  lines {', '.join(lines[:12])}"
+    yield ""
+    yield "carry chains: escaping first, then by nodes saved"
+    ranked = sorted(
+        table.get("chains", ()),
+        key=lambda c: (not c["escapes"], -c["saved"], c["lines"]),
+    )
+    for c in ranked[:top]:
+        ends = ", ".join(c["ends"]) + (
+            f" via {', '.join(c['escapes'])}" if c["escapes"] else ""
+        )
+        pairs = " ".join(f"{lo}/{hi}" for lo, hi in c["pairs"]) or "-"
+        yield (
+            f"{c['kind']:12s} {ends:24s} saves {c['saved']:3d}  "
+            f"lines {','.join(map(str, c['lines'][:6]))}  pairs {pairs}"
+        )
+        for unit, proof in c["proofs"].items():
+            if proof["status"].startswith(("proved", "refuted")):
+                yield f"        {unit}: {proof['status']}"
 
 
 __all__ = [

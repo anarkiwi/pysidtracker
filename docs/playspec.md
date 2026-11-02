@@ -867,6 +867,19 @@ object, a machine's declarations, or the schedule. Per unit:
   outside a cell's placement), split pointer tables, `word(...)` in code, and tables, views
   and object tables placed at a `u16` state.
 
+- **chains** (`chains.find`): byte-wise arithmetic linked by `carry`/`borrow`. A carry is
+  followed from the call that makes it through `let`s, proc parameters (`call`) and
+  `state`/signals, where it leaves its unit (`escape`), to its uses: a lane (`u8(c)`,
+  `u16(c)`, `ite(c, k, k')` in a sum), a carry-in, or a condition. Each chain's kind is
+  `width` (its sum's carry lands in another variable: a low/high byte pair), `n-ary` (in
+  the same one) or `flag`; its pairs list the low and high destinations with how often each
+  is written. Per unit, a chain with one byte pair in one block is proved with z3 equal to
+  one 16-bit add (`carry`) or subtract (`borrow`) of the base and operand pairs, with no
+  carry in, a constant one or an input flag (`proved: hi:lo = bh:bl + oh:ol + c`), or
+  `refuted`; reads of memory (`mem[...]`) and other syntax outside the straight-line subset
+  are not tried. `saved` is the AST nodes of the chain's statements less those of the fused
+  assignment. Escaping chains rank first: fusing cannot remove them.
+
 `complexity.cover(spec, tunes, frames)` plays each tune its installed format binds to that
 spec, with the spec substituted, on the Python backend. Under `complexity.probing()` every
 statement first sets a probe control (`Lowerer.probe`), so after each frame the tool

@@ -11,7 +11,7 @@ from jennings import memory as jennings_memory
 from pysidtracker import jobs
 from pysidtracker.asm6502 import assemble
 from pysidtracker.maincli import main
-from pysidtracker.playspec import SpecPlayer, complexity, elaborate, parse
+from pysidtracker.playspec import SpecPlayer, chains, complexity, elaborate, parse
 from pysidtracker.playspec.pyexec import compile_program, controls
 
 from .conftest import BACKENDS
@@ -254,3 +254,96 @@ def test_cli_reports_and_compares(tmp_path, capsys):
     assert table["delta"]["units"]["m.step"]["nodes"][0] > table["units"][1]["nodes"]
     shown = capsys.readouterr().out
     assert "units by decisions" in shown and re.search(r"statements +7 -> 6", shown)
+
+
+CHAINS = """spec ch;
+layout { out: addr; }
+cell o: u8 @ L.out;
+state lo: u8 = 0;
+state hi: u8 = 0;
+state dlo: u8 = 0;
+state dhi: u8 = 0;
+state keep: bool = false;
+machine m {
+  proc add16() {
+    let c = carry(lo, dlo);
+    lo += dlo;
+    hi := hi + dhi + u8(c);
+  }
+  proc sub16(c: bool) {
+    let l = lo;
+    lo := l - dlo - ite(c, 0, 1);
+    hi := hi - dhi - ite(borrow(l, dlo, !c), 1, 0);
+  }
+  proc dec() {
+    let c = !borrow(lo, dlo, true);
+    lo := lo - dlo - 1;
+    hi := hi - dhi - u8(!c);
+  }
+  proc off() {
+    let c = carry(lo, dlo);
+    lo += dlo;
+    lo += 1;
+    hi += u8(c);
+  }
+  proc raw() {
+    let c = carry(lo, mem[L.out]);
+    lo += mem[L.out];
+    hi += u8(c);
+  }
+  proc mark() { keep := carry(lo, dhi); }
+  proc take() { hi += u8(keep); }
+  step {
+    sub16(borrow(lo, dhi));
+    if carry(dlo, dhi) { o := 1; }
+    lo := lo + dlo + u8(carry(lo, dlo));
+    add16(); dec(); off(); raw(); mark(); take();
+  }
+}
+schedule { m; }
+"""
+
+
+def _chain(found, unit):
+    return next(c for c in found if unit in c["proofs"])
+
+
+def test_carry_chains_are_followed_classified_proved_and_reported():
+    found = chains.find(parse(CHAINS))
+    add = _chain(found, "m.add16")
+    assert add["kind"] == "width" and add["ends"] == ["internal"]
+    assert add["pairs"] == [["lo", "hi"]] and add["writes"] == {"hi": 6, "lo": 7}
+    assert add["proofs"]["m.add16"]["status"] == "proved: hi:lo = hi:lo + dhi:dlo"
+    assert add["saved"] > 0
+    sub = _chain(found, "m.sub16")
+    assert sub["ends"] == ["call"] and set(sub["units"]) == {"m.step", "m.sub16"}
+    assert sub["proofs"]["m.sub16"]["status"] == "proved: hi:lo = hi:lo - dhi:dlo - !c"
+    assert sub["proofs"]["m.step"]["status"] == "not tried: not one byte pair"
+    assert _chain(found, "m.dec")["proofs"]["m.dec"]["status"].endswith("- dhi:dlo - 1")
+    assert _chain(found, "m.off")["proofs"]["m.off"] == {
+        "status": "refuted",
+        "saved": 0,
+    }
+    raw = _chain(found, "m.raw")["proofs"]["m.raw"]["status"]
+    assert raw == "not tried: outside the subset (syntax mem)"
+    escape = found[0]
+    assert escape["escapes"] == ["keep"] and escape["ends"] == ["escape"]
+    assert set(escape["units"]) == {"m.mark", "m.take"}
+    kinds = Counter(c["kind"] for c in found if c["units"] == ["m.step"])
+    assert kinds == {"flag": 1, "n-ary": 1}
+    condition = next(c for c in found if "condition" in c["ends"])
+    assert condition["links"] == ["carry(dlo, dhi)"]
+    analysis = complexity.analyse(parse(CHAINS))
+    totals = analysis.totals()
+    assert totals["chains"] == len(analysis.chains) == 8
+    assert totals["chains_proved"] == 3 and totals["escaping_chains"] == 1
+    assert totals["chain_savings"] == sum(c["saved"] for c in analysis.chains)
+    text = "\n".join(complexity.render(analysis, complexity.report(analysis)))
+    shown = text[text.index("carry chains") :].splitlines()
+    assert shown[1].startswith("flag") and "escape via keep" in shown[1]
+    section = "\n".join(shown)
+    assert "m.off: refuted" in section and "m.raw" not in section
+    assert (
+        chains.src(parse(CHAINS).machines["m"][6][4][-1][0][4])
+        == "carry(lo, mem(L.out))"
+    )
