@@ -667,6 +667,14 @@ names without their lowering suffix, `out_<register>`/`wrote_<register>` for an 
 and its flag, `cond` for a condition snapshot). Elaborating the text gives the program
 back up to variable names (`emit.isomorphic`), with the binding or without.
 
+Hidden controls (a `state`, a per-instance `state`, a hidden `control`) are written as
+top-level `state name: type = default;` declarations of their width (`bool`, `u8`..`u16`) and
+read and set by that name; an object whose locations are `Own` lanes binds to the state by
+name. Elaboration rejects a state nothing reads, so `emit.pruned` first removes the controls
+no statement or object reads (and the assignments feeding only them, to a fixed point); such
+a control cannot change memory or the SID. A program with procs is refused: inline them first
+(`reorder` already does).
+
 `SpecPlayer(..., transform=f)` runs `f(program, view)` on each bound program, so a
 format's player plays the reordered spec. `outorder.compare(make, order, frames)` plays
 a tune both ways, the reordered side as its emitted spec elaborated again, and compares

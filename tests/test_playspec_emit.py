@@ -70,7 +70,7 @@ def test_declared_initialises_a_variable_read_before_it_is_assigned():
 
 def test_emit_refuses_what_it_cannot_state():
     prog = program(STALE)
-    with pytest.raises(EmitError):
+    with pytest.raises(EmitError, match="procs"):
         emit(prog)
     flat = O.replace(prog, body=[("native", K(1, 16), (), K(2, 16))], procs={})
     with pytest.raises(EmitError):

@@ -174,6 +174,8 @@ def native_core(program, memory):
     core.select(BANK)
     core.add(BANK, ENTRY, *native.encode(program))
     core.set_cpu((ENTRY, 0xFF, 0, 0, 0, 0x24, 0))
+    if program.controls:
+        core.set_controls(BANK, ENTRY, controls(program))
     return core
 
 
@@ -697,7 +699,8 @@ def test_a_bus_that_is_not_the_machines_is_played_in_python():
 
 def run_both(program, memory, frames=3):
     """Run ``program`` on both executors from ``memory``: the Python error or None, and
-    the native outcome, checking that they agree on the memory and the SID writes."""
+    the native outcome, checking that they agree on the memory, the SID writes and the controls.
+    """
     expected, got = bytearray(memory), bytearray(memory)
     frame, state = compile_program(program), controls(program)
     core, out = native_core(program, got), bytearray(25)
@@ -712,6 +715,7 @@ def run_both(program, memory, frames=3):
             return exc
         assert core.run(1, out, 0)[:2] == (1, 0)
         assert bytes(got) == bytes(expected) and core.writes() == writes
+        assert not state or core.controls(BANK, ENTRY) == state
     return None
 
 
