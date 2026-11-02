@@ -12,12 +12,12 @@ cell curinst: u8 @ L.w + 5;
 cell curfx: u8 @ L.w + 6;
 event pattern_end: tick;
 
-cursor orderlist @ L.orderlist pos ordpos {
+cursor orderlist { stream @ L.orderlist; pos ordpos;
   on pattern_end next;
   field pattern -> curptn = pattern;
 }
 
-cursor pattern @ word(ptn_lo[curptn], ptn_hi[curptn]) pos ptnpos {
+cursor pattern { stream @ word(ptn_lo[curptn], ptn_hi[curptn]); pos ptnpos;
   on row next; on pattern_end reset;
   run 0xF0..0xF7 base 0xF0 -> gap;
   field note -> curnote = note & 0x7F;

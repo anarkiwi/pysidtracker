@@ -70,6 +70,8 @@ class Spec:
     objects: List[Tuple] = field(default_factory=list)
     records: List[Tuple] = field(default_factory=list)
     views: List[Tuple] = field(default_factory=list)
+    tables: List[Tuple] = field(default_factory=list)
+    outputs: List[Tuple] = field(default_factory=list)
     schedule: Tuple = ()
     invariants: List[Tuple] = field(default_factory=list)
     assumes: List[Tuple] = field(default_factory=list)
@@ -97,11 +99,15 @@ def _line(meta, origin: str = "") -> Loc:
     )
 
 
-OBJECTS = ("counter", "owner", "walker", "cursor", "handler")
+OBJECTS = ("counter", "owner", "accum", "cursor_rows", "cursor_stream", "handler")
 
 
 def _int(text: str) -> int:
     return int(text, 0)
+
+
+def _mbody(body) -> list:
+    return body if isinstance(body, list) else [body]
 
 
 @v_args(meta=True)
@@ -110,6 +116,7 @@ class _ToAst(Transformer):
     def __init__(self, origin: str = ""):
         super().__init__()
         self.origin = origin
+        self.temps = 0
 
     def _n(self, tag, meta, *fields):
         return (tag, _line(meta, self.origin), *fields)
@@ -142,6 +149,10 @@ class _ToAst(Transformer):
                 spec.records.append(item)
             elif tag == "view":
                 spec.views.append(item)
+            elif tag == "table":
+                spec.tables.append(item)
+            elif tag == "output":
+                spec.outputs.append(item)
             elif tag == "invariant":
                 spec.invariants.append(item)
             elif tag == "assume":
@@ -192,6 +203,31 @@ class _ToAst(Transformer):
     def c_reload(self, meta, c):
         return self._n("c_reload", meta, c[0])
 
+    def accum(self, meta, c):
+        return self._n("accum", meta, str(c[0]), str(c[1]), list(c[2:]))
+
+    def a_step(self, meta, c):
+        return self._n("a_step", meta, c[0])
+
+    def a_dir(self, meta, c):
+        return self._n("a_dir", meta, str(c[0]))
+
+    def a_on(self, meta, c):
+        mode, target = c[1]
+        return self._n("a_on", meta, c[0], mode, target, c[2] and str(c[2]))
+
+    def a_ramp(self, meta, c):
+        del meta
+        return ("to", c[0]) if c[0] is not None else ("ramp", None)
+
+    def a_tri(self, meta, c):
+        del meta, c
+        return "tri", None
+
+    def a_flip(self, meta, c):
+        del meta, c
+        return "flip", None
+
     def owner(self, meta, c):
         return self._n("owner", meta, str(c[0]), str(c[1]), list(c[2:]))
 
@@ -207,9 +243,6 @@ class _ToAst(Transformer):
     def o_release(self, meta, c):
         return self._n("o_on", meta, c[0], "release", c[1])
 
-    def walker(self, meta, c):
-        return self._n("walker", meta, str(c[0]), list(c[1:]))
-
     def w_table(self, meta, c):
         width = c[-1] and c[-1][2]
         return self._n("w_table", meta, list(c[:-1]), width)
@@ -218,7 +251,7 @@ class _ToAst(Transformer):
         return self._n("w_width", meta, c[0])
 
     def w_pos(self, meta, c):
-        return self._n("w_pos", meta, str(c[0]))
+        return self._n("w_pos", meta, str(c[0]), c[1] is not None)
 
     def w_count(self, meta, c):
         return self._n("w_count", meta, str(c[0]))
@@ -235,9 +268,93 @@ class _ToAst(Transformer):
     def w_start(self, meta, c):
         return self._n("w_start", meta, c[0])
 
-    def w_row(self, meta, c):
-        then = c[4][2] if c[4] else []
-        return self._n("w_row", meta, c[0], c[1], c[2], c[3], then)
+    def cursor(self, meta, c):
+        clauses = []
+        for clause in c[1:]:
+            clauses += clause if isinstance(clause, list) else [clause]
+        tags = {k[0] for k in clauses}
+        stream = [k for k in clauses if k[0] == "k_stream"]
+        if not stream:
+            if tags & {"k_field", "k_run", "k_on"} or any(
+                k[0] == "w_pos" and k[3] for k in clauses
+            ):
+                raise SpecError(
+                    f"cursor {c[0]}: fields, runs, next and last need a stream clause"
+                )
+            return self._n("cursor_rows", meta, str(c[0]), clauses)
+        if len(stream) > 1 or tags - {
+            "k_stream",
+            "w_pos",
+            "w_on",
+            "k_on",
+            "k_run",
+            "k_field",
+        }:
+            raise SpecError(
+                f"cursor {c[0]}: a stream cursor has stream, pos, on, run and field"
+            )
+        pos = [k for k in clauses if k[0] == "w_pos"]
+        if len(pos) != 1:
+            raise SpecError(f"cursor {c[0]} needs exactly one pos clause")
+        kept = [("k_on", *k[1:]) if k[0] == "w_on" else k for k in clauses]
+        kept = [k for k in kept if k[0] in ("k_on", "k_run", "k_field")]
+        _t, _l, base, grammar = stream[0]
+        return self._n(
+            "cursor_stream", meta, str(c[0]), base, pos[0][2], pos[0][3], grammar, kept
+        )
+
+    def k_stream(self, meta, c):
+        return self._n("k_stream", meta, c[0], [g for g in c[1:] if g is not None])
+
+    def u_ret(self, meta, c):
+        return self._n("w_ret", meta, str(c[0]))
+
+    def u_run(self, meta, c):
+        return self._n("w_run", meta, str(c[0]))
+
+    def u_adv(self, meta, c):
+        return self._n("w_adv", meta, str(c[0]))
+
+    def u_settle(self, meta, c):
+        return self._n("w_on", meta, c[0], "settle")
+
+    def u_match(self, meta, c):
+        del meta
+        if str(c[0]) != "c0":
+            raise SpecError("a cursor match tests c0")
+        return [row for rows in c[1:] for row in rows]
+
+    def urow(self, meta, c):
+        line = _line(meta, self.origin)
+        pats = [p for p in c if isinstance(p, tuple) and p[0] == "pat"]
+        rest = c[len(pats) :]
+        static, when, act, then = rest[0], rest[1], rest[2], rest[3]
+        then = then[2] if then else []
+        return [("w_row", line, lo, hi, static, act, then, when) for _p, lo, hi in pats]
+
+    def udefault(self, meta, c):
+        line = _line(meta, self.origin)
+        zero, top = ("num", line, 0), ("num", line, 255)
+        return [("w_row", line, zero, top, None, c[0], c[1][2] if c[1] else [], None)]
+
+    def u_value(self, meta, c):
+        return self._n("set", meta, [w for w in c[:-1] if w is not None], c[-1])
+
+    def u_hold(self, meta, c):
+        return self._n("delay", meta, [("count", None, c[0], None, None)])
+
+    def u_call(self, meta, c):
+        return self._n("call_row", meta, c[0])
+
+    def u_return(self, meta, c):
+        del c
+        return self._n("return_row", meta)
+
+    def u_runrow(self, meta, c):
+        return self._n("run_row", meta, c[0])
+
+    def u_end(self, meta, c):
+        return self._n("end", meta, c[0])
 
     def w_then(self, meta, c):
         return self._n("w_then", meta, list(c))
@@ -249,12 +366,6 @@ class _ToAst(Transformer):
     def a_sweep(self, meta, c):
         return self._n("sweep", meta, list(c))
 
-    def a_delay(self, meta, c):
-        return self._n("delay", meta, list(c))
-
-    def a_set(self, meta, c):
-        return self._n("set", meta, list(c))
-
     def a_jump(self, meta, c):
         return self._n("jump", meta, c[0], c[1:3], c[3])
 
@@ -262,32 +373,8 @@ class _ToAst(Transformer):
         del c
         return self._n("stop", meta)
 
-    def cursor(self, meta, c):
-        grammar = [g for g in c[4:] if not isinstance(g[1], Loc)]
-        clauses = [g for g in c[4:] if isinstance(g[1], Loc)]
-        return self._n(
-            "cursor",
-            meta,
-            str(c[0]),
-            c[1],
-            str(c[2]),
-            c[3] is not None,
-            grammar,
-            clauses,
-        )
-
     def k_next(self, meta, c):
         return self._n("k_on", meta, c[0], "next")
-
-    def k_reset(self, meta, c):
-        return self._n("k_on", meta, c[0], "reset")
-
-    def k_last(self, meta, c):
-        del meta, c
-        return True
-
-    def k_settle(self, meta, c):
-        return self._n("k_on", meta, c[0], "settle")
 
     def k_run(self, meta, c):
         return self._n("k_run", meta, c[0], c[1], c[2], str(c[3]))
@@ -304,6 +391,34 @@ class _ToAst(Transformer):
 
     def view(self, meta, c):
         return self._n("view", meta, str(c[0]), c[1], list(c[2:]))
+
+    def table(self, meta, c):
+        base, via = (c[1][2], None) if c[1][0] == "t_at" else (None, c[1][2])
+        return self._n("table", meta, str(c[0]), base, via, c[2], c[3], list(c[4:]))
+
+    def output(self, meta, c):
+        return self._n("output", meta, str(c[0]), c[1], c[2][1:-1], c[3])
+
+    def latch(self, meta, c):
+        line = _line(meta, self.origin)
+        assign = ("assign", line, c[0], str(c[1]), c[2])
+        body = [assign]
+        if c[4] is not None:
+            body = [("if", line, [(c[4], [assign])], [])]
+        self.temps += 1
+        return (
+            "handler",
+            line,
+            f"latch@{self.origin}:{int(line)}:{self.temps}",
+            c[3],
+            body,
+        )
+
+    def t_at(self, meta, c):
+        return self._n("t_at", meta, c[0])
+
+    def t_via(self, meta, c):
+        return self._n("t_via", meta, str(c[0]))
 
     def vfield(self, meta, c):
         return self._n("vfield", meta, str(c[0]), c[1])
@@ -340,6 +455,7 @@ class _ToAst(Transformer):
     def cell(self, meta, c):
         name, (ctype, length), place, *attrs = c
         notes = [a for a in attrs if isinstance(a, tuple)]
+        bits = next((a for a in attrs if isinstance(a, dict)), None)
         return self._n(
             "cell",
             meta,
@@ -349,7 +465,15 @@ class _ToAst(Transformer):
             place,
             {str(a) for a in attrs if isinstance(a, Token)},
             notes[0] if notes else None,
+            bits,
         )
+
+    def bits(self, meta, c):
+        del meta
+        return {name: span for name, span in c}
+
+    def bfield(self, meta, c):
+        return str(c[0]), (self._n("range", meta, c[1], c[2] or c[1]))
 
     def notes(self, meta, c):
         del meta
@@ -457,6 +581,52 @@ class _ToAst(Transformer):
             rest = rest[1:]
         return self._n("if", meta, arms, rest[0] if rest else [])
 
+    def match_(self, meta, c):
+        line = _line(meta, self.origin)
+        value = c[0]
+        arms = [a for a in c[1:] if a[0] != "default"]
+        other = next((a[1] for a in c[1:] if a[0] == "default"), [])
+        pre = []
+        if value[0] not in ("name", "num"):
+            self.temps += 1
+            tmp = f"_match{self.temps}"
+            pre = [("let", line, tmp, None, value)]
+            value = ("name", line, tmp)
+        chain = []
+        for pats, guard, body in arms:
+            tests = [self._mtest(line, value, lo, hi) for lo, hi in pats]
+            test = tests[0]
+            for more in tests[1:]:
+                test = ("||", line, test, more)
+            chain.append((("&&", line, test, guard) if guard else test, body))
+        stmt = ("if", line, chain, other) if chain else ("group", line, other)
+        return ("group", line, pre + [stmt]) if pre else stmt
+
+    @staticmethod
+    def _mtest(line, value, lo, hi):
+        if hi is None:
+            return ("==", line, value, lo)
+        return (
+            "&&",
+            line,
+            (">=", line, value, lo),
+            ("<=", line, value, hi),
+        )
+
+    def marm(self, meta, c):
+        del meta
+        pats = [p for p in c[:-1] if isinstance(p, tuple) and p[0] == "pat"]
+        rest = [p for p in c[:-1] if not (isinstance(p, tuple) and p[0] == "pat")]
+        return [p[1:] for p in pats], (rest[0] if rest else None), _mbody(c[-1])
+
+    def mdefault(self, meta, c):
+        del meta
+        return "default", _mbody(c[0])
+
+    def mpat(self, meta, c):
+        del meta
+        return "pat", c[0], c[1]
+
     def elif_(self, meta, c):
         return self._n("elif", meta, c[0], c[1])
 
@@ -520,6 +690,12 @@ class _ToAst(Transformer):
 
     def lattr(self, meta, c):
         return self._n("attr", meta, str(c[0]), str(c[1]))
+
+    def lrow(self, meta, c):
+        return self._n("row_attr", meta, str(c[0]), c[1], c[2], str(c[3]))
+
+    def linst(self, meta, c):
+        return self._n("inst_attr", meta, str(c[0]), c[1], str(c[2]))
 
     def _chain(self, tag, meta, c):
         out = c[0]
@@ -586,11 +762,17 @@ class _ToAst(Transformer):
     def index(self, meta, c):
         return self._n("index", meta, str(c[0]), c[1])
 
+    def row_attr(self, meta, c):
+        return self._n("row_attr", meta, str(c[0]), c[1], c[2], str(c[3]))
+
     def inst_attr(self, meta, c):
         return self._n("inst_attr", meta, str(c[0]), c[1], str(c[2]))
 
     def attr(self, meta, c):
         return self._n("attr", meta, str(c[0]), str(c[1]))
+
+    def attr2(self, meta, c):
+        return self._n("attr2", meta, str(c[0]), str(c[1]), str(c[2]))
 
     def mem(self, meta, c):
         return self._n("mem", meta, c[0])
@@ -765,6 +947,8 @@ class _Deriver:
             "object": [*base.objects, *own.objects],
             "record": [*base.records, *own.records],
             "view": [*base.views, *own.views],
+            "table": [*base.tables, *own.tables],
+            "output": [*base.outputs, *own.outputs],
         }
         for kind, items in declared.items():
             seen: Dict[str, Tuple] = {}
@@ -806,6 +990,8 @@ class _Deriver:
             objects=declared["object"],
             records=declared["record"],
             views=declared["view"],
+            tables=declared["table"],
+            outputs=declared["output"],
             schedule=schedule,
             invariants=list(self.top["invariant"].values()),
             assumes=[*base.assumes, *own.assumes],

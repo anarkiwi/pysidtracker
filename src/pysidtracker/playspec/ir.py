@@ -106,7 +106,8 @@ class Cell:
     """A cell bound to ``place`` ``(addr,)`` or ``(lo, hi)``; ``length`` None for a scalar.
 
     ``notes`` is ``(part, offset)`` when the cell holds a note table: ``part`` its
-    :data:`~pysidtracker.notes.PARTS` key and ``offset`` the note of index 0.
+    :data:`~pysidtracker.notes.PARTS` key and ``offset`` the note of index 0; ``bits`` maps
+    a named bit field to its ``(low, high)`` bit positions.
     """
 
     name: str
@@ -118,6 +119,7 @@ class Cell:
     line: int
     notes: Optional[Tuple[str, int]] = None
     record: Optional[str] = None
+    bits: Optional[Dict[str, Tuple[int, int]]] = None
 
     def extent(self) -> List[int]:
         """Every byte address the declaration spans (empty while unbound)."""
@@ -134,7 +136,7 @@ class Cell:
 class Obj:
     """An event-driven object bound to byte addresses (see :mod:`.objects`).
 
-    ``kind`` is ``counter``, ``owner``, ``walker`` or ``cursor``; ``locs`` maps each role to
+    ``kind`` is ``counter``, ``owner``, ``accum`` or ``cursor``; ``locs`` maps each role to
     its byte addresses ``(lo,)`` or ``(lo, hi)``; ``spec`` is the kind's static structure;
     ``reactions`` maps an event to the action it triggers; ``fires`` is the event a wrap
     fires; ``grammar`` indexes :attr:`Program.grammars` for a cursor's stream.
@@ -152,9 +154,9 @@ class Obj:
 
     def arity(self) -> int:
         """The operands a reaction takes."""
-        return {"counter": 2, "owner": 3, "cursor": 2}.get(self.kind) or (
-            self.spec[1] + 1
-        )
+        if self.kind == "cursor":
+            return self.spec[2] + 1
+        return {"counter": 2, "owner": 3, "accum": 2}[self.kind]
 
     def widths(self) -> Tuple[int, ...]:
         """The width of each operand."""
@@ -164,9 +166,9 @@ class Obj:
             return (1 if gated else loc, loc)
         if self.kind == "owner":
             return (loc, loc, 1)
-        if self.kind == "cursor":
-            return (16, 8)
-        return (16,) * self.spec[1] + (loc,)
+        if self.kind == "accum":
+            return (loc, loc)
+        return (16,) * self.spec[2] + (loc,)
 
 
 @dataclass
@@ -174,7 +176,8 @@ class Program:
     """A lowered frame (or one routine): its statements, variables and declarations.
 
     ``standard`` is the clock in Hz when reads of declared note tables are lowered to
-    the standard note words (None: they read memory).
+    the standard note words (None: they read memory). ``outorder`` and ``sid`` are the write
+    order and the SID base an ``output`` declaration states.
     """
 
     name: str
@@ -193,6 +196,8 @@ class Program:
     standard: Optional[int] = None
     objects: Dict[str, Obj] = field(default_factory=dict)
     events: Dict[str, Optional[str]] = field(default_factory=dict)
+    outorder: Optional[str] = None
+    sid: Optional[int] = None
 
 
 __all__ = ["Cell", "K", "Obj", "Op", "Program", "Rd", "V", "evaluate", "width"]

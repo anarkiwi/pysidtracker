@@ -1,4 +1,4 @@
-"""Counters gated by a condition, walkers with carries, holds and guards, last-read cursors,
+"""Counters gated by a condition, table cursors with carries, holds and guards, last-read cursors,
 views and routine arguments, against the hand-written loops they replace."""
 
 import random
@@ -123,14 +123,16 @@ cell cnt: u8 @ 0x13;
 cell kbd: u8 @ 0x14;
 cell carry: u8 @ 0x15;
 event pulse: tick;
-walker table {
+cursor table {
   table @ L.tab width 3;
   pos pos; count cnt; values pw, kbd;
   on pulse step;
-  row 0..0x7f: sweep(into=pw, count=c0, step=c1) then kbd = c2 if L.kb;
-  row 0x80..0xfd: set(pw.hi = c0 & 0x7f, pw.lo = c1) then kbd = c2 if L.kb, cnt = 0;
-  row 0xfe: jump(c1) hold 0..0x7f as 0x80;
-  row 0xff: stop;
+  match c0 {
+    0..0x7f => sweep(into=pw, count=c0, step=c1) then kbd = c2 if L.kb;
+    0x80..0xfd => value(pw.hi = c0 & 0x7f, pw.lo = c1) then kbd = c2 if L.kb, cnt = 0;
+    0xfe => jump(c1) hold 0..0x7f as 0x80;
+    0xff => stop;
+  }
 }
 machine m { step { let c = false; react table on pulse() -> c; carry := u8(c); } }
 schedule { m; }
@@ -165,7 +167,9 @@ def table(rng):
 
 @pytest.mark.parametrize("kb", [0, 1])
 @pytest.mark.parametrize("seed", range(40))
-def test_a_walker_leaves_the_state_and_carry_of_the_sw_pulse_table_routine(seed, kb):
+def test_a_table_cursor_leaves_the_state_and_carry_of_the_sw_pulse_table_routine(
+    seed, kb
+):
     rng = random.Random(seed)
     binding = {"tab": 0x2000, "kb": kb}
     memory = {0x2000: table(rng), 0x10: [rng.randrange(256), rng.randrange(256)]}
@@ -185,15 +189,17 @@ cell cnt: u8 @ 0x13;
 cell fsw: u8 @ 0x14;
 cell kbd: u8 @ 0x15;
 cell word: u16 @ (0x10, 0x11);
-walker t {
+cursor t {
   table @ L.tab width 3;
   pos pos; count cnt; values word, hi, fsw, kbd;
   on frame step;
-  row 0..0x7f if L.fine: sweep(into=word, count=c0, step=c1, frac=3)
-    then fsw = c2 & 0x0f when (c2 & 0xf0) == 0x80, kbd = 0 when (c2 & 0xf0) == 0x80, kbd = c2 when (c2 & 0xf0) != 0x80;
-  row 0..0x7f if !L.fine: sweep(into=hi, count=c0, step=c1)
-    then fsw = c2 & 0x0f when (c2 & 0xf0) == 0x80, kbd = 0 when (c2 & 0xf0) == 0x80, kbd = c2 when (c2 & 0xf0) != 0x80;
-  row 0x80..0xff: stop;
+  match c0 {
+    0..0x7f if L.fine => sweep(into=word, count=c0, step=c1, frac=3)
+      then fsw = c2 & 0x0f when (c2 & 0xf0) == 0x80, kbd = 0 when (c2 & 0xf0) == 0x80, kbd = c2 when (c2 & 0xf0) != 0x80;
+    0..0x7f if !L.fine => sweep(into=hi, count=c0, step=c1)
+      then fsw = c2 & 0x0f when (c2 & 0xf0) == 0x80, kbd = 0 when (c2 & 0xf0) == 0x80, kbd = c2 when (c2 & 0xf0) != 0x80;
+    0x80..0xff => stop;
+  }
 }
 machine m { step { fire frame; } }
 schedule { m; }
@@ -226,7 +232,7 @@ cell insl: u8 @ 0x14;
 cell fx: u8 @ 0x15;
 cell val: u8 @ 0x16;
 cell ends: u8 @ 0x17;
-cursor rd @ L.base pos ptnpos last {
+cursor rd { stream @ L.base; pos ptnpos last;
   on row next;
   on pattern_end reset;
   on advance settle;

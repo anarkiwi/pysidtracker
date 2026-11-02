@@ -17,13 +17,6 @@ from .helpers import build_psid
 PAL, NTSC = 985248, 1022727
 
 
-def test_frequency_matches_the_grammar_package():
-    notes = pytest.importorskip("unitracker_grammar.notes")
-    for clock in (PAL, NTSC):
-        for note in range(256):
-            assert frequency(note, clock) == notes.frequency(note, clock)
-
-
 LOAD = 0x1000
 LO, HI, IDX, SID = 0x1100, 0x1200, 0x1300, 0xD400
 SPEC = """

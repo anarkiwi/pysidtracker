@@ -1187,9 +1187,9 @@ class Reordered:
 
 def reorder(
     program: Program,
-    order,
+    order=None,
     *,
-    base: int = SID,
+    base: Optional[int] = None,
     observed: Iterable[Tuple[int, int]] = (),
     memory: Optional[bytes] = None,
     proof: Optional[dict] = None,
@@ -1198,6 +1198,10 @@ def reorder(
     order; ``observed`` lists address intervals other code reads, never promoted;
     reads of declared bytes no store reaches take their values from ``memory``;
     ``proof`` (a dict) collects each stage and the obligations of :func:`prove`."""
+    order = program.outorder if order is None else order
+    if order is None:
+        raise OrderError("no order given and the spec declares no output order")
+    base = (SID if program.sid is None else program.sid) if base is None else base
     slots = parse_order(order) if isinstance(order, str) else tuple(order)
     proof = {} if proof is None else proof
     proof["nested"] = nest(inline(program.body, program.procs))

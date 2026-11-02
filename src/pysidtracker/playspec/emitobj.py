@@ -31,7 +31,7 @@ def guard(test: tuple) -> str:
     """Source of a row byte test ``(column, mask, value, equal)``."""
     col, mask, value, equal = test
     left = f"c{col}" if mask == 0xFF else f"(c{col} & {mask:#x})"
-    return f" when {left} {'==' if equal else '!='} {value:#x}"
+    return f"{left} {'==' if equal else '!='} {value:#x}"
 
 
 def assigns(sets: tuple, values: List[str], column) -> str:
@@ -39,50 +39,50 @@ def assigns(sets: tuple, values: List[str], column) -> str:
     parts = ("", ".lo", ".hi")
     return ", ".join(
         f"{values[i]}{parts[part]} = {operand(spec, column(spec))}"
-        f"{'' if test is None else guard(test)}"
+        f"{'' if test is None else ' when ' + guard(test)}"
         for i, part, spec, test in sets
     )
 
 
 def row(spec: tuple, values: List[str]) -> str:
-    """Source of a walker row ``(lo, hi, action)``."""
-    lo, hi, action = spec
+    """Source of a cursor row ``(lo, hi, tests, action)`` as a ``match`` arm."""
+    lo, hi, tests, action = spec
 
     def column(xf):
         return f"c{xf[0]}"
 
+    def op(xf):
+        return operand(xf, column(xf))
+
     span = f"{lo:#x}" if lo == hi else f"{lo:#x}..{hi:#x}"
+    when = f" when {' && '.join(guard(t) for t in tests)}" if tests else ""
     kind = action[0]
-    then = ""
+    then = ()
     if kind == "sweep":
-        _k, into, count, step, frac, after = action
-        args = [
-            f"into={values[into]}",
-            f"count={operand(count, column(count))}",
-            f"step={operand(step, column(step))}",
-        ] + [f"frac={frac}"] * bool(frac)
-        body, then = f"sweep({', '.join(args)})", after
+        _k, into, count, step, frac, then = action
+        args = [f"into={values[into]}", f"count={op(count)}", f"step={op(step)}"]
+        body = f"sweep({', '.join(args + [f'frac={frac}'] * bool(frac))})"
     elif kind == "delay":
-        body, then = f"delay(count={operand(action[1], column(action[1]))})", action[2]
+        body, then = f"hold({op(action[1])})", action[2]
     elif kind == "set":
-        body, then = f"set({assigns(action[1], values, column)})", action[2]
+        body = f"value({assigns(action[1], values, column)}) take {action[2]}"
+        then = action[3]
+    elif kind == "end":
+        body, then = f"end take {action[1]}", action[2]
     elif kind == "jump":
-        body = f"jump({operand(action[1], column(action[1]))})"
+        body = f"jump({op(action[1])})"
         if action[2]:
             body += f" hold {action[2][0]:#x}..{action[2][1]:#x}"
         if action[3] is not None:
             body += f" as {action[3]:#x}"
+    elif kind == "call":
+        body = f"call({op(action[1])})"
+    elif kind == "run":
+        body, then = f"run({action[1]:#x})", action[2]
     else:
-        body = "stop"
+        body = kind
     tail = f" then {assigns(then, values, column)}" if then else ""
-    return f"  row {span}: {body}{tail};"
-
-
-def condition(cond: tuple, prev: str) -> str:
-    """Source of a field's presence test on the byte named ``prev``."""
-    mask, value, equal = cond
-    left = prev if mask == 0xFF else f"({prev} & {mask:#x})"
-    return f"{left} {'==' if equal else '!='} {value:#x}"
+    return f"    {span}{when} => {body}{tail};"
 
 
 def declare(obj: Obj, cells: Dict[str, str], name: str) -> List[str]:
@@ -103,34 +103,35 @@ def declare(obj: Obj, cells: Dict[str, str], name: str) -> List[str]:
                 f"  wrap{' when 0' * gated}{f' -> {obj.fires}' * bool(obj.fires)};"
             )
         return out + ["}"]
+    if obj.kind == "accum":
+        out = [f"{head}: {cells['cell']} {{"]
+        if "dir" in cells:
+            out.append(f"  dir {cells['dir']};")
+        modes = {
+            "ramp": "ramp",
+            "to": "ramp to 0 then stop",
+            "tri": "triangle",
+            "flip": "flip",
+        }
+        wraps = f" -> {obj.fires}" if obj.fires else ""
+        out += [
+            f"  on {e} {modes[a[0]]}{wraps * (a[0] != 'flip')};"
+            for e, a in obj.reactions.items()
+        ]
+        return out + ["}"]
     if obj.kind == "owner":
         out = [f"{head}: {cells['cell']} {{"]
         out += [f"  on {e} {a[0]};" for e, a in obj.reactions.items()]
         return out + ["}"]
-    if obj.kind == "walker":
-        width, columns, rows = obj.spec
-        values = [cells[f"v{i}"] for i in range(len(cells) - 2)] + [cells["cnt"]]
-        bases = ", ".join(["0"] * columns)
-        out = [f"{head} {{", f"  table @ {bases} width {width};"]
-        out += [f"  pos {cells['pos']};", f"  count {cells['cnt']};"]
-        out += [f"  values {', '.join(values[:-1])};"]
-        out += [f"  on {e} {a[0]};" for e, a in obj.reactions.items()]
-        return out + [row(r, values) for r in rows] + ["}"]
-    run, fields, last = obj.spec
-    out = [f"{head} @ 0 pos {cells['pos']}{' last' * last} {{"]
+    adv, width, columns, rows = obj.spec
+    values = [cells[f"v{i}"] for i in range(len(cells)) if f"v{i}" in cells]
+    values += [cells["cnt"]] if "cnt" in cells else [""]
+    out = [f"{head} {{", f"  table @ {', '.join(['0'] * columns)} width {width};"]
+    for role in ("pos", "cnt", "run", "ret"):
+        if role in cells:
+            out.append(f"  {'count' if role == 'cnt' else role} {cells[role]};")
+    out += [f"  values {', '.join(values[:-1])};"] * bool(values[:-1])
+    out += [f"  advance {'pre' if adv else 'post'};"]
     out += [f"  on {e} {a[0]};" for e, a in obj.reactions.items()]
-    if run is not None:
-        out.append(
-            f"  run {run[0]:#x}..{run[1]:#x} base {run[2]:#x} -> {cells['run']};"
-        )
-    for k, (cond, stores) in enumerate(fields):
-        puts = []
-        for j, (keep, shl, shr, test) in enumerate(stores):
-            put = f"{cells[f'o{k}_{j}']} = {operand((0, keep, shl, shr), f'f{k}')}"
-            if test != (0, 0, True):
-                put += f" when {condition(test, f'f{k}')}"
-            puts.append(put)
-        tail = f" -> {', '.join(puts)}" if puts else ""
-        when = f" when {condition(cond, f'f{k - 1}')}" if k else ""
-        out.append(f"  field f{k}{when}{tail};")
-    return out + ["}"]
+    out += [f"  wrap -> {obj.fires};"] * bool(obj.fires)
+    return out + ["  match c0 {"] + [row(r, values) for r in rows] + ["  }", "}"]

@@ -760,12 +760,16 @@ def transforms(draw, columns):
 
 
 @st.composite
-def walkers(draw, name):
-    """A random walker over cells below ``$2040`` and a table in ``$2100``."""
+def cursors(draw, name):
+    """A random cursor over cells below ``$2040`` and a table in ``$2100``."""
     columns, width = draw(st.integers(1, 3)), draw(st.integers(1, 3))
     wide = [draw(st.booleans()) for _ in range(draw(st.integers(1, 3)))]
     base = 0x2000 + 3 * draw(st.integers(0, 8))
-    locs = {"pos": (base, base + 1)[: 1 + draw(st.booleans())], "cnt": (base + 2,)}
+    pos = (base, base + 1)[: 1 + draw(st.booleans())]
+    locs = {"pos": pos, "cnt": (base + 2,)}
+    for role, at in (("run", 12), ("ret", 14)):
+        if draw(st.booleans()):
+            locs[role] = (base + at, base + at + 1)[: len(pos) if role == "ret" else 1]
     for i, w in enumerate(wide):
         locs[f"v{i}"] = (base + 3 + 3 * i, base + 4 + 3 * i)[: 1 + w]
 
@@ -785,71 +789,69 @@ def walkers(draw, name):
             out.append((i, part, draw(transforms(columns)), guard))
         return tuple(out)
 
+    kinds = ["stop", "jump", "sweep", "delay", "set", "end"]
+    kinds += [
+        k
+        for k, role in (("run", "run"), ("call", "ret"), ("return", "ret"))
+        if role in locs
+    ]
     edges = sorted(
-        draw(st.lists(st.integers(0, 255), min_size=1, max_size=4, unique=True))
+        draw(st.lists(st.integers(0, 255), min_size=1, max_size=5, unique=True))
     )
     rows = []
     for lo, hi in zip([0, *[e + 1 for e in edges[:-1]]], edges):
-        kind = draw(st.sampled_from(("stop", "jump", "sweep", "delay", "set")))
+        kind = draw(st.sampled_from(kinds))
         into = draw(st.integers(0, len(wide) - 1))
         frac = draw(st.integers(1, 6)) if wide[into] and draw(st.booleans()) else 0
+        tests = tuple(
+            (
+                draw(st.integers(0, columns - 1)),
+                draw(st.sampled_from((0x80, 0xFF, 0x0F))),
+                draw(st.sampled_from((0, 0x80, 1))),
+                draw(st.booleans()),
+            )
+            for _ in range(draw(st.integers(0, 2)))
+        )
         if kind == "jump":
             hold = draw(st.sampled_from((None, (0, 0x7F), (0x80, 0xFF), (3, 3))))
             via = draw(st.sampled_from((None, 0x80, 0x10, 0)))
             action = ("jump", draw(transforms(columns)), hold, via)
+        elif kind == "call":
+            action = ("call", draw(transforms(columns)))
         elif kind == "sweep":
             count, step = draw(transforms(columns)), draw(transforms(columns))
             action = ("sweep", into, count, step, frac, assigns())
         elif kind == "delay":
             action = ("delay", draw(transforms(columns)), assigns())
         elif kind == "set":
-            action = ("set", assigns(), assigns())
+            action = ("set", assigns(), draw(st.integers(1, 3)), assigns())
+        elif kind == "end":
+            action = ("end", draw(st.integers(1, 3)), assigns())
+        elif kind == "run":
+            action = ("run", draw(st.integers(0, lo)), assigns())
         else:
-            action = ("stop",)
-        rows.append((lo, hi, action))
+            action = (kind,)
+        rows.append((lo, hi, tests, action))
     events = draw(st.lists(st.sampled_from(("frame", "note")), min_size=1, unique=True))
-    reactions = {e: (draw(st.sampled_from(("step", "reset"))),) for e in events}
-    return Obj(name, "walker", "", locs, (width, columns, tuple(rows)), reactions)
+    reactions = {
+        e: (draw(st.sampled_from(("step", "step", "reset", "settle"))),) for e in events
+    }
+    adv = draw(st.integers(0, 2))
+    spec = (adv, width, columns, tuple(rows))
+    return Obj(name, "cursor", "", locs, spec, reactions)
 
 
 @st.composite
-def cursors(draw, name):
-    """A random cursor over a stream in ``$2100``."""
+def accums(draw, name):
+    """A random accumulator and its direction cell."""
     base = 0x2000 + 3 * draw(st.integers(0, 8))
-    locs = {"pos": (base,)}
-    run = None
-    if draw(st.booleans()):
-        lo = draw(st.integers(0, 250))
-        run = (lo, lo + draw(st.integers(0, 5)), draw(st.integers(0, lo)))
-        locs["run"] = (base + 1,)
-    fields = []
-    for k in range(draw(st.integers(1, 4))):
-        cond = (
-            draw(st.sampled_from((0x80, 0xFF, 0x0F))),
-            draw(st.integers(0, 3)),
-            draw(st.booleans()),
-        )
-        stores = []
-        for j in range(draw(st.integers(0, 2))):
-            locs[f"o{k}_{j}"] = (base + 3 + 6 * k + 3 * j, base + 4 + 6 * k + 3 * j)[
-                : 1 + draw(st.booleans())
-            ]
-            keep, shl, shr = draw(
-                st.sampled_from(
-                    ((0xFF, 0, 0), (0x7F, 0, 0), (0x0F, 4, 0), (0xFF, 0, 3))
-                )
-            )
-            test = draw(
-                st.sampled_from(((0, 0, True), (0x80, 0, True), (0x80, 0, False)))
-            )
-            stores.append((keep, shl, shr, test))
-        fields.append((cond, tuple(stores)))
-    events = draw(st.lists(st.sampled_from(("frame", "row")), min_size=1, unique=True))
+    locs = {"cell": (base, base + 1)[: 1 + draw(st.booleans())], "dir": (base + 2,)}
+    events = draw(st.lists(st.sampled_from(("frame", "note")), min_size=1, unique=True))
     reactions = {
-        e: (draw(st.sampled_from(("next", "reset", "settle"))),) for e in events
+        e: (draw(st.sampled_from(("ramp", "to", "tri", "flip"))),) for e in events
     }
-    last = draw(st.booleans())
-    return Obj(name, "cursor", "", locs, (run, tuple(fields), last), reactions)
+    fires = draw(st.sampled_from((None, "tick")))
+    return Obj(name, "accum", "", locs, (), reactions, fires)
 
 
 @st.composite
@@ -877,8 +879,8 @@ def small_objects(draw, name):
 def object_programs(draw):
     """A random program reacting random objects, and the flag of each wrap."""
     objects = [
-        draw(st.one_of(walkers("o0"), cursors("o1"), small_objects("o2"))),
-        draw(st.one_of(walkers("o3"), cursors("o4"), small_objects("o5"))),
+        draw(st.one_of(cursors("o0"), accums("o1"), small_objects("o2"))),
+        draw(st.one_of(cursors("o3"), accums("o4"), small_objects("o5"))),
     ]
     program = Program("random", [], objects={o.name: o for o in objects})
     source = st.integers(0, 255)
@@ -886,7 +888,7 @@ def object_programs(draw):
         obj = objects[draw(st.integers(0, 1))]
         event = draw(st.sampled_from(sorted(obj.reactions)))
         ops = tuple(narrow(draw, w, source) for w in obj.widths())
-        if obj.kind in ("walker", "cursor"):
+        if obj.kind == "cursor":
             ops = (
                 tuple(
                     K(0x2100 + draw(st.integers(0, 0x3F)), 16)
@@ -915,14 +917,14 @@ def test_random_object_programs_agree_with_the_python_executor(program, seed):
 
 
 @pytest.mark.strain_exempt(reason="asserts equality of two executors")
-def test_a_native_walker_that_jumps_forever_bails_to_the_error_python_raises():
-    rows = ((0, 255, ("jump", (0, 0xFF, 0, 0), None, None)),)
+def test_a_native_table_cursor_that_jumps_forever_bails_to_the_error_python_raises():
+    rows = ((0, 255, (), ("jump", (0, 0xFF, 0, 0), None, None)),)
     walker = Obj(
         "w",
-        "walker",
+        "cursor",
         "",
         {"pos": (0x2000,), "cnt": (0x2001,), "v0": (0x2002,)},
-        (1, 1, rows),
+        (0, 1, 1, rows),
         {"frame": ("step",)},
     )
     program = Program(

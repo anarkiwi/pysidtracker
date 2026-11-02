@@ -100,13 +100,16 @@ def _assigns(sets) -> List[int]:
     return out
 
 
+KINDS = ("stop", "jump", "sweep", "delay", "set", "end", "call", "return", "run")
+
+
 def _row(row) -> List[int]:
-    """The flat form of a walker row ``(lo, hi, action)``."""
-    lo, hi, action = row
+    """The flat form of a cursor row ``(lo, hi, tests, action)``."""
+    lo, hi, tests, action = row
     kind = action[0]
     blank = (0, 0, 0, 0)
-    code = {"stop": 0, "jump": 1, "sweep": 2, "delay": 3, "set": 4}[kind]
-    into = frac = 0
+    into = frac = base = 0
+    take = 1
     first = second = blank
     sets: tuple = ()
     then: tuple = ()
@@ -120,13 +123,23 @@ def _row(row) -> List[int]:
     elif kind == "delay":
         first, then = action[1:]
     elif kind == "set":
-        sets, then = action[1:]
+        sets, take, then = action[1:]
+    elif kind == "end":
+        take, then = action[1:]
+    elif kind == "call":
+        first = action[1]
+    elif kind == "run":
+        base, sets = action[1:]
     return [
         lo,
         hi,
-        code,
+        len(tests),
+        *[x for t in tests for x in (*t[:3], int(t[3]))],
+        KINDS.index(kind),
+        take,
         into,
         frac,
+        base,
         *_xf(first),
         *_xf(second),
         *_assigns(sets),
@@ -140,7 +153,7 @@ def describe(obj: Obj, event: str, out: int) -> List[int]:
     """The flat description of ``obj``'s reaction to ``event`` for the native core."""
     action = obj.reactions[event]
     head = [
-        {"counter": 0, "owner": 1, "walker": 2, "cursor": 3}[obj.kind],
+        {"counter": 0, "owner": 1, "cursor": 2, "accum": 3}[obj.kind],
         out,
         obj.arity(),
     ]
@@ -153,31 +166,18 @@ def describe(obj: Obj, event: str, out: int) -> List[int]:
         ]
     if obj.kind == "owner":
         return head + [*_loc(obj.locs["cell"]), int(action[0] == "release")]
-    reset = int(action[0] == "reset")
-    if obj.kind == "walker":
-        width, columns, rows = obj.spec
-        values = [obj.locs[f"v{i}"] for i in range(len(obj.locs) - 2)]
-        out_ = head + [width, columns, *_loc(obj.locs["pos"]), *_loc(obj.locs["cnt"])]
-        out_ += [len(values)] + [x for v in values for x in _loc(v)]
-        out_ += [len(rows)] + [x for r in rows for x in _row(r)]
-        return out_ + [reset]
-    run, fields, last = obj.spec
-    out_ = head + _loc(obj.locs["pos"])
-    out_ += [-1] if run is None else [0, run[0], run[1], run[2], *_loc(obj.locs["run"])]
-    out_ += [int(last), len(fields)]
-    for k, (cond, outs) in enumerate(fields):
-        out_ += [cond[0], cond[1], int(cond[2]), len(outs)]
-        for j, (keep, shl, shr, (gmask, gvalue, gequal)) in enumerate(outs):
-            out_ += [
-                *_loc(obj.locs[f"o{k}_{j}"]),
-                keep,
-                shl,
-                shr,
-                gmask,
-                gvalue,
-                int(gequal),
-            ]
-    return out_ + [{"next": 0, "reset": 1, "settle": 2}[action[0]]]
+    if obj.kind == "accum":
+        dirs = obj.locs.get("dir", (-1, -1))
+        mode = ("ramp", "to", "tri", "flip").index(action[0])
+        return head + [*_loc(obj.locs["cell"]), mode, *_loc(dirs)]
+    adv, width, columns, rows = obj.spec
+    locs = obj.locs
+    values = [locs[f"v{i}"] for i in range(len(locs)) if f"v{i}" in locs]
+    out_ = head + [adv, width, columns, ("step", "reset", "settle").index(action[0])]
+    for role in ("pos", "cnt", "run", "ret"):
+        out_ += _loc(locs.get(role, (-1, -1)))
+    out_ += [len(values)] + [x for v in values for x in _loc(v)]
+    return out_ + [len(rows)] + [x for r in rows for x in _row(r)]
 
 
 def available() -> bool:

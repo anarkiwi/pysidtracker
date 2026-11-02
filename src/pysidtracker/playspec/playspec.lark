@@ -5,7 +5,7 @@ start: _item*
 
 _item: spec_decl | layout | const | cell | machine | proc | schedule
      | invariant | assume | override | extend | patch | drop
-     | event | _object | record | view
+     | event | _object | record | view | table | output
 
 spec_decl: "spec" NAME ("extends" NAME)? ";"
 layout: "layout" "{" lfield* "}"
@@ -13,7 +13,9 @@ lfield: NAME ("," NAME)* ":" LKIND ";"
 LKIND: "addr" | "byte" | "flag" | "list"
 const: "const" NAME "=" expr ";"
 
-cell: "cell" NAME ":" ctype "@" place (ATTR | notes)* ";"
+cell: "cell" NAME ":" ctype "@" place (ATTR | notes)* [bits] ";"
+bits: "{" bfield ("," bfield)* "}"
+bfield: NAME ":" expr [".." expr]
 notes: "notes" "(" NOTEPART "," expr ")"
 NOTEPART: "lo" | "hi" | "word"
 ctype: TYPE ("[" expr "]")?
@@ -40,7 +42,8 @@ drop: "drop" NAME ("," NAME)* ";"
 
 event: "event" NAME ":" NAME ";"
 
-_object: counter | owner | walker | cursor | handler
+_object: counter | owner | accum | cursor | handler | latch
+latch: "latch" lval ASSIGNOP expr "on" events ["when" expr] ";"
 handler: "handler" NAME "on" events block
 counter: "counter" NAME ":" NAME "{" _cclause* "}"
 _cclause: c_on | c_wrap | c_reload
@@ -49,6 +52,15 @@ events: NAME ("," NAME)*
 c_wrap: "wrap" ["at" expr] ["when" expr] ["->" NAME] ";"
 c_reload: "reload" expr ";"
 
+accum: "accum" NAME ":" NAME "{" _aclause* "}"
+_aclause: a_step | a_dir | a_on
+a_step: "step" expr ";"
+a_dir: "dir" NAME ";"
+a_on: "on" events (a_ramp | a_tri | a_flip) ["->" NAME] ";"
+a_ramp: "ramp" ["to" expr "then" "stop"]
+a_tri: "triangle"
+a_flip: "flip"
+
 owner: "owner" NAME ":" NAME "{" _oclause* "}"
 _oclause: o_id | o_none | o_on
 o_id: "id" expr ";"
@@ -56,35 +68,49 @@ o_none: "none" expr ";"
 o_on: "on" events "claim" ["when" expr] ";"   -> o_claim
     | "on" events "release" ["when" expr] ";" -> o_release
 
-walker: "walker" NAME "{" _wclause* "}"
-_wclause: w_table | w_pos | w_count | w_values | w_on | w_start | w_row
 w_table: "table" "@" expr ("," expr)* [w_width] ";"
 w_width: "width" expr
-w_pos: "pos" NAME ";"
+w_pos: "pos" NAME [k_last] ";"
 w_count: "count" NAME ";"
 w_values: "values" NAME ("," NAME)* ";"
 w_on: "on" events "step" ";"   -> w_step
     | "on" events "reset" ";" -> w_reset
 w_start: "start" expr ";"
-w_row: "row" expr [".." expr] ["if" expr] ":" w_act [w_then] ";"
 w_then: "then" wset ("," wset)*
-w_act: "sweep" "(" wset ("," wset)* ")"  -> a_sweep
-     | "delay" "(" wset ")"              -> a_delay
-     | "set" "(" wset ("," wset)* ")"    -> a_set
-     | "jump" "(" expr ")" ["hold" expr ".." expr] ["as" expr] -> a_jump
-     | "stop"                            -> a_stop
 wset: NAME ["." NAME] "=" expr ["if" expr] ["when" expr]
 
-cursor: "cursor" NAME "@" expr "pos" NAME [k_last] ("grammar" gsel ("," gsel)*)? "{" _kclause* "}"
-_kclause: k_on | k_run | k_field
+cursor: "cursor" NAME "{" _uclause* "}"
+_uclause: w_table | k_stream | w_pos | w_count | w_values | u_ret | u_run | k_run | u_adv | w_on
+        | u_settle | k_next | w_start | c_wrap | u_match | k_field
+k_stream: "stream" "@" expr ("grammar" gsel ("," gsel)*)? ";"
+k_next: "on" events "next" ";"
+u_ret: "ret" NAME ";"
+u_run: "run" NAME ";"
+u_adv: "advance" ADVANCE ";"
+ADVANCE: "pre" | "post"
+u_settle: "on" events "settle" ";"
+u_match: "match" NAME "{" urow* "}"
+urow: mpat ("," mpat)* ["if" expr] ["when" expr] "=>" u_act [w_then] ";"
+    | "_" "=>" u_act [w_then] ";"    -> udefault
+u_act: "value" "(" [wset ("," wset)*] ")" ["take" expr]  -> u_value
+     | "hold" "(" expr ")"                             -> u_hold
+     | "sweep" "(" wset ("," wset)* ")"                -> a_sweep
+     | "jump" "(" expr ")" ["hold" expr ".." expr] ["as" expr] -> a_jump
+     | "call" "(" expr ")"                             -> u_call
+     | "return"                                        -> u_return
+     | "run" "(" expr ")"                              -> u_runrow
+     | "stop"                                          -> a_stop
+     | "end" ["take" expr]                             -> u_end
+
 k_last: "last"
-k_on: "on" events "next" ";"   -> k_next
-    | "on" events "reset" ";" -> k_reset
-    | "on" events "settle" ";" -> k_settle
 k_run: "run" expr ".." expr "base" expr "->" NAME ";"
 k_field: "field" NAME ["when" expr] ["->" kout ("," kout)*] ";"
 kout: NAME "=" expr ["when" expr]
 
+table: "table" NAME (t_at | t_via) "stride" expr ["offset" expr] "{" rfield* "}"
+t_at: "@" expr
+t_via: "via" NAME
+output: "output" NAME "@" expr "order" STRING ["copy" "to" expr] ";"
 view: "view" NAME "@" expr "{" vfield* "}"
 vfield: NAME "@" expr ";"
 record: "record" NAME "@" expr "stride" expr "{" rfield* "}"
@@ -107,7 +133,7 @@ invariant: "invariant" NAME ":" expr ";"
 assume: "assume" expr ";"
 
 block: "{" _stmt* "}"
-_stmt: assign | let | next_let | next_set | if_ | while_ | for_ | call
+_stmt: assign | let | next_let | next_set | if_ | match_ | while_ | for_ | call
      | return_ | finish | goto | in_ | stream | assert_ | native
      | labeled | group | fire | fire_block | react
 fire: "fire" NAME ";"
@@ -121,6 +147,11 @@ next_let: "let" NAME "=" "next" NAME ";"
 next_set: lval ASSIGNOP "next" NAME ";"
 if_: "if" expr block elif_* ("else" block)?
 elif_: "elif" expr block
+match_: "match" expr "{" marm* mdefault? "}"
+marm: mpat ("," mpat)* ["if" expr] "=>" _mbody
+mdefault: "_" "=>" _mbody
+mpat: expr [".." expr]
+_mbody: block | assign | call | next_set | return_ | finish | goto
 while_: "while" expr "bound" INT block
 for_: "for" NAME "in" iter block
 call: NAME "(" [expr ("," expr)*] ")" ";"
@@ -139,6 +170,8 @@ lval: NAME                 -> lname
     | NAME "[" expr "]"    -> lindex
     | "mem" "[" expr "]"   -> lmem
     | NAME "." NAME        -> lattr
+    | NAME "[" expr "]" "." NAME -> linst
+    | NAME "[" expr "]" "[" expr "]" "." NAME -> lrow
 
 ASSIGNOP.3: ":=" | "+=" | "-=" | "&=" | "|=" | "^=" | "<<=" | ">>="
 
@@ -163,7 +196,9 @@ ASSIGNOP.3: ":=" | "+=" | "-=" | "&=" | "|=" | "^=" | "<<=" | ">>="
      | NAME                     -> name
      | NAME "[" expr "]"        -> index
      | NAME "[" expr "]" "." NAME -> inst_attr
+     | NAME "[" expr "]" "[" expr "]" "." NAME -> row_attr
      | NAME "." NAME            -> attr
+     | NAME "." NAME "." NAME   -> attr2
      | "mem" "[" expr "]"       -> mem
      | "mem16" "[" expr "]"     -> mem16
      | NAME "(" [expr ("," expr)*] ")" -> func

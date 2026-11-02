@@ -1,10 +1,10 @@
 """Play tunes with two playspecs (and optionally the tune's own 6502) call by call.
 
-``python tools/spec_compare.py OLD.play [NEW.play] -- TUNES.csv|TUNE.sid ... [--player NAME]
-[--frames N] [--python] [--oracle] [--bench] [--jobs J]``
+``python tools/spec_compare.py --spec OLD.play [--spec NEW.play] TUNES.csv|TUNE.sid ...
+[--player NAME] [--frames N] [--python] [--oracle] [--bench] [--jobs J]``
 
-Each tune is played by its format's binder over each spec (``NEW.play`` defaults to the
-format's own). Per call the SID writes, registers and memory outside the stack page must be
+Each tune is played by its format's binder over each ``--spec`` (a single one is compared with
+the format's own). Both specs must be given with ``--spec``: positional arguments are tunes. Per call the SID writes, registers and memory outside the stack page must be
 equal; with ``--oracle`` the memory of the tune's own 6502 is compared too. ``--bench`` prints
 microseconds per call after warm-up, native and Python, and the time to render the whole tune.
 A CSV needs a ``path`` column; ``--player`` keeps the rows of that ``player`` column. Exit

@@ -51,8 +51,8 @@ RESERVED = frozenset(
     " extend patch drop signal control step if elif else while bound for in return"
     " finish goto stream grammar assert native resumes let next mem mem16 true false"
     " lo hi word u8 u16 bool ptr sx zp neg slt sle sgt sge bit ind rol ror ite carry"
-    " borrow len member old cpu L sid owns event counter owner walker cursor record fire"
-    " react".split()
+    " borrow len member old cpu L sid owns event counter owner accum cursor stream record fire table output latch"
+    " react ramp triangle flip dir to then stop bits order copy via stride offset".split()
 )
 
 

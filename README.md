@@ -75,7 +75,7 @@ API.
   [docs/whydiff.md](docs/whydiff.md)).
 - `playspec` — a DSL stating a playroutine losslessly as synchronous state machines
   over memory-mapped cells, with events and event-driven objects (counters, table
-  walkers, stream cursors, owners, records): Lark parser, static checks, `SpecPlayer`
+  cursors, accumulators, owners, records, tables, bit fields): Lark parser, static checks, `SpecPlayer`
   (runs a spec on the tune's post-init memory), z3 bounded checking and translation validation
   against the 6502 code ([docs/playspec.md](docs/playspec.md)); `SpecPlayer` runs natively
   in Linux wheels ([docs/native-spec.md](docs/native-spec.md)).

@@ -100,13 +100,15 @@ layout { tab: addr; }
 cell pw: u16 @ (0x10, 0x11);
 cell pos: u8 @ 0x12;
 cell cnt: u8 @ 0x13;
-walker t {
+cursor t {
   table @ L.tab width 3; pos pos; count cnt; values pw;
   on frame step;
-  row 0..0x7f: sweep(into=pw, count=c0, step=c1);
-  row 0x80..0xfd: set(pw.hi = c0 & 0x7f, pw.lo = c1);
-  row 0xfe: jump(c1);
-  row 0xff: stop;
+  match c0 {
+    0..0x7f => sweep(into=pw, count=c0, step=c1);
+    0x80..0xfd => value(pw.hi = c0 & 0x7f, pw.lo = c1);
+    0xfe => jump(c1);
+    0xff => stop;
+  }
 }
 machine m { step { fire frame; } }
 schedule { m; }
@@ -128,7 +130,7 @@ def pulse_table(rng):
 
 
 @pytest.mark.parametrize("seed", range(12))
-def test_a_pulse_table_walker_is_the_hand_written_loop(seed):
+def test_a_pulse_table_table_cursor_is_the_hand_written_loop(seed):
     rng = random.Random(seed)
     binding = {"tab": 0x2000}
     memory = {0x2000: pulse_table(rng), 0x10: [rng.randrange(256), rng.randrange(256)]}
@@ -210,7 +212,7 @@ def test_orderlist_and_pattern_cursors_are_the_hand_written_stream_reads(seed):
     assert len({row[1] for row in rewritten}) == 3
 
 
-def test_the_pulse_and_filter_example_plays_and_is_proved_around_its_walkers():
+def test_the_pulse_and_filter_example_plays_and_is_proved_around_its_table_cursors():
     binding = {"w": 0x40, "pulse_table": 0x2000, "filter_table": 0x2100}
     prog = example("pulse-filter", **binding)
     memory = {

@@ -1135,7 +1135,7 @@ mod tests {
         let x = |c: i64| [c, 0xFF, 0, 0];
         let none = [0, 0, 0, 0];
         let row = |lo: i64, hi: i64, kind: i64, a: [i64; 4], b: [i64; 4], sets: Vec<i64>| {
-            let mut r = vec![lo, hi, kind, 0, 0];
+            let mut r = vec![lo, hi, 0, kind, 2, 0, 0, 0];
             r.extend(a);
             r.extend(b);
             r.extend(sets);
@@ -1143,12 +1143,14 @@ mod tests {
             r
         };
         let set = vec![1, 0, 0, 1, 0xFF, 0, 0, -1, 0, 0, 1];
-        let mut d = vec![2, -1, 3, 2, 2, 0x30, -1, 0x32, -1, 1, 0x34, -1, 4];
+        let mut d = vec![
+            2, -1, 3, 0, 2, 2, 0, 0x30, -1, 0x32, -1, -1, -1, -1, -1, 1, 0x34, -1, 4,
+        ];
         d.extend(row(0, 0x7F, 2, x(0), x(1), vec![0]));
         d.extend(row(0x80, 0x80, 4, none, none, set));
         d.extend(row(0xFE, 0xFE, 1, x(1), none, vec![0]));
         d.extend(row(0xFF, 0xFF, 0, none, none, vec![0]));
-        d.push(reset);
+        d[6] = reset;
         d
     }
 
@@ -1206,11 +1208,44 @@ mod tests {
             mem.set_ram(0x2000 + i as u16, *b);
         }
         // run 0xF0..=0xF7 from 0xF0 into 0x41; field 0 -> 0x42 (& 0x7f), field 1 when bit 7 -> 0x43
-        let d = vec![
-            3, -1, 2, 0x40, -1, 0, 0xF0, 0xF7, 0xF0, 0x41, -1, 0, 2, 0, 0, 1, 1, 0x42, -1, 0x7F, 0,
-            0, 0, 0, 1, 0x80, 0, 0, 1, 0x43, -1, 0xFF, 0, 0, 0, 0, 1, 0,
+        let blank = [0, 0, 0, 0];
+        let field0 = [0, 0, 0, 0, 0x7F, 0, 0, -1, 0, 0, 1];
+        let field1 = [1, 0, 1, 0xFF, 0, 0, -1, 0, 0, 1];
+        let row =
+            |lo: i64, hi: i64, tests: &[i64], kind: i64, take: i64, base: i64, sets: &[i64]| {
+                let mut r = vec![lo, hi, (tests.len() / 4) as i64];
+                r.extend(tests);
+                r.extend([kind, take, 0, 0, base]);
+                r.extend(blank);
+                r.extend(blank);
+                r.extend(sets);
+                r.extend([0, 1, 0, -1]);
+                r
+            };
+        let mut d = vec![
+            2, -1, 3, 0, 1, 2, 0, 0x40, -1, -1, -1, 0x41, -1, -1, -1, 2, 0x42, -1, 0x43, -1, 3,
         ];
-        let step = operands(&[0x2000, 0], 0);
+        d.extend(row(
+            0xF0,
+            0xF7,
+            &[],
+            8,
+            1,
+            0xF0,
+            &[1, 0, 0, 0, 0x7F, 0, 0, -1, 0, 0, 1],
+        ));
+        d.extend(row(
+            0,
+            255,
+            &[0, 0x80, 0, 1],
+            4,
+            1,
+            0,
+            &[1, 0, 0, 0, 0x7F, 0, 0, -1, 0, 0, 1],
+        ));
+        let both: Vec<i64> = [&[2][..], &field0[1..], &field1[..]].concat();
+        d.extend(row(0, 255, &[0, 0x80, 0, 0], 4, 2, 0, &both));
+        let step = operands(&[0x2000, 0x2001, 0], 0);
         react(&step, &d, 0, &mem);
         assert_eq!((mem.ram(0x40), mem.ram(0x42), mem.ram(0x43)), (2, 2, 5));
         react(&step, &d, 0, &mem);
