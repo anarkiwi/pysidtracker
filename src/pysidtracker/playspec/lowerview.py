@@ -65,10 +65,10 @@ class ViewLowering:
             for r in range(REGISTERS)
         ]
 
-    def bit_cell(self, name: str, scope) -> Optional[Cell]:
-        """The cell ``name`` if it declares bit fields."""
+    def bit_cell(self, name: str, scope, attr: str) -> Optional[Cell]:
+        """The cell ``name`` if it declares the bit field ``attr``."""
         found = self.lookup(name, scope)
-        if found is not None and found[0] == "cell" and found[1].bits is not None:
+        if found is not None and found[0] == "cell" and attr in (found[1].bits or ()):
             return self.in_proc(found[1])
         return None
 
@@ -82,7 +82,7 @@ class ViewLowering:
 
     def bit_value(self, name: str, index, attr: str, scope, line: int):
         """``cell.field`` (``cell[i].field``): the bit field, right-aligned."""
-        cell = self.bit_cell(name, scope)
+        cell = self.bit_cell(name, scope, attr)
         low, mask = self.bit_span(cell, attr, line)
         w = 8 * SIZES.get(cell.typ, 2)
         value = self.read_cell(cell, index, line)
@@ -90,7 +90,7 @@ class ViewLowering:
 
     def write_bits(self, name: str, index, attr: str, value, scope, line: int):
         """Statements storing ``value`` to the bit field ``cell.field``."""
-        cell = self.bit_cell(name, scope)
+        cell = self.bit_cell(name, scope, attr)
         low, mask = self.bit_span(cell, attr, line)
         w = 8 * SIZES.get(cell.typ, 2)
         keep = K(~(mask << low) & (1 << w) - 1, w)

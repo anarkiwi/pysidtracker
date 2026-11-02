@@ -550,7 +550,7 @@ class Lowerer(ViewLowering, ObjectLowering):
             index = self.expr(node[3], scope)
             if node[2] in self.tables:
                 return self.table_value(node[2], [index], node[4], scope, line)
-            if self.bit_cell(node[2], scope):
+            if self.bit_cell(node[2], scope, node[4]):
                 return self.bit_value(node[2], index, node[4], scope, line)
             inst = self.machine_instance(node[2], index, line)
             return K(None, 8) if inst is None else self.member(inst, node[4], line)
@@ -676,7 +676,7 @@ class Lowerer(ViewLowering, ObjectLowering):
             return V(
                 found[1] if attr == "base" else found[2], 16 if attr == "base" else 8
             )
-        if self.bit_cell(left, scope):
+        if self.bit_cell(left, scope, attr):
             return self.bit_value(left, None, attr, scope, line)
         if left in self.views:
             return self.view_value(left, attr, scope, line)
@@ -993,9 +993,13 @@ class Lowerer(ViewLowering, ObjectLowering):
         if tag == "inst_attr" and lval[2] in self.tables:
             pick = [self.expr(lval[3], scope)]
             return self.table_write(lval[2], pick, lval[4], value, scope, line)
-        if tag == "inst_attr" or tag == "attr" and self.bit_cell(lval[2], scope):
+        if (
+            tag == "inst_attr"
+            or tag == "attr"
+            and self.bit_cell(lval[2], scope, lval[3])
+        ):
             index = self.expr(lval[3], scope) if tag == "inst_attr" else None
-            if not self.bit_cell(lval[2], scope):
+            if not self.bit_cell(lval[2], scope, lval[-1]):
                 self.error(line, f"cannot assign to {lval[2]}[...].{lval[-1]}")
                 return []
             return self.write_bits(lval[2], index, lval[-1], value, scope, line)
