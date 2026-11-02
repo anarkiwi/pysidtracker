@@ -312,8 +312,8 @@ class ObjectLowering:
             names += [n for n in found if n != count and n not in names]
         return names
 
-    def bind_walker(self, item, oid, scope) -> Tuple[Obj, Asts]:
-        """A ``walker`` or ``cursor { ... }``: table, position and counter cells, rows."""
+    def bind_cursor_rows(self, item, oid, scope) -> Tuple[Obj, Asts]:
+        """A ``cursor { table ...; match c0 { ... } }``: table, position and counter cells, rows."""
         _tag, line, name, clauses = item
         by_tag: Dict[str, list] = {}
         for clause in clauses:
@@ -481,8 +481,8 @@ class ObjectLowering:
         self.error(line, f"a field's condition tests {prev}: neg, bit, == or !=")
         return None
 
-    def bind_cursor(self, item, oid, scope) -> Tuple[Obj, Asts]:
-        """A ``cursor name @ base pos cell``: fields chained by their conditions are the
+    def bind_cursor_stream(self, item, oid, scope) -> Tuple[Obj, Asts]:
+        """A ``cursor name { stream @ base; pos cell; ... }``: fields chained by their conditions are the
         arms of a cursor whose rows are the bytes read."""
         _tag, line, name, base, pos, last, grammar, clauses = item
         locs = {"pos": self.object_cell(pos, line, scope, 1)}

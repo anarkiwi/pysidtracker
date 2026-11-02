@@ -99,7 +99,7 @@ def _line(meta, origin: str = "") -> Loc:
     )
 
 
-OBJECTS = ("counter", "owner", "accum", "walker", "cursor", "handler")
+OBJECTS = ("counter", "owner", "accum", "cursor_rows", "cursor_stream", "handler")
 
 
 def _int(text: str) -> int:
@@ -243,9 +243,6 @@ class _ToAst(Transformer):
     def o_release(self, meta, c):
         return self._n("o_on", meta, c[0], "release", c[1])
 
-    def walker(self, meta, c):
-        return self._n("walker", meta, str(c[0]), list(c[1:]))
-
     def w_table(self, meta, c):
         width = c[-1] and c[-1][2]
         return self._n("w_table", meta, list(c[:-1]), width)
@@ -254,7 +251,7 @@ class _ToAst(Transformer):
         return self._n("w_width", meta, c[0])
 
     def w_pos(self, meta, c):
-        return self._n("w_pos", meta, str(c[0]))
+        return self._n("w_pos", meta, str(c[0]), c[1] is not None)
 
     def w_count(self, meta, c):
         return self._n("w_count", meta, str(c[0]))
@@ -271,15 +268,43 @@ class _ToAst(Transformer):
     def w_start(self, meta, c):
         return self._n("w_start", meta, c[0])
 
-    def w_row(self, meta, c):
-        then = c[4][2] if c[4] else []
-        return self._n("w_row", meta, c[0], c[1], c[2], c[3], then, None)
-
-    def ucursor(self, meta, c):
+    def cursor(self, meta, c):
         clauses = []
         for clause in c[1:]:
             clauses += clause if isinstance(clause, list) else [clause]
-        return self._n("walker", meta, str(c[0]), clauses)
+        tags = {k[0] for k in clauses}
+        stream = [k for k in clauses if k[0] == "k_stream"]
+        if not stream:
+            if tags & {"k_field", "k_run", "k_on"} or any(
+                k[0] == "w_pos" and k[3] for k in clauses
+            ):
+                raise SpecError(
+                    f"cursor {c[0]}: fields, runs, next and last need a stream clause"
+                )
+            return self._n("cursor_rows", meta, str(c[0]), clauses)
+        if len(stream) > 1 or tags - {
+            "k_stream",
+            "w_pos",
+            "w_on",
+            "k_on",
+            "k_run",
+            "k_field",
+        }:
+            raise SpecError(
+                f"cursor {c[0]}: a stream cursor has stream, pos, on, run and field"
+            )
+        pos = [k for k in clauses if k[0] == "w_pos"]
+        if len(pos) != 1:
+            raise SpecError(f"cursor {c[0]} needs exactly one pos clause")
+        kept = [("k_on", *k[1:]) if k[0] == "w_on" else k for k in clauses]
+        kept = [k for k in kept if k[0] in ("k_on", "k_run", "k_field")]
+        _t, _l, base, grammar = stream[0]
+        return self._n(
+            "cursor_stream", meta, str(c[0]), base, pos[0][2], pos[0][3], grammar, kept
+        )
+
+    def k_stream(self, meta, c):
+        return self._n("k_stream", meta, c[0], [g for g in c[1:] if g is not None])
 
     def u_ret(self, meta, c):
         return self._n("w_ret", meta, str(c[0]))
@@ -341,12 +366,6 @@ class _ToAst(Transformer):
     def a_sweep(self, meta, c):
         return self._n("sweep", meta, list(c))
 
-    def a_delay(self, meta, c):
-        return self._n("delay", meta, list(c))
-
-    def a_set(self, meta, c):
-        return self._n("set", meta, list(c))
-
     def a_jump(self, meta, c):
         return self._n("jump", meta, c[0], c[1:3], c[3])
 
@@ -354,32 +373,8 @@ class _ToAst(Transformer):
         del c
         return self._n("stop", meta)
 
-    def cursor(self, meta, c):
-        grammar = [g for g in c[4:] if not isinstance(g[1], Loc)]
-        clauses = [g for g in c[4:] if isinstance(g[1], Loc)]
-        return self._n(
-            "cursor",
-            meta,
-            str(c[0]),
-            c[1],
-            str(c[2]),
-            c[3] is not None,
-            grammar,
-            clauses,
-        )
-
     def k_next(self, meta, c):
         return self._n("k_on", meta, c[0], "next")
-
-    def k_reset(self, meta, c):
-        return self._n("k_on", meta, c[0], "reset")
-
-    def k_last(self, meta, c):
-        del meta, c
-        return True
-
-    def k_settle(self, meta, c):
-        return self._n("k_on", meta, c[0], "settle")
 
     def k_run(self, meta, c):
         return self._n("k_run", meta, c[0], c[1], c[2], str(c[3]))

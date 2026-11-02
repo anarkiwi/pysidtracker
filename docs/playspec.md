@@ -240,12 +240,11 @@ cursor name {
   0x80`) and `&&` joins them; an item `v = op when test` assigns only if the test holds.
 - **Values.** `v.hi` and `v.lo` assign one byte of a word. The `count` cell can be assigned in
   `then`. Value cells are collected from the rows; `values` fixes their order.
-- **Fields.** The declarations of a stream cursor, `cursor name @ base pos cell [last] { on row
-  next; run lo..hi base b -> cell; field f [when cond] [-> cell = op [when test], ...]; }`, and of
-  a `walker` (`row lo[..hi]: sweep(...)|delay(...)|set(...)|jump(...)|stop`), are accepted and
-  lowered to this object: `field` chains become arms whose `when` tests the previous byte, `last`
-  is `advance pre` with a `settle` reaction, and `cursor.ahead` and `cursor.idle` read the byte
-  the next row starts with and whether no run is pending.
+- **Streams.** `stream @ base [grammar "m:a:r" [if e], ...];` in place of `table` reads a
+  byte stream instead: `pos cell [last];`, `on row next;`, `run lo..hi base b -> cell;` and
+  `field f [when cond] [-> cell = op [when test], ...];`. Fields chain into arms whose `when`
+  tests the previous byte, `last` is `advance pre` with a `settle` reaction, and `cursor.ahead`
+  and `cursor.idle` read the byte the next row starts with and whether no run is pending.
 
 The pulse table of `examples/events/pulse-filter.play`:
 

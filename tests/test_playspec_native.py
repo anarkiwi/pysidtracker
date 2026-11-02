@@ -917,7 +917,7 @@ def test_random_object_programs_agree_with_the_python_executor(program, seed):
 
 
 @pytest.mark.strain_exempt(reason="asserts equality of two executors")
-def test_a_native_walker_that_jumps_forever_bails_to_the_error_python_raises():
+def test_a_native_table_cursor_that_jumps_forever_bails_to_the_error_python_raises():
     rows = ((0, 255, (), ("jump", (0, 0xFF, 0, 0), None, None)),)
     walker = Obj(
         "w",

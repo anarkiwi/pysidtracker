@@ -1,4 +1,4 @@
-"""Events and event-driven objects: counters, owners, walkers, cursors and records."""
+"""Events and event-driven objects: counters, owners, cursors and records."""
 
 import pytest
 
@@ -162,16 +162,18 @@ cell cnt: u8 @ 0x21;
 cell pw: u16 @ (0x22, 0x23);
 cell band: u8 @ 0x24;
 cell fine: u16 @ (0x25, 0x26);
-walker t {
+cursor t {
   table @ L.tab width 3;
   pos pos; count cnt; values pw, band, fine; start 0;
   on frame step; on note reset;
-  row 0..0x3f: sweep(into=pw, count=c0, step=c1) then band = c2;
-  row 0x40..0x4f: delay(count=c0 & 0x0f) then band = c1;
-  row 0x50..0x5f: sweep(into=fine, count=c0 & 3, step=c1, frac=3);
-  row 0x80..0xfd: set(pw.hi = c0 & 0x7f, pw.lo = c1, band = c0 >> 4, fine.lo = c2);
-  row 0xfe: jump(c1);
-  row 0xff: stop;
+  match c0 {
+    0..0x3f => sweep(into=pw, count=c0, step=c1) then band = c2;
+    0x40..0x4f => hold(c0 & 0x0f) then band = c1;
+    0x50..0x5f => sweep(into=fine, count=c0 & 3, step=c1, frac=3);
+    0x80..0xfd => value(pw.hi = c0 & 0x7f, pw.lo = c1, band = c0 >> 4, fine.lo = c2);
+    0xfe => jump(c1);
+    0xff => stop;
+  }
 }
 machine m { step { fire frame; } }
 schedule { m; }
@@ -185,7 +187,7 @@ TABLE = [
 ]  # fmt: skip
 
 
-def test_a_walker_sweeps_delays_sets_and_jumps_on_each_frame():
+def test_a_table_cursor_sweeps_delays_sets_and_jumps_on_each_frame():
     prog = build(WALKER, tab=0x2000)
     memory = {0x2000: TABLE}
     seen = frames(prog, memory, 14, (0x20, 0x21, 0x22, 0x23, 0x24))
@@ -207,14 +209,14 @@ def test_a_walker_sweeps_delays_sets_and_jumps_on_each_frame():
     ]
 
 
-def test_a_walker_sweeps_a_fixed_point_word_and_stops():
+def test_a_table_cursor_sweeps_a_fixed_point_word_and_stops():
     prog = build(WALKER, tab=0x2000)
     rows = [0x51, 0xFE, 0, 0xFF, 0, 0]
     seen = frames(prog, {0x2000: rows}, 5, (0x20, 0x21, 0x25, 0x26))
     assert seen == [(0, 1, 6, 0xFF)] + [(3, 0, 6, 0xFF)] * 4
 
 
-def test_a_note_resets_a_walker_to_its_start():
+def test_a_note_resets_a_table_cursor_to_its_start():
     text = WALKER.replace("fire frame;", "fire frame; if mem[0x30] != 0 { fire note; }")
     prog = build(text, tab=0x2000)
     seen = frames(
@@ -223,20 +225,21 @@ def test_a_note_resets_a_walker_to_its_start():
     assert seen == [(0, 0)]
 
 
-def test_a_walker_that_jumps_forever_fails():
+def test_a_table_cursor_that_jumps_forever_fails():
     prog = build(WALKER, tab=0x2000)
     with pytest.raises(SpecRuntimeError, match="jumps forever"):
         frames(prog, {0x2000: [0xFE, 3, 0, 0xFE, 0, 0]}, 1, ())
 
 
-def test_a_walker_over_column_tables_advances_one_row_at_a_time():
+def test_a_table_cursor_over_column_tables_advances_one_row_at_a_time():
     text = """
     spec w;
     cell pos: u8 @ 0x20; cell cnt: u8 @ 0x21; cell v: u8 @ 0x22;
-    walker t { table @ 0x2000, 0x2100; pos pos; count cnt; values v;
+    cursor t { table @ 0x2000, 0x2100; pos pos; count cnt; values v;
       on frame step;
-      row 0..0x7f: set(v = c1);
-      row 0xff: stop; }
+      match c0 {
+        0..0x7f => value(v = c1);
+        0xff => stop; } }
     machine m { step { fire frame; } }
     schedule { m; }
     """
@@ -249,9 +252,9 @@ def test_a_walker_over_column_tables_advances_one_row_at_a_time():
     ]
 
 
-WALKER_HEAD = """spec w;
+CURSOR_HEAD = """spec w;
 cell pos: u8 @ 0x20; cell cnt: u8 @ 0x21; cell pw: u16 @ 0x22; cell band: u8 @ 0x24;
-walker t { table @ 0x2000 width 2; %s }
+cursor t { table @ 0x2000 width 2; %s }
 machine m { step { fire frame; } }
 schedule { m; }
 """
@@ -262,30 +265,30 @@ GOOD = "pos pos; count cnt; values pw, band; "
     "body, message",
     [
         ("count cnt; values pw, band;", "exactly one pos"),
-        (GOOD + "row 0: sweep(into=pw, count=c0);", "sweep"),
-        (GOOD + "row 1: set(band.hi = c0);", "no high byte"),
+        (GOOD + "match c0 { 0 => sweep(into=pw, count=c0); }", "sweep"),
+        (GOOD + "match c0 { 1 => value(band.hi = c0); }", "no high byte"),
         (
-            GOOD + "row 0: sweep(into=band, count=c0, step=c1, frac=3);",
+            GOOD + "match c0 { 0 => sweep(into=band, count=c0, step=c1, frac=3); }",
             "frac needs a word",
         ),
-        (GOOD + "row 0: set(pw = c9);", "undefined name 'c9'"),
-        (GOOD + "row 0: set(pw = c0 + c1);", "an operand is"),
-        (GOOD + "row 0: set(nope = c0);", "nope is not a scalar cell"),
-        (GOOD + "row 0: set(pw = (c0 >> 1) & 3);", "an operand is"),
-        (GOOD + "row 0: set(pw.mid = c0);", "a value of"),
+        (GOOD + "match c0 { 0 => value(pw = c9); }", "undefined name 'c9'"),
+        (GOOD + "match c0 { 0 => value(pw = c0 + c1); }", "an operand is"),
+        (GOOD + "match c0 { 0 => value(nope = c0); }", "nope is not a scalar cell"),
+        (GOOD + "match c0 { 0 => value(pw = (c0 >> 1) & 3); }", "an operand is"),
+        (GOOD + "match c0 { 0 => value(pw.mid = c0); }", "a value of"),
         (GOOD + "table @ 1;", "exactly one table"),
     ],
 )
-def test_walker_declarations_are_checked(body, message):
+def test_cursor_declarations_are_checked(body, message):
     with pytest.raises(SpecError, match=message):
-        build(WALKER_HEAD % body)
+        build(CURSOR_HEAD % body)
 
 
 CURSOR = """
 spec c;
 cell pos: u8 @ 0x40; cell run: u8 @ 0x41;
 cell note: u8 @ 0x42; cell inst: u8 @ 0x43; cell fx: u8 @ 0x44;
-cursor ptn @ 0x2000 pos pos {
+cursor ptn { stream @ 0x2000; pos pos;
   on row next; on instrument reset;
   run 0xF0..0xF7 base 0xF0 -> run;
   field n -> note = n & 0x7f;
@@ -483,15 +486,17 @@ cell crun: u8 @ 0x19;
 cell cnote: u8 @ 0x1A;
 cell owned: u8 @ 0x1B;
 counter spd: spdc { on frame += 1; wrap at tempo -> tick; }
-walker pwt {
+cursor pwt {
   table @ L.tab width 2; pos wpos; count wcnt; values pw, band;
   on frame step; on note reset;
-  row 0..0x7f: sweep(into=pw, count=c0, step=c1);
-  row 0x80..0xfd: set(pw.hi = c0 & 0x7f, pw.lo = c1);
-  row 0xfe: jump(c1);
-  row 0xff: stop;
+  match c0 {
+    0..0x7f => sweep(into=pw, count=c0, step=c1);
+    0x80..0xfd => value(pw.hi = c0 & 0x7f, pw.lo = c1);
+    0xfe => jump(c1);
+    0xff => stop;
+  }
 }
-cursor ptn @ L.tab + 0x40 pos cpos {
+cursor ptn { stream @ L.tab + 0x40; pos cpos;
   on tick next;
   run 0xF0..0xF7 base 0xF0 -> crun;
   field n -> cnote = n & 0x7f;
@@ -685,7 +690,7 @@ def test_every_row_field_and_reaction_form_is_emitted_and_elaborated_back(
 def test_a_cursors_stream_is_validated_against_its_grammar_each_time_it_reads():
     text = """spec g;
     cell pos: u8 @ 0x40; cell note: u8 @ 0x41;
-    cursor ptn @ 0x2000 pos pos grammar "tests.test_bytegrammar:TOY:seq" {
+    cursor ptn { stream @ 0x2000 grammar "tests.test_bytegrammar:TOY:seq"; pos pos;
       on row next;
       field n -> note = n;
     }
