@@ -261,7 +261,6 @@ GOOD = "pos pos; count cnt; values pw, band; "
 @pytest.mark.parametrize(
     "body, message",
     [
-        ("pos pos; count cnt;", "exactly one values"),
         ("count cnt; values pw, band;", "exactly one pos"),
         (GOOD + "row 0: sweep(into=pw, count=c0);", "sweep"),
         (GOOD + "row 1: set(band.hi = c0);", "no high byte"),
@@ -271,7 +270,7 @@ GOOD = "pos pos; count cnt; values pw, band; "
         ),
         (GOOD + "row 0: set(pw = c9);", "undefined name 'c9'"),
         (GOOD + "row 0: set(pw = c0 + c1);", "an operand is"),
-        (GOOD + "row 0: set(nope = c0);", "a value of"),
+        (GOOD + "row 0: set(nope = c0);", "nope is not a scalar cell"),
         (GOOD + "row 0: set(pw = (c0 >> 1) & 3);", "an operand is"),
         (GOOD + "row 0: set(pw.mid = c0);", "a value of"),
         (GOOD + "table @ 1;", "exactly one table"),
@@ -538,12 +537,7 @@ def test_an_emitted_spec_elaborates_to_the_same_program():
         )
         is None
     )
-    assert {o.kind for o in back.objects.values()} == {
-        "counter",
-        "walker",
-        "cursor",
-        "owner",
-    }
+    assert {o.kind for o in back.objects.values()} == {"counter", "cursor", "owner"}
     tweaked = text.replace("on frame step;", "on frame step;\n  on tick step;")
     other = elaborate(parse(tweaked), {})
     assert isomorphic(
@@ -716,5 +710,5 @@ def test_a_cursors_stream_is_validated_against_its_grammar_each_time_it_reads():
 def test_the_census_counts_the_object_reactions_a_reordered_program_keeps():
     result = O.reorder(elaborate(parse(FULL), BINDING), O.ORDER)
     census = O.census(result)
-    assert census["objects"] == {"counter": 1, "cursor": 1, "owner": 1, "walker": 2}
+    assert census["objects"] == {"counter": 1, "cursor": 3, "owner": 1}
     assert census["statements"]["obj"] == 5

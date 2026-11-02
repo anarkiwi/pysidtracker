@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 from ..notes import PARTS
 from .ir import Cell, K, Obj, Op, Program, Rd, V, width
 from .lowerobj import ObjectLowering
+from .lowerview import ViewLowering
 from .lowerops import add16, mk, word, zext
 from .syntax import OBJECTS, Spec, SpecError
 
@@ -59,7 +60,7 @@ class Instance:
         self.objects: Dict[str, Obj] = {}
 
 
-class Lowerer(ObjectLowering):
+class Lowerer(ViewLowering, ObjectLowering):
     """One elaboration of a :class:`Spec` (see :func:`elaborate`)."""
 
     # pylint: disable=too-many-public-methods,too-many-instance-attributes
@@ -102,6 +103,7 @@ class Lowerer(ObjectLowering):
         self.owner_exprs: Dict[str, tuple] = {}
         self.bind_events()
         self.views = {view[2]: view for view in spec.views}
+        self.tables = {table[2]: table for table in spec.tables}
         for kind in set(spec.layout.values()) - LKINDS:
             self.error(0, f"unknown layout kind {kind!r}")
         for _tag, line, name, expr in spec.consts:
@@ -112,6 +114,8 @@ class Lowerer(ObjectLowering):
             self.consts[name] = value
         for decl in spec.cells:
             self.shared[decl[2]] = self.bind_cell(decl, "", Scope())
+        self.bind_tables(Scope())
+        self.bind_output(Scope())
         for record in spec.records:
             self.bind_record(record, self.shared, Scope())
         for item in spec.objects:
@@ -171,7 +175,7 @@ class Lowerer(ObjectLowering):
     # -- cells ---------------------------------------------------------------
     def bind_cell(self, decl, owner: str, scope: Scope) -> Cell:
         """Bind a ``cell`` declaration's addresses."""
-        _tag, line, name, typ, length, place, attrs, notes = decl
+        _tag, line, name, typ, length, place, attrs, notes, bits = decl
         if typ == "bool":
             self.error(line, f"cell {name}: bool is not a memory type")
         size = None if length is None else self.static(length, scope, line)
@@ -195,6 +199,7 @@ class Lowerer(ObjectLowering):
             frozenset(attrs),
             line,
             self.bind_notes(name, typ, length, attrs, notes, scope, line),
+            bits=self.bind_bits(name, typ, bits, scope, line),
         )
         if "per_proc" in attrs:
             self.decls[id(cell)] = (decl, owner, scope, layout_names(place))
@@ -514,8 +519,16 @@ class Lowerer(ObjectLowering):
             return self.attr_value(node[2], node[3], scope, line)
         if tag == "index":
             return self.index_value(node[2], node[3], scope, line)
+        if tag == "row_attr":
+            picks = [self.expr(n, scope) for n in node[3:5]]
+            return self.table_value(node[2], picks, node[5], scope, line)
         if tag == "inst_attr":
-            inst = self.machine_instance(node[2], self.expr(node[3], scope), line)
+            index = self.expr(node[3], scope)
+            if node[2] in self.tables:
+                return self.table_value(node[2], [index], node[4], scope, line)
+            if self.bit_cell(node[2], scope):
+                return self.bit_value(node[2], index, node[4], scope, line)
+            inst = self.machine_instance(node[2], index, line)
             return K(None, 8) if inst is None else self.member(inst, node[4], line)
         if tag in ("mem", "mem16"):
             addr = self.coerce(self.expr(node[2], scope), 16, line)
@@ -639,6 +652,8 @@ class Lowerer(ObjectLowering):
             return V(
                 found[1] if attr == "base" else found[2], 16 if attr == "base" else 8
             )
+        if self.bit_cell(left, scope):
+            return self.bit_value(left, None, attr, scope, line)
         if left in self.views:
             return self.view_value(left, attr, scope, line)
         owner = self.owner_value(left, attr, scope, line) or self.cursor_value(
@@ -940,6 +955,18 @@ class Lowerer(ObjectLowering):
                 self.error(line, f"cannot assign to {lval[2]}[...]")
                 return []
             return self.write_cell(found[1], self.expr(lval[3], scope), value, line)
+        if tag == "row_attr":
+            picks = [self.expr(n, scope) for n in lval[3:5]]
+            return self.table_write(lval[2], picks, lval[5], value, scope, line)
+        if tag == "inst_attr" and lval[2] in self.tables:
+            pick = [self.expr(lval[3], scope)]
+            return self.table_write(lval[2], pick, lval[4], value, scope, line)
+        if tag == "inst_attr" or tag == "attr" and self.bit_cell(lval[2], scope):
+            index = self.expr(lval[3], scope) if tag == "inst_attr" else None
+            if not self.bit_cell(lval[2], scope):
+                self.error(line, f"cannot assign to {lval[2]}[...].{lval[-1]}")
+                return []
+            return self.write_bits(lval[2], index, lval[-1], value, scope, line)
         if tag == "attr":
             found = scope.names.get(lval[2])
             if found is not None and found[0] == "stream" and lval[3] == "pos":
@@ -1116,7 +1143,7 @@ class Lowerer(ObjectLowering):
     def st_finish(self, node, scope):
         """``finish``: the play call ends here (the rest of the schedule is skipped)."""
         del node, scope
-        return [("finish",)]
+        return [*self.flush(), ("finish",)]
 
     def select_grammar(self, alts, scope, line: int) -> Optional[str]:
         """The rule of the first ``"ref" if cond`` arm that holds (an arm with no
@@ -1360,7 +1387,11 @@ class Lowerer(ObjectLowering):
             self.error(0, "spec has no schedule")
             return []
         body = self.sitems(self.spec.schedule[2], Scope())
-        return [("set", ir, K(default, w)) for ir, w, default in self.signals] + body
+        return (
+            [("set", ir, K(default, w)) for ir, w, default in self.signals]
+            + body
+            + self.flush()
+        )
 
     def cells(self) -> List[Cell]:
         """Every bound cell (shared, then each instance's)."""
@@ -1491,6 +1522,8 @@ def elaborate(
         procs=low.procs,
         objects=low.all_objects(),
         events=low.events,
+        outorder=low.outorder,
+        sid=low.sid,
     )
 
 

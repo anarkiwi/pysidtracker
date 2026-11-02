@@ -1,4 +1,4 @@
-//! Event-driven objects: counters, owners, walkers and cursors, stepped natively.
+//! Event-driven objects: counters, owners, accumulators and cursors, stepped natively.
 //!
 //! A [`Step`] is one reaction of one object, parsed once from the flat integers the Python
 //! encoder writes. It reads and stores bytes through the interpreter's memory access, so a
@@ -37,6 +37,9 @@ struct Assign {
     guard: Option<(usize, i64, i64, bool)>,
 }
 
+/// `(column, mask, value, equal)`: a test of a row byte.
+type Test = (usize, i64, i64, bool);
+
 #[derive(Clone, Debug)]
 enum Action {
     Stop,
@@ -52,34 +55,20 @@ enum Action {
         frac: u32,
     },
     Delay(Xf),
-    Set(Vec<Assign>),
+    Set(Vec<Assign>, i64),
+    End(i64),
+    Call(Xf),
+    Return,
+    Run(i64, Vec<Assign>),
 }
 
 #[derive(Clone, Debug)]
 struct Row {
     lo: i64,
     hi: i64,
+    tests: Vec<Test>,
     action: Action,
     then: Vec<Assign>,
-}
-
-#[derive(Clone, Debug)]
-struct Store {
-    out: Loc,
-    keep: i64,
-    shl: i64,
-    shr: i64,
-    mask: i64,
-    value: i64,
-    equal: bool,
-}
-
-#[derive(Clone, Debug)]
-struct Field {
-    mask: i64,
-    value: i64,
-    equal: bool,
-    stores: Vec<Store>,
 }
 
 #[derive(Clone, Debug)]
@@ -93,22 +82,26 @@ enum Kind {
         cell: Loc,
         release: bool,
     },
-    Walker {
-        width: i64,
-        columns: usize,
-        pos: Loc,
-        cnt: i64,
-        values: Vec<Loc>,
-        rows: Vec<Row>,
-        reset: bool,
-    },
-    Cursor {
-        pos: i64,
-        run: Option<(i64, i64, i64, i64)>,
-        fields: Vec<Field>,
-        last: bool,
+    Accum {
+        cell: Loc,
         mode: i64,
+        dir: Option<Loc>,
     },
+    Cursor(Box<Cursor>),
+}
+
+#[derive(Clone, Debug)]
+struct Cursor {
+    adv: i64,
+    width: i64,
+    columns: usize,
+    reaction: i64,
+    pos: Loc,
+    cnt: Option<Loc>,
+    run: Option<Loc>,
+    ret: Option<Loc>,
+    values: Vec<Loc>,
+    rows: Vec<Row>,
 }
 
 /// One reaction of an object.
@@ -149,6 +142,14 @@ impl Reader<'_> {
             lo,
             hi: (hi >= 0).then_some(hi),
         })
+    }
+
+    fn opt_loc(&mut self) -> Result<Option<Loc>, String> {
+        if self.data.get(self.at).is_some_and(|&lo| lo < 0) {
+            self.at += 2;
+            return Ok(None);
+        }
+        self.loc().map(Some)
     }
 
     fn xf(&mut self) -> Result<Xf, String> {
@@ -202,8 +203,14 @@ impl Step {
                 cell: r.loc()?,
                 release: r.next()? != 0,
             },
-            2 => Self::walker(&mut r, operands)?,
-            3 => Self::cursor(&mut r)?,
+            3 => {
+                let (cell, mode, dir) = (r.loc()?, r.next()?, r.opt_loc()?);
+                if !(0..4).contains(&mode) || (mode >= 2 && dir.is_none()) {
+                    return Err("an accumulator mode needs a direction cell".into());
+                }
+                Kind::Accum { cell, mode, dir }
+            }
+            2 => Self::cursor(&mut r, operands)?,
             _ => return Err("no such object kind".into()),
         };
         if r.at != data.len() {
@@ -216,128 +223,104 @@ impl Step {
         })
     }
 
-    fn walker(r: &mut Reader, operands: usize) -> Result<Kind, String> {
-        let width = r.next()?;
-        let columns = r.count()?;
+    fn cursor(r: &mut Reader, operands: usize) -> Result<Kind, String> {
+        let (adv, width, columns, reaction) = (r.next()?, r.next()?, r.count()?, r.next()?);
         let pos = r.loc()?;
-        let cnt = r.loc()?.lo;
+        let (cnt, run, ret) = (r.opt_loc()?, r.opt_loc()?, r.opt_loc()?);
         let values = (0..r.count()?)
             .map(|_| r.loc())
             .collect::<Result<Vec<_>, _>>()?;
         let rows = (0..r.count()?)
-            .map(|_| {
-                let (lo, hi, kind, into, frac) =
-                    (r.next()?, r.next()?, r.next()?, r.count()?, r.next()?);
-                let (a, b) = (r.xf()?, r.xf()?);
-                let sets = r.assigns()?;
-                let then = r.assigns()?;
-                let (hold, via) = ((r.next()?, r.next()?), r.next()?);
-                let action = match kind {
-                    0 => Action::Stop,
-                    1 => Action::Jump {
-                        target: a,
-                        hold,
-                        via: (via >= 0).then_some(via),
-                    },
-                    2 => Action::Sweep {
-                        into,
-                        count: a,
-                        step: b,
-                        frac: u32::try_from(frac).map_err(|_| "a negative fraction")?,
-                    },
-                    3 => Action::Delay(a),
-                    4 => Action::Set(sets),
-                    _ => return Err("no such walker row".to_string()),
-                };
-                Ok(Row {
-                    lo,
-                    hi,
-                    action,
-                    then,
-                })
-            })
+            .map(|_| Self::row(r))
             .collect::<Result<Vec<_>, String>>()?;
-        let reset = r.next()? != 0;
         let bad = |a: &Assign| {
             a.index > values.len()
+                || (a.index == values.len() && cnt.is_none())
                 || a.guard.is_some_and(|g| g.0 >= columns)
                 || (a.index < values.len() && a.part == 2 && values[a.index].hi.is_none())
         };
         let broken = rows.iter().any(|row| {
             row.then.iter().any(bad)
+                || row.tests.iter().any(|t| t.0 >= columns)
                 || match &row.action {
-                    Action::Set(sets) => sets.iter().any(bad),
+                    Action::Set(sets, take) => sets.iter().any(bad) || *take < 1,
+                    Action::Run(_, sets) => run.is_none() || sets.iter().any(bad),
+                    Action::Call(_) | Action::Return => ret.is_none(),
                     Action::Sweep { into, frac, .. } => {
-                        *into >= values.len()
+                        cnt.is_none()
+                            || *into >= values.len()
                             || (*frac > 0 && values[*into].hi.is_none())
                             || *frac > 24
                     }
+                    Action::Delay(_) => cnt.is_none(),
                     _ => false,
                 }
         });
-        if broken || operands != columns + 1 || columns == 0 {
-            return Err("a walker refers to a value or operand it lacks".into());
+        if broken
+            || operands != columns + 1
+            || columns == 0
+            || columns > 16
+            || !(0..3).contains(&adv)
+            || !(0..3).contains(&reaction)
+            || ret.is_some_and(|l| l.hi.is_some() != pos.hi.is_some())
+        {
+            return Err("a cursor refers to a value or operand it lacks".into());
         }
-        Ok(Kind::Walker {
+        Ok(Kind::Cursor(Box::new(Cursor {
+            adv,
             width,
             columns,
+            reaction,
             pos,
             cnt,
+            run,
+            ret,
             values,
             rows,
-            reset,
-        })
+        })))
     }
 
-    fn cursor(r: &mut Reader) -> Result<Kind, String> {
-        let pos = r.loc()?.lo;
-        let run = if r.next()? >= 0 {
-            Some((r.next()?, r.next()?, r.next()?, r.loc()?.lo))
-        } else {
-            None
-        };
-        let last = r.next()? != 0;
-        let fields = (0..r.count()?)
+    fn row(r: &mut Reader) -> Result<Row, String> {
+        let (lo, hi) = (r.next()?, r.next()?);
+        let tests = (0..r.count()?)
             .map(|_| {
-                let (mask, value, equal) = (r.next()?, r.next()?, r.next()? != 0);
-                let stores = (0..r.count()?)
-                    .map(|_| {
-                        Ok(Store {
-                            out: r.loc()?,
-                            keep: r.next()?,
-                            shl: r.next()?,
-                            shr: r.next()?,
-                            mask: r.next()?,
-                            value: r.next()?,
-                            equal: r.next()? != 0,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
-                Ok(Field {
-                    mask,
-                    value,
-                    equal,
-                    stores,
-                })
+                let (col, mask, value, equal) = (r.count()?, r.next()?, r.next()?, r.next()? != 0);
+                Ok((col, mask, value, equal))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let mode = r.next()?;
-        if fields.is_empty()
-            || !(0..3).contains(&mode)
-            || fields.iter().any(|f| {
-                f.stores
-                    .iter()
-                    .any(|s| !(0..64).contains(&s.shl) || !(0..64).contains(&s.shr))
-            })
-        {
-            return Err("a cursor needs fields with shifts below 64".into());
-        }
-        Ok(Kind::Cursor {
-            pos,
-            run,
-            fields,
-            last,
-            mode,
+        let (kind, take, into, frac, base) =
+            (r.next()?, r.next()?, r.count()?, r.next()?, r.next()?);
+        let (a, b) = (r.xf()?, r.xf()?);
+        let sets = r.assigns()?;
+        let then = r.assigns()?;
+        let (hold, via) = ((r.next()?, r.next()?), r.next()?);
+        let action = match kind {
+            0 => Action::Stop,
+            1 => Action::Jump {
+                target: a,
+                hold,
+                via: (via >= 0).then_some(via),
+            },
+            2 => Action::Sweep {
+                into,
+                count: a,
+                step: b,
+                frac: u32::try_from(frac).map_err(|_| "a negative fraction")?,
+            },
+            3 => Action::Delay(a),
+            4 => Action::Set(sets, take),
+            5 => Action::End(take),
+            6 => Action::Call(a),
+            7 => Action::Return,
+            8 => Action::Run(base, sets),
+            _ => return Err("no such cursor row".to_string()),
+        };
+        Ok(Row {
+            lo,
+            hi,
+            tests,
+            action,
+            then,
         })
     }
 
@@ -358,8 +341,8 @@ impl Step {
                 delta,
             } => counter(&mut mem, *cell, *action, *delta, ops),
             Kind::Owner { cell, release } => owner(&mut mem, *cell, *release, ops),
-            Kind::Walker { .. } => walker(&mut mem, &self.kind, ops),
-            Kind::Cursor { .. } => cursor(&mut mem, &self.kind, ops),
+            Kind::Accum { cell, mode, dir } => accum(&mut mem, *cell, *mode, *dir, ops),
+            Kind::Cursor(c) => cursor(&mut mem, c, ops),
         }
     }
 }
@@ -422,12 +405,53 @@ fn owner(m: &mut Mem, cell: Loc, release: bool, ops: &[i64]) -> Result<i64, Bail
     Ok(0)
 }
 
+fn accum(m: &mut Mem, cell: Loc, mode: i64, dir: Option<Loc>, ops: &[i64]) -> Result<i64, Bail> {
+    let (amount, target) = (ops[0], ops[1]);
+    let value = m.load(cell)?;
+    let top = if cell.hi.is_some() { 0xFFFF } else { 0xFF };
+    let down = match dir {
+        Some(d) if mode >= 2 => m.get(d.lo)?,
+        _ => 0,
+    };
+    match mode {
+        3 => {
+            m.put(dir.map_or(0, |d| d.lo), down ^ 1)?;
+            Ok(0)
+        }
+        1 => {
+            if value == target {
+                return Ok(1);
+            }
+            let moved = if value < target {
+                (value + amount).min(target)
+            } else {
+                (value - amount).max(target)
+            };
+            m.save(cell, moved)?;
+            Ok((moved == target) as i64)
+        }
+        _ => {
+            let after = if down & 1 != 0 {
+                value - amount
+            } else {
+                value + amount
+            };
+            m.save(cell, after & top)?;
+            Ok((after < 0 || after > top) as i64)
+        }
+    }
+}
+
 fn xf(x: Xf, cols: &[i64]) -> i64 {
     if x.col < 0 {
         x.mask
     } else {
         (((cols[x.col as usize] & x.mask) << x.shl) >> x.shr) & 0xFF
     }
+}
+
+fn passes(t: &Test, cols: &[i64]) -> bool {
+    ((cols[t.0] & t.1) == t.2) == t.3
 }
 
 fn assign(
@@ -438,10 +462,10 @@ fn assign(
     count: &mut i64,
 ) -> Result<(), Bail> {
     for a in sets {
-        if let Some((col, mask, value, equal)) = a.guard {
-            if ((cols[col] & mask) == value) != equal {
-                continue;
-            }
+        if a.guard
+            .is_some_and(|(col, mask, value, equal)| ((cols[col] & mask) == value) != equal)
+        {
+            continue;
         }
         let v = xf(a.xf, cols);
         if a.index == values.len() {
@@ -474,65 +498,104 @@ fn sweep(m: &mut Mem, loc: Loc, frac: u32, delta: i64) -> Result<i64, Bail> {
     Ok(0)
 }
 
-fn walker(m: &mut Mem, kind: &Kind, ops: &[i64]) -> Result<i64, Bail> {
-    let Kind::Walker {
-        width,
-        columns,
-        pos,
-        cnt,
-        values,
-        rows,
-        reset,
-    } = kind
-    else {
-        unreachable!()
-    };
-    let room = if pos.hi.is_some() { 0xFFFF } else { 0xFF };
-    if *reset {
-        m.save(*pos, ops[*columns] & room)?;
-        m.put(*cnt, 0)?;
-        return Ok(0);
-    }
-    let (mut at, mut count) = (m.load(*pos)?, m.get(*cnt)?);
-    let (mut carry, mut via, mut jumped) = (0, None, false);
+fn cursor(m: &mut Mem, c: &Cursor, ops: &[i64]) -> Result<i64, Bail> {
+    let room = if c.pos.hi.is_some() { 0xFFFF } else { 0xFF };
+    let mut left = 0;
     let mut cols = [0i64; 16];
+    match c.reaction {
+        1 => {
+            m.save(c.pos, (ops[c.columns] - (c.adv == 1) as i64) & room)?;
+            for cell in [c.cnt, c.run].into_iter().flatten() {
+                m.put(cell.lo, 0)?;
+            }
+            return Ok(0);
+        }
+        2 => {
+            let held = match c.run {
+                Some(run) => m.get(run.lo)? != 0,
+                None => false,
+            };
+            if !held {
+                let at = m.load(c.pos)?;
+                m.save(c.pos, (at + 1) & room)?;
+            }
+            return Ok(0);
+        }
+        _ => {}
+    }
+    let mut at = m.load(c.pos)?;
+    if let Some(cnt) = c.cnt {
+        left = m.get(cnt.lo)?;
+    }
+    if let Some(run) = c.run {
+        let pending = m.get(run.lo)?;
+        if pending != 0 {
+            m.put(run.lo, pending - 1)?;
+            let empty = c.rows.iter().find_map(|r| match &r.action {
+                Action::Run(_, sets) => Some(sets),
+                _ => None,
+            });
+            if let Some(sets) = empty {
+                assign(m, &c.values, sets, &cols[..c.columns], &mut left)?;
+            }
+            return Ok(0);
+        }
+    }
+    at = (at + (c.adv == 1) as i64) & room;
+    let (mut carry, mut via, mut jumped, mut used) = (0, None, false, 0);
     let mut done = false;
     for _ in 0..JUMPS {
-        for (j, col) in cols.iter_mut().enumerate().take(*columns) {
+        for (j, col) in cols.iter_mut().enumerate().take(c.columns) {
             *col = m.get((ops[j] + at) & 0xFFFF)?;
         }
         let first = via.unwrap_or(cols[0]);
-        let row = rows.iter().find(|r| r.lo <= first && first <= r.hi);
+        let row = c
+            .rows
+            .iter()
+            .find(|r| r.lo <= first && first <= r.hi && r.tests.iter().all(|t| passes(t, &cols)));
         let Some(row) = row else {
             carry = 1;
             done = true;
             break;
         };
+        let here = &cols[..c.columns];
         match &row.action {
             Action::Stop => {
                 carry = 1;
                 done = true;
                 break;
             }
-            Action::Jump {
-                target,
-                hold,
-                via: next,
-            } => {
-                let target = xf(*target, &cols);
+            Action::Jump { .. } | Action::Call(_) | Action::Return => {
+                let target = match &row.action {
+                    Action::Jump { target, .. } => xf(*target, here),
+                    Action::Call(target) => xf(*target, here),
+                    _ => match c.ret {
+                        Some(ret) => m.load(ret)?,
+                        None => return Err(Bail::Range),
+                    },
+                };
+                if let (Action::Call(_), Some(ret)) = (&row.action, c.ret) {
+                    m.save(ret, (at + c.width) & room)?;
+                }
                 carry = (target >= at) as i64;
+                jumped = true;
                 done = true;
-                if target == at {
+                if matches!(row.action, Action::Jump { .. }) && target == at {
                     break;
                 }
-                jumped = true;
                 at = target;
-                via = *next;
-                if hold.0 <= hold.1 {
-                    let c0 = m.get((ops[0] + at) & 0xFFFF)?;
-                    if hold.0 <= c0 && c0 <= hold.1 {
-                        count = 0;
-                        break;
+                via = None;
+                if let Action::Jump {
+                    hold, via: next, ..
+                } = &row.action
+                {
+                    via = *next;
+                    if hold.0 <= hold.1 {
+                        let c0 = m.get((ops[0] + at) & 0xFFFF)?;
+                        if hold.0 <= c0 && c0 <= hold.1 {
+                            left = 0;
+                            break;
+                        }
                     }
                 }
                 done = false;
@@ -540,117 +603,62 @@ fn walker(m: &mut Mem, kind: &Kind, ops: &[i64]) -> Result<i64, Bail> {
             }
             Action::Sweep {
                 into,
-                count: limit,
+                count,
                 step,
                 frac,
             } => {
-                if count != xf(*limit, &cols) {
-                    count = (count + 1) & 0xFF;
-                    let d = xf(*step, &cols);
-                    carry = sweep(m, values[*into], *frac, d - 256 * (d >> 7))?;
+                if left != xf(*count, here) {
+                    left = (left + 1) & 0xFF;
+                    let d = xf(*step, here);
+                    carry = sweep(m, c.values[*into], *frac, d - 256 * (d >> 7))?;
                     done = true;
                     break;
                 }
-                count = 0;
+                left = 0;
                 carry = 1;
+                used = c.width;
             }
             Action::Delay(limit) => {
-                if count != xf(*limit, &cols) {
-                    count = (count + 1) & 0xFF;
+                if left != xf(*limit, here) {
+                    left = (left + 1) & 0xFF;
                     carry = 0;
                     done = true;
                     break;
                 }
-                count = 0;
+                left = 0;
                 carry = 1;
+                used = c.width;
             }
-            Action::Set(sets) => {
-                assign(m, values, sets, &cols, &mut count)?;
+            Action::Set(sets, take) => {
+                assign(m, &c.values, sets, here, &mut left)?;
                 carry = if jumped { carry } else { 0 };
+                used = *take;
+            }
+            Action::End(take) => {
+                carry = 1;
+                used = *take;
+            }
+            Action::Run(base, sets) => {
+                if let Some(run) = c.run {
+                    m.put(run.lo, (cols[0] - base) & 0xFF)?;
+                }
+                assign(m, &c.values, sets, &[0i64; 16][..c.columns], &mut left)?;
+                carry = 0;
+                used = 1;
             }
         }
-        at = (at + width) & room;
-        assign(m, values, &row.then, &cols, &mut count)?;
+        if !matches!(row.action, Action::Run(..)) {
+            assign(m, &c.values, &row.then, here, &mut left)?;
+        }
         done = true;
         break;
     }
     if !done {
         return Err(Bail::Spec);
     }
-    m.save(*pos, at)?;
-    m.put(*cnt, count)?;
+    m.save(c.pos, (at + used - (c.adv > 0) as i64) & room)?;
+    if let Some(cnt) = c.cnt {
+        m.put(cnt.lo, left)?;
+    }
     Ok(carry)
-}
-
-fn cursor(m: &mut Mem, kind: &Kind, ops: &[i64]) -> Result<i64, Bail> {
-    let Kind::Cursor {
-        pos,
-        run,
-        fields,
-        last,
-        mode,
-    } = kind
-    else {
-        unreachable!()
-    };
-    if *mode == 1 {
-        m.put(*pos, ops[1])?;
-        if let Some((_, _, _, pending)) = run {
-            m.put(*pending, 0)?;
-        }
-        return Ok(0);
-    }
-    if *mode == 2 {
-        let held = match run {
-            Some((_, _, _, pending)) => m.get(*pending)? != 0,
-            None => false,
-        };
-        if !held {
-            let at = m.get(*pos)?;
-            m.put(*pos, at + 1)?;
-        }
-        return Ok(0);
-    }
-    let at = m.get(*pos)?;
-    let (mut used, mut first, mut empty) = (0, 0, false);
-    let left = match run {
-        Some((_, _, _, pending)) => m.get(*pending)?,
-        None => 0,
-    };
-    if left != 0 {
-        m.put(run.unwrap().3, left - 1)?;
-        empty = true;
-    } else {
-        first = m.get((ops[0] + at) & 0xFFFF)?;
-        used = 1;
-        if let Some((lo, hi, base, pending)) = run {
-            if *lo <= first && first <= *hi {
-                m.put(*pending, first - base)?;
-                first = 0;
-                empty = true;
-            }
-        }
-    }
-    let mut row = [0i64; 16];
-    row[0] = first;
-    let mut n = 1;
-    while !empty && n < fields.len() {
-        let f = &fields[n];
-        if ((row[n - 1] & f.mask) == f.value) != f.equal {
-            break;
-        }
-        row[n] = m.get((ops[0] + at + used) & 0xFFFF)?;
-        used += 1;
-        n += 1;
-    }
-    for (byte, f) in row.iter().zip(fields).take(n) {
-        for s in &f.stores {
-            if ((byte & s.mask) == s.value) == s.equal {
-                m.save(s.out, (((byte & s.keep) << s.shl) >> s.shr) & 0xFF)?;
-            }
-        }
-    }
-    let used = if *last { (used - 1).max(0) } else { used };
-    m.put(*pos, at + used)?;
-    Ok(0)
 }

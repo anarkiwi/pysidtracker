@@ -76,18 +76,70 @@ def _owner(obj: Obj, action: tuple) -> Step:
     return step
 
 
-def _walker(obj: Obj, action: tuple) -> Step:
-    width, columns, rows = obj.spec
-    pos, cnt = obj.locs["pos"], obj.locs["cnt"]
-    values = [obj.locs[f"v{i}"] for i in range(len(obj.locs) - 2)]
-    room = (1 << 8 * len(pos)) - 1
+def _accum(obj: Obj, action: tuple) -> Step:
+    loc, dirs = obj.locs["cell"], obj.locs.get("dir")
+    top = (1 << 8 * len(loc)) - 1
+    mode = action[0]
 
-    def arm(first):
-        return next((r[2] for r in rows if r[0] <= first <= r[1]), ("stop",))
+    def step(R, W, ops):
+        amount, target = ops
+        value = load(R, loc)
+        if mode == "flip":
+            W(dirs[0], R(dirs[0]) ^ 1)
+            return 0
+        if mode == "to":
+            if value == target:
+                return 1
+            moved = (
+                min(value + amount, target)
+                if value < target
+                else max(value - amount, target)
+            )
+            store(W, loc, moved)
+            return int(moved == target)
+        down = mode == "tri" and R(dirs[0]) & 1
+        after = value - amount if down else value + amount
+        store(W, loc, after & top)
+        return int(after < 0 or after > top)
+
+    return step
+
+
+def to_signed(byte: int) -> int:
+    """The signed value of ``byte``."""
+    return byte - 256 * (byte >> 7)
+
+
+def passes(test: tuple, cols) -> bool:
+    """Whether a row-byte test ``(column, mask, value, equal)`` holds of ``cols``."""
+    col, mask, value, equal = test
+    return ((cols[col] & mask) == value) == bool(equal)
+
+
+def _sweep(R, W, loc, frac: int, delta: int) -> int:
+    if not frac:
+        carry = int(R(loc[0]) + (delta & 0xFF) > 0xFF)
+        store(W, loc, load(R, loc) + delta)
+        return carry
+    low = (1 << frac) - 1
+    total = ((R(loc[1]) << frac) | (R(loc[0]) & low)) + delta
+    total &= (1 << 8 + frac) - 1
+    W(loc[1], total >> frac)
+    W(loc[0], total & low)
+    return 0
+
+
+def _cursor(obj: Obj, action: tuple) -> Step:
+    adv, width, columns, rows = obj.spec
+    locs = obj.locs
+    pos, cnt, run, ret = (locs.get(k) for k in ("pos", "cnt", "run", "ret"))
+    values = [locs[f"v{i}"] for i in range(len(locs)) if f"v{i}" in locs]
+    room = (1 << 8 * len(pos)) - 1
+    empty = next((r[3][2] for r in rows if r[3][0] == "run"), ())
 
     def assign(W, cols, sets, left):
         for index, part, spec, guard in sets:
-            if guard and ((cols[guard[0]] & guard[1]) == guard[2]) != guard[3]:
+            if guard and not passes(guard, cols):
                 continue
             if index == len(values):
                 left[0] = xf(spec, cols)
@@ -96,125 +148,98 @@ def _walker(obj: Obj, action: tuple) -> Step:
             else:
                 store(W, values[index], xf(spec, cols))
 
-    def sweep(R, W, into, frac, delta):
-        loc = values[into]
-        if not frac:
-            carry = int(R(loc[0]) + (delta & 0xFF) > 0xFF)
-            store(W, loc, load(R, loc) + delta)
-            return carry
-        low = (1 << frac) - 1
-        total = ((R(loc[1]) << frac) | (R(loc[0]) & low)) + delta
-        total &= (1 << 8 + frac) - 1
-        W(loc[1], total >> frac)
-        W(loc[0], total & low)
+    def settle(R, W, ops):
+        del ops
+        if not (run and R(run[0])):
+            store(W, pos, load(R, pos) + 1 & room)
         return 0
 
     def reset(R, W, ops):
         del R
-        store(W, pos, ops[columns] & room)
-        W(cnt[0], 0)
+        store(W, pos, ops[columns] - (adv == 1) & room)
+        for cell in (cnt, run):
+            if cell:
+                W(cell[0], 0)
         return 0
 
     def walk(R, W, ops):
-        at, left, carry, via = load(R, pos), [R(cnt[0])], 0, None
-        jumped = False
+        at, left = load(R, pos), [R(cnt[0]) if cnt else 0]
+        pending = R(run[0]) if run else 0
+        if pending:
+            W(run[0], pending - 1)
+            assign(W, [0] * columns, empty, left)
+            return 0
+        at = at + (adv == 1) & room
+        carry, via, jumped, used = 0, None, False, 0
+
+        def rest():
+            return at + used - (adv > 0) & room
+
         for _ in range(JUMPS):
             cols = [R((ops[j] + at) & 0xFFFF) for j in range(columns)]
-            row = arm(cols[0] if via is None else via)
+            first = cols[0] if via is None else via
+            row = next(
+                (
+                    r[3]
+                    for r in rows
+                    if r[0] <= first <= r[1] and all(passes(t, cols) for t in r[2])
+                ),
+                ("stop",),
+            )
             kind = row[0]
-            if kind == "jump":
-                target = xf(row[1], cols)
-                carry = int(target >= at)
-                if target == at:
+            if kind in ("jump", "call", "return"):
+                target = load(R, ret) if kind == "return" else xf(row[1], cols)
+                if kind == "call":
+                    store(W, ret, at + width & room)
+                carry, jumped = int(target >= at), True
+                if kind == "jump" and target == at:
                     break
-                jumped = True
-                at, hold, via = target, row[2], row[3]
+                at, via = target, row[3] if kind == "jump" else None
+                hold = row[2] if kind == "jump" else None
                 if hold and hold[0] <= R((ops[0] + at) & 0xFFFF) <= hold[1]:
                     left[0] = 0
                     break
                 continue
+            if kind == "stop":
+                carry = 1
+                break
+            used = width
             if kind in ("sweep", "delay"):
                 limit = xf(row[2] if kind == "sweep" else row[1], cols)
                 if left[0] != limit:
-                    left[0] = (left[0] + 1) & 0xFF
+                    left[0], used = (left[0] + 1) & 0xFF, 0
                     carry = 0
                     if kind == "sweep":
-                        carry = sweep(R, W, row[1], row[4], to_signed(xf(row[3], cols)))
+                        delta = to_signed(xf(row[3], cols))
+                        carry = _sweep(R, W, values[row[1]], row[4], delta)
                     break
                 left[0], carry = 0, 1
             elif kind == "set":
                 assign(W, cols, row[1], left)
-                carry = carry if jumped else 0
+                carry, used = carry if jumped else 0, row[2]
+            elif kind == "run":
+                W(run[0], (cols[0] - row[1]) & 0xFF)
+                assign(W, [0] * columns, row[2], left)
+                carry, used = 0, 1
             else:
-                carry = 1
-                break
-            at = (at + width) & room
-            assign(W, cols, row[-1], left)
+                carry, used = 1, row[1]
+            if kind != "run":
+                assign(W, cols, row[-1], left)
             break
         else:
-            raise SpecRuntimeError("walker jumps forever")
-        store(W, pos, at)
-        W(cnt[0], left[0])
+            raise SpecRuntimeError("cursor jumps forever")
+        store(W, pos, rest())
+        if cnt:
+            W(cnt[0], left[0])
         return carry
 
-    return reset if action[0] == "reset" else walk
-
-
-def to_signed(byte: int) -> int:
-    """The signed value of ``byte``."""
-    return byte - 256 * (byte >> 7)
-
-
-def _cursor(obj: Obj, action: tuple) -> Step:
-    run, fields, last = obj.spec
-    pos, pending = obj.locs["pos"], obj.locs.get("run")
-
-    def reset(R, W, ops):
-        del R
-        W(pos[0], ops[1] & 0xFF)
-        if pending:
-            W(pending[0], 0)
-        return 0
-
-    def settle(R, W, ops):
-        del ops
-        if not (pending and R(pending[0])):
-            W(pos[0], (R(pos[0]) + 1) & 0xFF)
-        return 0
-
-    def read(R, W, ops):
-        at, used, left = R(pos[0]), 0, R(pending[0]) if pending else 0
-        first, empty = 0, bool(left)
-        if empty:
-            W(pending[0], left - 1)
-        else:
-            first, used = R((ops[0] + at) & 0xFFFF), 1
-            if run and run[0] <= first <= run[1]:
-                W(pending[0], first - run[2])
-                first, empty = 0, True
-        row = [first]
-        while not empty and len(row) < len(fields):
-            mask, want, equal = fields[len(row)][0]
-            if ((row[-1] & mask) == want) != equal:
-                break
-            row.append(R((ops[0] + at + used) & 0xFFFF))
-            used += 1
-        for k, byte in enumerate(row):
-            for j, (mask, shl, shr, (gmask, gwant, gequal)) in enumerate(fields[k][1]):
-                if ((byte & gmask) == gwant) == gequal:
-                    store(
-                        W, obj.locs[f"o{k}_{j}"], ((byte & mask) << shl >> shr) & 0xFF
-                    )
-        W(pos[0], (at + max(used - last, 0)) & 0xFF)
-        return 0
-
-    return {"reset": reset, "settle": settle}.get(action[0], read)
+    return {"reset": reset, "settle": settle}.get(action[0], walk)
 
 
 _KINDS: Dict[str, Callable[[Obj, tuple], Step]] = {
     "counter": _counter,
     "owner": _owner,
-    "walker": _walker,
+    "accum": _accum,
     "cursor": _cursor,
 }
 

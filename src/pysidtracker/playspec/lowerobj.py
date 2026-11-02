@@ -35,6 +35,16 @@ def const(value: int, w: int) -> tuple:
     return ("_v", 0, K(value, w))
 
 
+def row_sets(action: tuple) -> tuple:
+    """The value assignments of a cursor row action."""
+    kind = action[0]
+    if kind == "set":
+        return (*action[1], *action[3])
+    if kind in ("sweep", "delay", "end"):
+        return action[-1]
+    return action[2] if kind == "run" else ()
+
+
 class ObjectLowering:
     """Events, records and objects of a :class:`~.lower.Lowerer`."""
 
@@ -90,7 +100,7 @@ class ObjectLowering:
             if name in cells:
                 self.error(fline, f"record field {name} is already a cell")
             place = ("at", fline, ("+", fline, at, ("_v", fline, K(offset, 0))))
-            decl = ("cell", fline, name, typ, None, place, frozenset(), None)
+            decl = ("cell", fline, name, typ, None, place, frozenset(), None, None)
             cells[name] = self.bind_cell(decl, self.inst.ident, scope)
             cells[name].record = rec
             offset = end
@@ -185,6 +195,35 @@ class ObjectLowering:
         obj = Obj(oid, "counter", "", {"cell": loc}, (), reactions, fires)
         return obj, dict.fromkeys(reactions, asts)
 
+    def bind_accum(self, item, oid, scope) -> Tuple[Obj, Asts]:
+        """``accum name: cell { step e; dir cell; on ev ramp [to e then stop] | triangle | flip; }``."""
+        _tag, line, name, cell, clauses = item
+        loc = self.object_cell(cell, line, scope)
+        w = 8 * len(loc)
+        locs = {"cell": loc}
+        step, fires = const(1, w), None
+        reactions: dict = {}
+        targets: dict = {}
+        for clause in clauses:
+            if clause[0] == "a_step":
+                step = clause[2]
+            elif clause[0] == "a_dir":
+                locs["dir"] = self.object_cell(clause[2], clause[1], scope, 1)
+            else:
+                _t, cline, events, mode, target, wraps = clause
+                self.reaction(name, events, cline, reactions, (mode,))
+                targets.update(dict.fromkeys(events, target or const(0, w)))
+                fires = wraps or fires
+        if fires:
+            self.known_event(fires, line)
+        for event, action in reactions.items():
+            if fires and action[0] != "flip" and not self.below(fires, event):
+                self.error(line, f"{name} fires {fires}, which is not below {event}")
+            if action[0] in ("tri", "flip") and "dir" not in locs:
+                self.error(line, f"accum {name}: {action[0]} needs a dir cell")
+        obj = Obj(oid, "accum", "", locs, (), reactions, fires)
+        return obj, {event: [step, targets[event]] for event in reactions}
+
     def bind_owner(self, item, oid, scope) -> Tuple[Obj, Asts]:
         """``owner name: cell { id e; none e; on ev claim|release [when e]; }``."""
         _tag, line, name, cell, clauses = item
@@ -254,22 +293,46 @@ class ObjectLowering:
         self.error(line, "a condition tests one of the row's bytes c0, c1, ...")
         return None
 
+    def row_targets(self, clauses, count: Optional[str], values) -> List[str]:
+        """The value cells a cursor's rows assign: the declared ``values``, then each other
+        cell they name in order (the count cell is not one)."""
+        names = list(values)
+        for clause in clauses:
+            if clause[0] != "w_row":
+                continue
+            act = clause[5]
+            found = [w[0] for w in clause[6]]
+            if act[0] == "set":
+                found += [w[0] for w in act[2]]
+            elif act[0] == "sweep":
+                found += [
+                    w[2][2] for w in act[2] if w[0] == "into" and w[2][0] == "name"
+                ]
+            names += [n for n in found if n != count and n not in names]
+        return names
+
     def bind_walker(self, item, oid, scope) -> Tuple[Obj, Asts]:
-        """A walker: table, position and sweep counter cells, values, reactions, rows."""
+        """A ``walker`` or ``cursor { ... }``: table, position and counter cells, rows."""
         _tag, line, name, clauses = item
         by_tag: Dict[str, list] = {}
         for clause in clauses:
             by_tag.setdefault(clause[0], []).append(clause)
-        for need in ("w_table", "w_pos", "w_count", "w_values"):
+        for need in ("w_table", "w_pos"):
             if len(by_tag.get(need, ())) != 1:
-                self.error(line, f"walker {name} needs exactly one {need[2:]} clause")
-                return Obj(oid, "walker", "", {}, (1, 1, ()), {}), {}
+                self.error(line, f"cursor {name} needs exactly one {need[2:]} clause")
+                return Obj(oid, "cursor", "", {}, (0, 1, 1, ()), {}), {}
         _t, tline, bases, width = by_tag["w_table"][0]
-        names = by_tag["w_values"][0][2]
-        locs = {
-            "pos": self.object_cell(by_tag["w_pos"][0][2], line, scope),
-            "cnt": self.object_cell(by_tag["w_count"][0][2], line, scope, 1),
-        }
+        count = by_tag["w_count"][0][2] if "w_count" in by_tag else None
+        declared = by_tag["w_values"][0][2] if "w_values" in by_tag else []
+        names = self.row_targets(clauses, count, declared)
+        locs = {"pos": self.object_cell(by_tag["w_pos"][0][2], line, scope)}
+        for role, tag, wide in (
+            ("cnt", "w_count", 1),
+            ("run", "w_run", 1),
+            ("ret", "w_ret", 2),
+        ):
+            if tag in by_tag:
+                locs[role] = self.object_cell(by_tag[tag][0][2], line, scope, wide)
         for i, value in enumerate(names):
             locs[f"v{i}"] = self.object_cell(value, line, scope)
         step = None if width is None else self.static(width, scope, tline)
@@ -277,42 +340,74 @@ class ObjectLowering:
         if len(bases) == 1 and columns > 1:
             bases = [("+", tline, bases[0], const(j, 0)) for j in range(columns)]
         cols = {f"c{j}": j for j in range(columns)}
-        targets = [*names, by_tag["w_count"][0][2]]
+        targets = [*names, count]
         rows = tuple(
             row
             for c in by_tag.get("w_row", ())
-            if (row := self.walker_row(c, targets, cols, scope)) is not None
+            if (row := self.cursor_row(c, targets, cols, columns, step or 1, scope))
+            is not None
         )
         reactions: dict = {}
         for _t, cline, event, action in by_tag.get("w_on", ()):
             self.reaction(name, event, cline, reactions, (action,))
+        fires = by_tag["c_wrap"][0][4] if "c_wrap" in by_tag else None
+        adv = 0
+        if "w_adv" in by_tag:
+            adv = 1 + any(a == ("settle",) for a in reactions.values())
+            adv = adv if by_tag["w_adv"][0][2] == "pre" else 0
+        elif any(a == ("settle",) for a in reactions.values()):
+            self.error(line, f"cursor {name}: settle needs `advance pre`")
+        for event, action in reactions.items():
+            if fires and action[0] == "step" and not self.below(fires, event):
+                self.error(line, f"{name} fires {fires}, which is not below {event}")
+                fires = None
         start = by_tag["w_start"][0][2] if "w_start" in by_tag else const(0, 8)
-        self.check_walker(name, line, locs, columns, rows)
-        spec = (step or 1, columns, rows)
-        obj = Obj(oid, "walker", "", locs, spec, reactions)
+        spec = (adv, step or 1, columns, rows)
+        self.check_cursor(name, line, locs, spec)
+        obj = Obj(oid, "cursor", "", locs, spec, reactions, fires)
         return obj, dict.fromkeys(reactions, [*bases, start])
 
-    def check_walker(
-        self, name: str, line: int, locs: dict, columns: int, rows
-    ) -> None:
-        """Diagnose rows that name a high byte or fraction their value lacks."""
+    def check_cursor(self, name: str, line: int, locs: dict, spec: tuple) -> None:
+        """Diagnose rows that name a cell, a high byte or a fraction the cursor lacks."""
+        adv, _width, columns, rows = spec
         if not 0 < columns <= MAX_BYTES:
-            self.error(line, f"walker {name} reads 1..{MAX_BYTES} columns")
-        for _lo, _hi, action in rows:
-            sets = ()
-            if action[0] in ("sweep", "delay", "set"):
-                sets = (*action[-1], *(action[1] if action[0] == "set" else ()))
-            for index, part, _xf, _guard in sets:
-                if index < len(locs) - 2 and part == 2 and len(locs[f"v{index}"]) < 2:
-                    self.error(line, f"walker {name}: value {index} has no high byte")
-            if action[0] == "sweep":
+            self.error(line, f"cursor {name} reads 1..{MAX_BYTES} columns")
+        count = sum(k.startswith("v") for k in locs)
+        for _lo, _hi, tests, action in rows:
+            kind = action[0]
+            need = {"run": "run", "call": "ret", "return": "ret"}.get(kind)
+            if kind in ("sweep", "delay"):
+                need = "cnt"
+                if adv:
+                    self.error(
+                        line, f"cursor {name}: hold and sweep need `advance post`"
+                    )
+            if need and need not in locs:
+                self.error(line, f"cursor {name}: a {kind} row needs a {need} cell")
+            if any(t[0] >= columns for t in tests):
+                self.error(line, f"cursor {name}: a test names a column it lacks")
+            for index, part, _xf, _guard in row_sets(action):
+                if index < count and part == 2 and len(locs[f"v{index}"]) < 2:
+                    self.error(line, f"cursor {name}: value {index} has no high byte")
+            if kind == "sweep":
                 frac, wide = action[4], len(locs[f"v{action[1]}"]) == 2
                 if frac and not (wide and 0 < frac <= 24):
-                    self.error(line, f"walker {name}: frac needs a word and 1..24")
+                    self.error(line, f"cursor {name}: frac needs a word and 1..24")
 
-    def walker_row(self, clause, names, cols, scope) -> tuple:
-        """``(lo, hi, action)`` of a ``row`` clause."""
-        _t, line, lo, hi, cond, act, then = clause
+    def tests(self, node, cols, scope, line: int) -> tuple:
+        """The conjunction of row-byte tests ``node`` states: ``a && b && ...``."""
+        if node is None:
+            return ()
+        if node[0] == "&&":
+            return self.tests(node[2], cols, scope, line) + self.tests(
+                node[3], cols, scope, line
+            )
+        found = self.guard(node, cols, scope, line)
+        return () if found is None else (found,)
+
+    def cursor_row(self, clause, names, cols, columns, width, scope) -> Optional[tuple]:
+        """``(lo, hi, tests, action)`` of a ``row`` clause or ``match`` arm."""
+        _t, line, lo, hi, cond, act, then, when = clause
         if cond is not None and self.static(cond, scope, line) == 0:
             return None
         low = self.static(lo, scope, line) or 0
@@ -320,11 +415,15 @@ class ObjectLowering:
         after = self.assigns(then, names, cols, scope, line)
         kind = act[0]
         args = {a[0]: a[2] for a in act[2]} if kind in ("sweep", "delay") else {}
+        take = width
+        wanted = act[-1] if kind == "end" else act[3] if len(act) > 3 else None
+        if kind in ("set", "end") and wanted is not None:
+            take = self.static(wanted, scope, line) or 1
         if kind == "sweep":
             into = args.get("into")
             if not {"into", "count", "step"} <= set(args) or into[0] != "name":
                 self.error(line, "sweep(into=, count=, step=[, frac=])")
-                return (low, high, ("stop",))
+                return (low, high, (), ("stop",))
             index = names.index(into[2]) if into[2] in names[:-1] else 0
             frac = self.static(args["frac"], scope, line) if "frac" in args else 0
             count, delta = (
@@ -334,16 +433,28 @@ class ObjectLowering:
         elif kind == "delay":
             action = ("delay", self.xform(act[2][0][2], cols, scope, line), after)
         elif kind == "set":
-            action = ("set", self.assigns(act[2], names, cols, scope, line), after)
+            sets = self.assigns(act[2], names, cols, scope, line)
+            action = ("set", sets, take, after)
+        elif kind == "end":
+            action = ("end", take, after)
         elif kind == "jump":
             hold = None
             if act[3][0] is not None:
                 hold = tuple(self.static(x, scope, line) or 0 for x in act[3])
             via = None if act[4] is None else self.static(act[4], scope, line) or 0
             action = ("jump", self.xform(act[2], cols, scope, line), hold, via)
+        elif kind == "call_row":
+            action = ("call", self.xform(act[2], cols, scope, line))
+        elif kind == "return_row":
+            action = ("return",)
+        elif kind == "run_row":
+            base = self.static(act[2], scope, line) or 0
+            if base > low:
+                self.error(line, "a run's base is above its range")
+            action = ("run", base, after)
         else:
             action = ("stop",)
-        return (low, high, action)
+        return (low, high, self.tests(when, cols, scope, line), action)
 
     def condition(self, node, prev: str, scope, line: int):
         """``(mask, value, equal)``: the next field is there when ``(byte & mask) ==
@@ -371,17 +482,20 @@ class ObjectLowering:
         return None
 
     def bind_cursor(self, item, oid, scope) -> Tuple[Obj, Asts]:
-        """A cursor over the stream ``base @ pos``: reactions, run marker and fields."""
+        """A ``cursor name @ base pos cell``: fields chained by their conditions are the
+        arms of a cursor whose rows are the bytes read."""
         _tag, line, name, base, pos, last, grammar, clauses = item
         locs = {"pos": self.object_cell(pos, line, scope, 1)}
         reactions: dict = {}
         run = None
         fields: list = []
         names: List[str] = []
+        nvals = 0
         for clause in clauses:
             tag, cline = clause[0], clause[1]
             if tag == "k_on":
-                self.reaction(name, clause[2], cline, reactions, (clause[3],))
+                action = "step" if clause[3] == "next" else clause[3]
+                self.reaction(name, clause[2], cline, reactions, (action,))
             elif tag == "k_run":
                 locs["run"] = self.object_cell(clause[5], cline, scope, 1)
                 run = tuple(self.static(x, scope, cline) or 0 for x in clause[2:5])
@@ -393,36 +507,42 @@ class ObjectLowering:
                     if not names:
                         self.error(cline, "the first field is always there")
                     cond = got or cond
-                stores = []
-                for j, (out, expr, test) in enumerate(outs):
-                    locs[f"o{len(fields)}_{j}"] = self.object_cell(out, cline, scope)
-                    spec = self.xform(expr, {field: 0}, scope, cline) or (0, 0xFF, 0, 0)
+                mine = []
+                for out, expr, test in outs:
+                    locs[f"v{nvals}"] = self.object_cell(out, cline, scope)
+                    spec = self.xform(expr, {field: len(fields)}, scope, cline)
                     where = (0, 0, True)
                     if test is not None:
                         where = self.condition(test, field, scope, cline) or where
-                    stores.append((*spec[1:], where))
-                fields.append((cond, tuple(stores)))
+                    guard = None if where == (0, 0, True) else (len(fields), *where)
+                    mine.append((nvals, 0, spec or (0, 0xFF, 0, 0), guard))
+                    nvals += 1
+                fields.append((cond, tuple(mine)))
                 names.append(field)
-        if not 0 < len(fields) <= MAX_BYTES:
+        width = len(fields)
+        if not 0 < width <= MAX_BYTES:
             self.error(line, f"cursor {name} has 1..{MAX_BYTES} fields")
         if run and run[0] < run[2]:
             self.error(line, f"cursor {name}: a run's base is above its range")
+        rows = []
+        if run is not None:
+            rows.append((run[0], run[1], (), ("run", run[2], fields[0][1])))
+        for n in range(1, width + 1):
+            tests = [(k - 1, *fields[k][0]) for k in range(1, n)]
+            if n < width:
+                _m, _v, equal = fields[n][0]
+                tests.append((n - 1, fields[n][0][0], fields[n][0][1], not equal))
+            sets = tuple(s for _c, mine in fields[:n] for s in mine)
+            rows.append((0, 255, tuple(tests), ("set", sets, n, ())))
+        spec = (2 if last else 0, 1, width, tuple(rows))
         chosen = self.select_grammar(grammar, scope, line) if grammar else None
         index = None
         if chosen is not None:
             self.grammars.append((chosen, line))
             index = len(self.grammars) - 1
-        obj = Obj(
-            oid,
-            "cursor",
-            "",
-            locs,
-            (run, tuple(fields), bool(last)),
-            reactions,
-            None,
-            index,
-        )
-        return obj, dict.fromkeys(reactions, [base, const(0, 8)])
+        obj = Obj(oid, "cursor", "", locs, spec, reactions, None, index)
+        bases = [("+", line, base, const(j, 0)) for j in range(width)]
+        return obj, dict.fromkeys(reactions, [*bases, const(0, 8)])
 
     def visible_objects(self) -> list:
         """What a firing reaches: the shared objects and handlers, then the current
@@ -463,10 +583,9 @@ class ObjectLowering:
         locs = [a for loc in obj.locs.values() for a in loc if a is not None]
         reads = [(a, a) for a in locs]
         windows, extra = 0, 0
-        if obj.kind == "walker":
-            windows, extra = obj.spec[1], 0xFF + obj.spec[0]
-        elif obj.kind == "cursor":
-            windows, extra = 1, 0xFF + len(obj.spec[1])
+        if obj.kind == "cursor":
+            room = 0xFF if len(obj.locs["pos"]) == 1 else TOP
+            windows, extra = obj.spec[2], room + obj.spec[1]
         dyn = []
         for index, base in enumerate(ops[:windows]):
             if isinstance(base, K) and base.v is not None and base.v + extra <= TOP:
@@ -485,7 +604,7 @@ class ObjectLowering:
                 tuple(dyn),
             )
         ]
-        if obj.grammar is not None and obj.reactions[event] == ("next",):
+        if obj.grammar is not None and obj.reactions[event] == ("step",):
             return [("hook", obj.grammar, ops[0])] + step
         return step
 
@@ -528,7 +647,7 @@ class ObjectLowering:
         if obj is None or event not in obj.reactions:
             self.error(line, f"no object {name!r} reacting to {event!r}")
             return []
-        if not args and obj.kind in ("walker", "cursor"):
+        if not args and obj.kind == "cursor":
             ops = self.operands(obj, event, scope, line)
         elif len(args) != obj.arity():
             self.error(line, f"react {name} on {event} takes {obj.arity()} operands")
@@ -561,7 +680,7 @@ class ObjectLowering:
             base = next(iter(self.asts[obj.name].values()))[0]
             start = self.coerce(self.expr(self.given(base), type(scope)()), 16, line)
             pos = mk(
-                "add", 8, self.rd(K(obj.locs["pos"][0], 16)), K(int(obj.spec[2]), 8)
+                "add", 8, self.rd(K(obj.locs["pos"][0], 16)), K(int(obj.spec[0] > 0), 8)
             )
             return self.rd(add16(start, pos))
         self.error(line, f"cursor {name} has ahead and idle")
