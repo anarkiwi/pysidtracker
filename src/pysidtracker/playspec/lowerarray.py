@@ -97,6 +97,12 @@ class ArrayLowering:
             return None
         return found
 
+    def check_start(self, arr, start, line: int) -> None:
+        """Diagnose a stream that starts past the items of its array."""
+        if isinstance(start, K) and start.v is not None and arr[5] is not None:
+            if start.v > arr[5]:
+                self.error(line, f"stream starts at {start.v}, past the {arr[5]} items")
+
     def array_read(self, arr, index, line: int):
         """``arr[index]``."""
         _kind, key, w, ro, payload, n = arr

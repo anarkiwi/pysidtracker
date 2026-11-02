@@ -94,6 +94,8 @@ schedule {
   - `name: stmt` labels a statement and `{ ... }` groups statements without opening a scope; both are places a [variant](#variants) can `patch`.
   - `finish;` ends the whole play call: the rest of the schedule is skipped and the player returns to its caller.
   - `stream s = base @ cursor [grammar "mod:attr:rule" [if cond] {, "mod:attr:rule" [if cond]}]`: the first rule whose static `cond` (e.g. `L.extended`) holds, an arm without `if` always holding, so a layout can pick the rule per build; read with `let v = next s;`, `s[k]` (relative to the cursor) and `s.pos`.
+  - `stream s in rows = start @ cursor [grammar ...]` reads the `ro` byte [array state](#array-states)
+    `rows` from index `start` (16-bit) in place of memory; the cursor, `next`, `s[k]` and `s.pos` are unchanged.
 - **Arithmetic:**
   - Exact 8/16-bit wraparound. Untyped literals take the other operand's width; u8 widens to u16 implicitly.
   - Narrowing is a width error (use `lo()`/`hi()`).
@@ -131,7 +133,8 @@ C64. An indexed cell `t[i]` is `mem[base + zext(i)]` with 16-bit wrap; stream
 cursors and `zp()` wrap at 8 bits. Streams read live memory, so the grammar named
 on a stream is a static view only: `SpecPlayer(..., validate=True)` parses each
 opened stream with that `ByteGrammar` and reports malformed data in
-`player.validator.failures()`.
+`player.validator.failures()`. A stream over an array is parsed from its items, keyed
+`("mod:attr:rule in rows", start)`; a tail the array cuts short does not parse.
 
 ### Static checks
 
@@ -241,7 +244,12 @@ cursor name {
   column (`table lo, hi;`). Every `cursor.cN` read, `jump` and `hold` check reads the array too. A
   read past its items is a `SpecRuntimeError`, so the binder ends the list with the `width - 1`
   bytes a last row's decode reads. `start` and the `react` operands are indexes, so
-  `start first[inst]` starts each instrument at its own row. A `stream` cursor reads memory only.
+  `start first[inst]` starts each instrument at its own row.
+- **Stream arrays.** `stream in rows @ start [grammar ...];` reads the `ro` byte array `rows` in
+  place of memory: the stream's byte `k` is item `start + k`, `start` an index (any expression a
+  `stream @ base` takes, e.g. `first[curptn]`). Fields, runs, `next`, `last` and `grammar` behave as
+  over memory. A row's decode reads as many bytes as the cursor has fields, so a read past the
+  items is a `SpecRuntimeError`, so the binder pads each slice by one byte less than the cursor has fields.
 - **Steps.** A step decodes at most 256 rows (`SpecRuntimeError` after that). The flag is the
   carry a `-> flag` reaction receives: the carry of the sweep addition (0 with `frac`), 1 at the
   end of a `hold` or `sweep`, at a `stop` and an `end`, a `jump`'s `target >= pos`, else 0.
@@ -324,6 +332,9 @@ the table), a `u16` array a table of tables, an index choosing the sub-table: `p
 table is syntax over `mem[...]`. `table name in rows stride n { ... }` reads the `ro` byte array
 state `rows` instead: `name[i].f` is item `i * n + offset of f` of the array (little-endian for a
 `u16` field), a read-only table with no base address; see [array states](#array-states).
+`table name in rows via start stride n { ... }` adds a start index held in data: `name[i].f` is item
+`start + i * n + offset of f`, `start` a `u8`/`u16` state or cell (a per-voice orderlist is a state
+of each voice), or a `u8`/`u16` array of start indexes, `name[p][i].f`.
 
 Words that start a declaration (`counter`, `owner`, `accum`, `cursor`, `event`, `fire`, `handler`,
 `latch`, `output`, `record`, `signal`, `state`, `stream`, `table`, `view`, `control`) and `match` are
@@ -371,8 +382,9 @@ encoding stays in the spec. Jagged data is a flat array plus a list of start ind
 - **`ro`.** The array is constant data: a store is an error and the lowered program reads it
   through one constant table (`lut`), so `outorder.reorder` and `outproof` treat a read as a pure
   function of its index. It is the qualifier `cell` already uses for song tables, trailing the
-  type as it trails a cell's place. `table ... in rows`, `view ... in rows @ i` and
-  `cursor { table rows ... }` read a `ro` byte array in place of memory.
+  type as it trails a cell's place. `table ... in rows [via start]`, `view ... in rows @ i`,
+  `stream s in rows = start @ cursor` and `cursor { table rows ...` or `stream in rows @ start ... }`
+  read a `ro` byte array in place of memory.
 - **Mutable.** Without `ro` the array is spec-owned state, like a scalar `state`: `n` hidden
   variables kept from call to call (one set per machine instance), stored with `rows[i] := e`
   (and `+=`...) and read with `rows[i]`. A read is one `aget` over the elements, which keeps every
@@ -390,6 +402,11 @@ encoding stays in the spec. Jagged data is a flat array plus a list of start ind
   their table in place of memory; no program with arrays falls back to Python. `emit` writes a
   `ro` array as `state tab: u8[] ro = [...]` and a mutable one as `state a: u8[n] = [...]`, so
   emitted text elaborates to the same program (`emit.isomorphic`).
+
+`examples/arrays/pattern-stream.play` lays every pattern end to end in one list, starts a stream
+cursor at `pattern_first[curptn]` and reads each voice's orderlist with `table orderlist in
+order_bytes via seqt`; `tests/test_playspec_stream_arrays.py` checks it against the same spec with
+the patterns and orderlist in memory.
 
 `examples/arrays/instrument-rows.play` lays every instrument's pulse rows end to end and starts a
 `cursor` at `first[inst]`; `tests/test_playspec_arrays.py` checks it against the cursor over the

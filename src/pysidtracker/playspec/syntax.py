@@ -314,6 +314,13 @@ class _ToAst(Transformer):
     def k_stream(self, meta, c):
         return self._n("k_stream", meta, c[0], [g for g in c[1:] if g is not None])
 
+    def k_at(self, meta, c):
+        del meta
+        return c[0]
+
+    def k_in(self, meta, c):
+        return self._n("in", meta, str(c[0]), c[1])
+
     def u_ret(self, meta, c):
         return self._n("w_ret", meta, str(c[0]))
 
@@ -413,7 +420,7 @@ class _ToAst(Transformer):
     def table(self, meta, c):
         kind, ref = c[1][0], c[1][2]
         base = ref if kind == "t_at" else None
-        via = ref if kind == "t_via" else None
+        via = ref if kind == "t_via" else c[1][3] if kind == "t_in" else None
         within = ref if kind == "t_in" else None
         return self._n(
             "table", meta, str(c[0]), base, via, c[2], c[3], list(c[4:]), within
@@ -441,7 +448,7 @@ class _ToAst(Transformer):
         return self._n("t_at", meta, c[0])
 
     def t_in(self, meta, c):
-        return self._n("t_in", meta, str(c[0]))
+        return self._n("t_in", meta, str(c[0]), c[1] and str(c[1]))
 
     def t_via(self, meta, c):
         return self._n("t_via", meta, str(c[0]))
@@ -692,7 +699,14 @@ class _ToAst(Transformer):
         return str(c[0]), c[1]
 
     def stream(self, meta, c):
-        return self._n("stream", meta, str(c[0]), c[1], c[2], c[3:])
+        return self._n("stream", meta, str(c[0]), *c[1], c[2:])
+
+    def s_at(self, meta, c):
+        del meta
+        return c[0], c[1]
+
+    def s_in(self, meta, c):
+        return self._n("in", meta, str(c[0]), c[1]), c[2]
 
     def native(self, meta, c):
         args = [a for a in c[1:-1] if a is not None]

@@ -520,6 +520,12 @@ class ObjectLowering:
         """A ``cursor name { stream @ base; pos cell; ... }``: fields chained by their conditions are the
         arms of a cursor whose rows are the bytes read."""
         _tag, line, name, base, pos, last, grammar, clauses = item
+        arr = None
+        if base[0] == "in":
+            arr = self.array_ref(base[2], scope, line, ro=True)
+            if arr is None:
+                return Obj(oid, "cursor", "", {}, (0, 1, 1, ()), {}), {}
+            base = base[3]
         locs = {"pos": self.object_cell(pos, line, scope, 1)}
         reactions: dict = {}
         run = None
@@ -570,12 +576,12 @@ class ObjectLowering:
             sets = tuple(s for _c, mine in fields[:n] for s in mine)
             rows.append((0, 255, tuple(tests), ("set", sets, n, ())))
         spec = (2 if last else 0, 1, width, tuple(rows))
+        tabs = () if arr is None else (arr[4] or (),) * width
         chosen = self.select_grammar(grammar, scope, line) if grammar else None
         index = None
         if chosen is not None:
-            self.grammars.append((chosen, line))
-            index = len(self.grammars) - 1
-        obj = Obj(oid, "cursor", "", locs, spec, reactions, None, index)
+            index = self.add_grammar(chosen, line, arr)
+        obj = Obj(oid, "cursor", "", locs, spec, reactions, None, index, tabs=tabs)
         bases = [("+", line, base, const(j, 0)) for j in range(width)]
         return obj, dict.fromkeys(reactions, [*bases, const(0, 8)])
 

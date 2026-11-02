@@ -134,13 +134,16 @@ class ViewLowering:
             self.table_fields[name] = placed
             if name in self.shared:
                 self.error(line, f"table {name} is already a cell")
-            if [base, via, within].count(None) != 2:
-                self.error(line, f"table {name}: `@ base`, `via pointer` or `in array`")
+            if (base is None) == (via is None and within is None):
+                self.error(
+                    line,
+                    f"table {name}: `@ base`, `via pointer` or `in array [via start]`",
+                )
 
     def table_ref(self, name: str, picks, field: str, scope, line: int):
         """``(address, type)`` of ``name[picks...].field``: the row index last, a pointer
         table's sub-table index first."""
-        _tag, _l, _name, base, via, stride, offset, _fields, _within = self.tables[name]
+        _tag, _l, _name, base, via, stride, offset, _fields, within = self.tables[name]
         where = self.table_fields[name].get(field)
         if where is None:
             self.error(line, f"table {name} has no field {field!r}")
@@ -152,20 +155,28 @@ class ViewLowering:
         elif via is not None:
             found = self.lookup(via, scope)
             cell = self.in_proc(found[1]) if found and found[0] == "cell" else None
+            kinds = ("u8", "u16", "ptr") if within else ("u16", "ptr")
             if (
                 found
                 and found[0] == "var"
                 and found[1] in self.state_widths
-                and found[2] == 16
+                and found[2] in ((8, 16) if within else (16,))
             ):
-                start = V(found[1], 16)
-            elif cell is None or cell.typ not in ("u16", "ptr"):
+                start = self.coerce(V(found[1], found[2]), 16, line)
+            elif found and found[0] == "array" and within:
+                wanted = 2
+                start = (
+                    self.coerce(self.array_read(found, picks[0], line), 16, line)
+                    if len(picks) == wanted
+                    else start
+                )
+            elif cell is None or cell.typ not in kinds:
                 self.error(line, f"table {name}: {via} is not a u16 cell")
             else:
                 wanted = 1 + (cell.length is not None)
                 select = picks[0] if cell.length is not None else None
                 start = (
-                    self.read_cell(cell, select, line)
+                    self.coerce(self.read_cell(cell, select, line), 16, line)
                     if len(picks) == wanted
                     else start
                 )

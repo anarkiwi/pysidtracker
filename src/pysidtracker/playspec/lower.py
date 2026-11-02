@@ -57,8 +57,9 @@ CPU_INPUTS = {"a": 8, "x": 8, "y": 8, **dict.fromkeys("czvndi", 1)}
 
 
 class Scope:
-    """Local names of one inlined body: ``name -> ("var", ir, w) | ("stream", base, pos)
-    | ("static", K)``."""
+    """Local names of one inlined body: ``name -> ("var", ir, w) | ("stream", base, pos, array)
+    | ("static", K)``; ``array`` is the ``ro`` array binding a stream reads, None for memory.
+    """
 
     def __init__(self, names=None):
         self.names: Dict[str, tuple] = dict(names or {})
@@ -109,6 +110,7 @@ class Lowerer(ViewLowering, ObjectLowering, ArrayLowering):
         self.arrays: Dict[str, Tuple[str, ...]] = {}
         self.state_widths: Dict[str, int] = {}
         self.grammars: List[Tuple[str, int]] = []
+        self.grammar_arrays: Dict[int, Tuple[str, tuple]] = {}
         self.ran: set = set()
         self.writers: Dict[str, set] = {}
         self.order: List[str] = []
@@ -806,7 +808,7 @@ class Lowerer(ViewLowering, ObjectLowering, ArrayLowering):
         if found is not None and found[0] == "stream":
             offset = self.coerce(index, 8, line)
             pos = mk("add", 8, V(found[2], 8), offset)
-            return self.rd(add16(V(found[1], 16), pos))
+            return self.stream_read(found, add16(V(found[1], 16), pos), line)
         if found is not None and found[0] == "cell":
             return self.read_cell(found[1], index, line)
         if found is not None and found[0] == "array":
@@ -1189,22 +1191,28 @@ class Lowerer(ViewLowering, ObjectLowering, ArrayLowering):
         return pre + [("set", ir, value)]
 
     def stream_of(self, name: str, scope: Scope, line: int):
-        """The ``(base, pos)`` IR names of stream ``name``."""
+        """The scope entry of stream ``name``."""
         found = scope.names.get(name)
         if found is None or found[0] != "stream":
             self.error(line, f"{name} is not a stream")
             return None
-        return found[1], found[2]
+        return found
+
+    def stream_read(self, stream, at, line: int):
+        """The byte at address (or array index) ``at`` of ``stream``."""
+        if stream[3] is None:
+            return self.rd(at)
+        return self.array_read(stream[3], at, line)
 
     def next_byte(self, name: str, scope: Scope, line: int):
         """``(value, statements)`` of ``next name``: read at the cursor, then advance."""
         stream = self.stream_of(name, scope, line)
         if stream is None:
             return K(None, 8), []
-        base, pos = stream
+        _kind, base, pos, _array = stream
         tmp = self.fresh("nx")
         return V(tmp, 8), [
-            ("set", tmp, self.rd(add16(V(base, 16), V(pos, 8)))),
+            ("set", tmp, self.stream_read(stream, add16(V(base, 16), V(pos, 8)), line)),
             ("set", pos, mk("add", 8, V(pos, 8), K(1, 8))),
         ]
 
@@ -1290,15 +1298,20 @@ class Lowerer(ViewLowering, ObjectLowering, ArrayLowering):
     def st_stream(self, node, scope):
         """``stream s = base @ cursor [grammar "..."]``."""
         _tag, line, name, base, pos, grammar = node
+        arr = None
+        if base[0] == "in":
+            arr = self.array_ref(base[2], scope, line, ro=True)
+            base = base[3]
         base_v = self.coerce(self.expr(base, scope), 16, line)
+        if arr is not None:
+            self.check_start(arr, base_v, line)
         pos_v = self.coerce(self.expr(pos, scope), 8, line)
         b, p = self.fresh(f"{name}_base"), self.fresh(f"{name}_pos")
-        scope.names[name] = ("stream", b, p)
+        scope.names[name] = ("stream", b, p, arr)
         out = [("set", b, base_v), ("set", p, pos_v)]
         chosen = self.select_grammar(grammar, scope, line)
         if chosen is not None:
-            self.grammars.append((chosen, line))
-            out.append(("hook", len(self.grammars) - 1, V(b, 16)))
+            out.append(("hook", self.add_grammar(chosen, line, arr), V(b, 16)))
         return out
 
     def st_native(self, node, scope):
@@ -1321,6 +1334,13 @@ class Lowerer(ViewLowering, ObjectLowering, ArrayLowering):
         """``finish``: the play call ends here (the rest of the schedule is skipped)."""
         del node, scope
         return [*self.flush(), ("finish",)]
+
+    def add_grammar(self, ref: str, line: int, arr=None) -> int:
+        """The index of grammar ``ref`` in :attr:`grammars`; ``arr`` is the array it parses."""
+        self.grammars.append((ref, line))
+        if arr is not None:
+            self.grammar_arrays[len(self.grammars) - 1] = (arr[1], arr[4] or ())
+        return len(self.grammars) - 1
 
     def select_grammar(self, alts, scope, line: int) -> Optional[str]:
         """The rule of the first ``"ref" if cond`` arm that holds (an arm with no
@@ -1695,6 +1715,7 @@ def elaborate(
         invariants=invariants,
         assumes=assumes,
         grammars=low.grammars,
+        grammar_arrays=low.grammar_arrays,
         notes=notes,
         order=low.order,
         inputs=low.inputs,
