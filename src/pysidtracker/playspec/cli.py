@@ -15,6 +15,7 @@ from ..image import SidImage
 from ..jobs import imap
 from ..snapshot import load_spec
 from ..source import read_bytes
+from . import complexity
 from .lower import elaborate
 from .outorder import ORDER, survey
 from .player import SpecPlayer
@@ -188,9 +189,30 @@ def _emit(report: dict, out: Path) -> None:
         path.write_text(text)
 
 
+def _complexity(args) -> None:
+    analysis = complexity.analyse(load(args.spec), args.shape, args.min_nodes)
+    tunes = [str(Path(args.root or "", t)) for t in _tunes(args.tunes)]
+    corpus = (
+        complexity.cover(args.spec, tunes, args.frames, args.jobs) if tunes else None
+    )
+    table = complexity.report(analysis, corpus, args.rare)
+    for line in complexity.render(analysis, table, args.top):
+        print(line)
+    if args.diff:
+        old = complexity.report(
+            complexity.analyse(load(args.diff), args.shape, args.min_nodes)
+        )
+        table["delta"] = complexity.delta(old, table)
+        print(f"\nagainst {args.diff}")
+        for name, (was, now) in table["delta"]["totals"].items():
+            print(f"{name:20s} {was} -> {now}")
+    if args.out:
+        Path(args.out).write_text(json.dumps(table, indent=1))
+
+
 def add_playspec_commands(parser) -> None:
-    """Add the ``check``/``python``/``run``/``bmc``/``tv``/``unnative``/``reorder``
-    subcommands."""
+    """Add the ``check``/``python``/``run``/``bmc``/``tv``/``unnative``/``reorder``/
+    ``complexity`` subcommands."""
     sub = parser.add_subparsers(dest="playspec_command", required=True)
     cmd = sub.add_parser(
         "reorder", help="play tunes with their specs rescheduled to a write order"
@@ -212,6 +234,21 @@ def add_playspec_commands(parser) -> None:
         "--proof-jobs", type=int, default=1, help="processes per call's proof"
     )
     cmd.set_defaults(func=_reorder)
+    cmd = sub.add_parser(
+        "complexity", help="where a spec's complexity is, optionally over tunes"
+    )
+    cmd.add_argument("spec", help=".play file")
+    cmd.add_argument("tunes", nargs="*", help=".sid files, or .csv with a path column")
+    cmd.add_argument("--root", help="directory relative tune paths are under")
+    cmd.add_argument("--frames", type=int, default=1500)
+    cmd.add_argument("--jobs", type=int, default=None)
+    cmd.add_argument("--shape", action="store_true", help="clones modulo state names")
+    cmd.add_argument("--min-nodes", type=int, default=8, help="smallest clone")
+    cmd.add_argument("--rare", type=int, default=3, help="tunes a rare statement has")
+    cmd.add_argument("--top", type=int, default=15, help="rows per section")
+    cmd.add_argument("--diff", help="an older .play to compare totals against")
+    cmd.add_argument("--out", help="JSON report")
+    cmd.set_defaults(func=_complexity)
 
     def spec_cmd(name, func, text, binding=True):
         cmd = sub.add_parser(name, help=text)

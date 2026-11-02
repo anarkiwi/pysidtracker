@@ -7,7 +7,7 @@ are inlined (returns become guard flags) and static choices fold.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..notes import PARTS
 from .check import unread
@@ -87,6 +87,8 @@ class Lowerer(ViewLowering, ObjectLowering):
     """One elaboration of a :class:`Spec` (see :func:`elaborate`)."""
 
     # pylint: disable=too-many-public-methods,too-many-instance-attributes
+
+    probe: Optional[Callable[["Lowerer", tuple, list], list]] = None
 
     def __init__(
         self, spec: Spec, binding: Optional[dict], standard: Optional[int] = None
@@ -1053,9 +1055,10 @@ class Lowerer(ViewLowering, ObjectLowering):
         return out
 
     def stmt(self, node, scope: Scope) -> list:
-        """Lower one statement."""
-        handler = getattr(self, f"st_{node[0]}")
-        return handler(node, scope)
+        """Lower one statement (passed through :attr:`probe`, ``probe(self, node, out)``,
+        when set)."""
+        out = getattr(self, f"st_{node[0]}")(node, scope)
+        return out if self.probe is None else self.probe(node, out)
 
     def st_assign(self, node, scope):
         """``lval op= expr``."""
