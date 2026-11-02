@@ -38,6 +38,8 @@ differs and no refusal changes. Record once from the starting spec; never move t
 | 11 | a CPU flag passed between routines as parameters and returns | one per-instance signal the routines set and read | the routines' order is the player's |
 | 12 | stores of one SID register's bytes, in either order or one of them | one assignment to the register's cell at its width | the gate; only the gate and TEST edges are order-sensitive |
 
+| 13 | a spec covering several builds through `flag` layout fields | `tools/spec_specialise.py SPEC TUNE` fixes the flags the binder gives the tune, keeps the branches the build takes (`if`/`elif`, `ite`, arm and `then` guards, `&&`/`||`) and drops what nothing names any more (procs, cells, events, layout fields) | gated on the tunes of that build |
+
 ## Detecting the candidates
 
 - Rules 1 and 3: bind every corpus tune and compare the addresses the binder gives the names of
@@ -51,9 +53,6 @@ differs and no refusal changes. Record once from the starting spec; never move t
 
 ## What the rules do not reach
 
-- Build variants: a spec covering every release and build option keeps their differences as
-  flag branches (37% of the SID-Wizard spec's text). Splitting a base spec from variant specs
-  is a separate step.
 - Routine shape: the rules keep the player's control flow. Writing the spec from the format
   (data model, counters, events, decoders) and gating it against the transliterated spec is
   the step after them.

@@ -67,10 +67,11 @@ def audible(calls) -> list:
 def differs(want, have):
     """None if two traces agree, else where they first differ."""
     if isinstance(want, str) or isinstance(have, str):
+        if isinstance(want, str) == isinstance(have, str):
+            return None
         return (
-            None
-            if isinstance(want, str) == isinstance(have, str)
-            else ("refusal", want, have)
+            "refusal",
+            *(v if isinstance(v, str) else "plays" for v in (want, have)),
         )
     for call, (a, b) in enumerate(zip(audible(want), audible(have))):
         if a != b:
@@ -100,13 +101,11 @@ def main() -> int:
     with gzip.open(args.ref, "rb") as handle:
         ref = pickle.load(handle)
     bad = [
-        (p, d)
-        for p, want in ref.items()
-        if (d := differs(want, got.get(p))) is not None
+        (p, d) for p, have in got.items() if (d := differs(ref[p], have)) is not None
     ]
     for path, where in bad:
         print(Path(path).name, *where)
-    print("differ", len(bad), "of", len(ref))
+    print("differ", len(bad), "of", len(got))
     return len(bad)
 
 
