@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 from ..errors import SidError
 from . import smt
-from .emit import declared, emit, isomorphic
+from .emit import declared, emit, isomorphic, pruned
 from .ir import K, Op, Program, Rd, V, width
 from .lower import elaborate, mk
 from .syntax import parse
@@ -1477,7 +1477,7 @@ def compare(make, order, frames: int, base: int = SID, **options) -> Tuple:
         result.text = emit(result.program, f"{program.name}_ordered", base)
         back = elaborate(parse(result.text), {}, standard=program.standard)
         result.roundtrip = isomorphic(
-            result.program.body,
+            pruned(result.program).body,
             inline(back.body, back.procs),
             (result.program.objects, back.objects),
         )

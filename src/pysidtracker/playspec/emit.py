@@ -14,11 +14,16 @@ from dataclasses import replace
 
 from ..errors import SidError
 from . import emitobj
-from .ir import K, Obj, Op, Program, Rd, V, width
+from .ir import K, Obj, Op, Own, Program, Rd, V, width
 from .lower import mk
 from .lowerobj import EVENTS
 
-TYPES = {1: "bool", 8: "u8", 16: "u16"}
+
+def type_of(w: int) -> str:
+    """The source type of width ``w``."""
+    return "bool" if w == 1 else f"u{w}"
+
+
 INFIX = {
     "add": "+",
     "sub": "-",
@@ -223,7 +228,7 @@ def _stem(name: str, reg: Dict[int, str]) -> str:
     if name.startswith("cpu_"):
         return name
     stem = re.sub(r"_\d+$", "", name)
-    stem = re.sub(r"^(l|sig|a|r)_", "", stem)
+    stem = re.sub(r"^(l|sig|a|r|state|ctl)_", "", stem)
     return stem or "v"
 
 
@@ -250,6 +255,14 @@ class _Writer:
         self.objects = program.objects
         self.events = program.events
         self.named: Dict[str, str] = {}
+        self.controls = program.controls
+
+    def states(self) -> List[str]:
+        """The ``state`` declarations of the program's controls."""
+        return [
+            f"state {self.var(n)}: {type_of(w)} = {self.ex(K(d, w))};"
+            for n, w, d in self.controls
+        ]
 
     def declarations(self) -> List[str]:
         """The cells and declarations of the objects the body reacts."""
@@ -262,6 +275,9 @@ class _Writer:
             obj = self.objects[oid]
             cells = {}
             for role, loc in obj.locs.items():
+                if isinstance(loc[0], Own):
+                    cells[role] = self.var(loc[0].n)
+                    continue
                 cells[role] = self.fresh(f"{name}_{role}")
                 out.append(emitobj.cell(cells[role], loc))
             out += emitobj.declare(obj, cells, name) + [""]
@@ -339,7 +355,7 @@ class _Writer:
             if e.w == 1:
                 return "true" if e.v else "false"
             text = f"{e.v:#x}" if e.v > 9 else str(e.v)
-            return text if typed or e.w == 8 else f"u16({text})"
+            return text if typed or e.w == 8 else f"u{e.w}({text})"
         if isinstance(e, V):
             self.widths[e.n] = e.w
             return self.var(e.n)
@@ -395,7 +411,7 @@ class _Writer:
                 rhs = self.ex(s[2])
                 if id(s) in self.lets:
                     w = width(s[2])
-                    out.append(f"{pad}let {self.var(s[1])}: {TYPES[w]} = {rhs};")
+                    out.append(f"{pad}let {self.var(s[1])}: {type_of(w)} = {rhs};")
                 else:
                     out.append(f"{pad}{self.var(s[1])} := {rhs};")
             elif tag == "wr":
@@ -435,10 +451,13 @@ class _Writer:
         return out + [f"{pad}}}"]
 
 
-def _lets(body) -> Dict[int, None]:
-    """The ``set`` statements that declare their variable (see :func:`declared`)."""
+def _lets(body, keep: Iterable[str] = ()) -> Dict[int, None]:
+    """The ``set`` statements that declare their variable (see :func:`declared`), but
+    for the ``keep`` variables declared outside the body."""
     out: Dict[int, None] = {}
     for name, places in _occurrences(body).items():
+        if name in keep:
+            continue
         block, index = _home(body, places)
         first = _block(body, block)[index]
         if (
@@ -450,17 +469,51 @@ def _lets(body) -> Dict[int, None]:
     return out
 
 
+def _reads(body) -> set:
+    """The variables ``body`` reads, an object's owned state among them."""
+    found: set = set()
+    for s in _walk(body):
+        for e in _exprs(s):
+            _names(e, found)
+        if s[0] == "obj":
+            found.update(s[8])
+    return found
+
+
+def pruned(program: Program) -> Program:
+    """``program`` without the controls nothing reads and the assignments feeding only
+    them: a state no statement reads is not observable, and cannot be stated."""
+    from .outorder import eliminate  # pylint: disable=import-outside-toplevel
+
+    body, live = program.body, frozenset()
+    every = frozenset(n for n, _w, _d in program.controls)
+    while True:
+        out = eliminate(body, live, live)[0]
+        now = live | (every & _reads(out))
+        if now == live:
+            break
+        live = now
+    if out == body and len(live) == len(program.controls):
+        return program
+    keep = [c for c in program.controls if c[0] in live]
+    return replace(program, body=declared(out, [*live, *program.inputs]), controls=keep)
+
+
 def emit(program: Program, name: Optional[str] = None, base: int = 0xD400) -> str:
-    """``program`` (a :func:`declared` body, no procs) as playspec source."""
-    if program.procs or program.controls:
-        raise EmitError("only a flat program without hidden controls is emitted")
+    """``program`` (a :func:`declared` body, no procs) as playspec source: each control
+    of :func:`pruned` is a top-level ``state``, which an object over it binds by name.
+    """
+    if program.procs:
+        raise EmitError("a program with procs is not emitted: inline them first")
+    program = pruned(program)
     name = _ident(name or program.name)
     body = program.body
     writer = _Writer(program, base)
-    writer.lets = _lets(body)
+    writer.lets = _lets(body, [n for n, _w, _d in program.controls])
     writer.taken.add(name)
     lines = writer.block(body, 2)
     objects = writer.declarations()
+    states = writer.states()
     head = [f"spec {name};", ""]
     head += [
         f"const {k} = {v};"
@@ -484,7 +537,7 @@ def emit(program: Program, name: Optional[str] = None, base: int = 0xD400) -> st
         head.append(
             f"cell {cname}: {typ} @ {cell.place[0]:#06x}{''.join(' ' + a for a in attrs)};"
         )
-    head += objects
+    head += states + [""] * bool(states) + objects
     return "\n".join(
         head
         + ["", f"machine {name} {{", "  step {"]
@@ -495,8 +548,8 @@ def emit(program: Program, name: Optional[str] = None, base: int = 0xD400) -> st
 
 def _alike(x: Obj, y: Obj) -> bool:
     """Whether two objects are the same up to name, owner, source line and grammar."""
-    blank = {"name": "", "owner": "", "line": 0, "grammar": None}
-    return replace(x, **blank) == replace(y, **blank)
+    blank = {"name": "", "owner": "", "line": 0, "grammar": None, "locs": None}
+    return replace(x, **blank) == replace(y, **blank) and x.locs.keys() == y.locs.keys()
 
 
 def isomorphic(a, b, objects=None) -> Optional[str]:
@@ -506,11 +559,17 @@ def isomorphic(a, b, objects=None) -> Optional[str]:
     names: Dict[str, str] = {}
     back: Dict[str, str] = {}
     units: Dict[str, str] = {}
+    owned: List[tuple] = []
 
     def same_name(x: str, y: str) -> bool:
         if names.setdefault(x, y) != y or back.setdefault(y, x) != x:
             return False
         return True
+
+    def same_loc(x, y) -> bool:
+        if isinstance(x, Own) or isinstance(y, Own):
+            return type(x) is type(y) and x.lane == y.lane and same_name(x.n, y.n)
+        return x == y
 
     def same(x, y) -> bool:
         if type(x) is not type(y):
@@ -545,8 +604,14 @@ def isomorphic(a, b, objects=None) -> Optional[str]:
                 )
                 if units.setdefault(s[1], t[1]) != t[1] or not same_flag:
                     return f"{here}: reacts {s[1]} against {t[1]}"
-                if (s[2], s[5:], len(s[4])) != (t[2], t[5:], len(t[4])):
+                if (s[2], s[5:8], len(s[4]), len(s[8])) != (
+                    t[2],
+                    t[5:8],
+                    len(t[4]),
+                    len(t[8]),
+                ):
                     return f"{here}: {s[1:3]} against {t[1:3]}"
+                owned.append((s[8], t[8]))
             if not all(map(same, _exprs(s), _exprs(t))):
                 return f"{here}: {s} against {t}"
             if s[0] == "loop" and s[3] != t[3]:
@@ -563,7 +628,13 @@ def isomorphic(a, b, objects=None) -> Optional[str]:
     for mine, theirs in units.items():
         if not _alike(objects[0][mine], objects[1][theirs]):
             return f"object {mine} against {theirs}"
+        for role, loc in objects[0][mine].locs.items():
+            if not all(map(same_loc, loc, objects[1][theirs].locs[role])):
+                return f"object {mine} against {theirs}: {role} binds differently"
+    for x, y in owned:
+        if {names.get(n) for n in x} != set(y):
+            return f"owned state {x} against {y}"
     return None
 
 
-__all__ = ["EmitError", "declared", "emit", "isomorphic", "normal"]
+__all__ = ["EmitError", "declared", "emit", "isomorphic", "normal", "pruned"]
