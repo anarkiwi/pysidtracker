@@ -795,9 +795,18 @@ class Lowerer(ViewLowering, ObjectLowering, ArrayLowering):
         inst = self.machine_instance(left, None, line)
         return K(None, 8) if inst is None else self.member(inst, attr, line)
 
+    def lane_of(self, name: str, scope: Scope) -> bool:
+        """Whether ``name`` is a state, local or parameter (not a cell) whose bytes ``.lo`` and
+        ``.hi`` name when it is a ``u16``."""
+        found = self.lookup(name, scope)
+        return found is not None and found[0] == "var"
+
     def nibble(self, node, part: str, scope: Scope):
         """``node.hi`` / ``node.lo``: a nibble of a one-byte operand."""
-        if width(self.expr(node, scope)) not in (0, 8):
+        value = self.expr(node, scope)
+        if width(value) == 16 and self.lane_of(node[2], scope):
+            return mk(part, 8, value)
+        if width(value) not in (0, 8):
             self.error(node[1], f".{part} is the nibble of a u8")
         return self.expr(nibble_read(node, part), scope)
 
@@ -1143,6 +1152,12 @@ class Lowerer(ViewLowering, ObjectLowering, ArrayLowering):
             if lval[3] in NIBBLES and self.lookup(lval[2], scope) is not None:
                 name = ("name", line, lval[2])
                 self.nibble(name, lval[3], scope)
+                current = self.expr(name, scope)
+                if width(current) == 16 and self.lane_of(lval[2], scope):
+                    byte = self.coerce(value, 8, line)
+                    lo, hi = mk("lo", 8, current), mk("hi", 8, current)
+                    new = word(byte, hi) if lval[3] == "lo" else word(lo, byte)
+                    return self.assign(name, new, scope, line)
                 new = nibble_write(name, lval[3], ("_v", line, value))
                 return self.assign(
                     ("name", line, lval[2]), self.expr(new, scope), scope, line

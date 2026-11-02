@@ -232,7 +232,7 @@ cursor name {
 |---|---|
 | `value(v = op, v.hi = op, ...) [take n]` | assigns, advances `n` bytes (default `width`) |
 | `hold(op)` | counts `count` up to `op`, then advances; the flag is 1 on that step |
-| `sweep(into=v, count=op, step=op [, frac=n])` | like `hold`, adding the signed `step` to `v` each step; `v` may be a `u16` and with `frac` its low byte holds the fraction; `into=v.lo` or `v.hi` sweeps one byte lane of a word, carrying nowhere |
+| `sweep(into=v, count=op, step=op [, frac=n])` | like `hold`, adding the signed `step` to `v` each step; `v` may be a `u16` and with `frac` its low byte holds the fraction; `into=v.lo` or `v.hi` sweeps one byte lane of a word, carrying nowhere; `into=v.hi` with `frac=n` is `into=v` with `frac=n`, so `frac=ite(L.fine, 3, 0)` picks the fine or the coarse sweep |
 | `jump(op) [hold lo..hi] [as c0]` | loads `pos` and decodes there in the same step; a jump to itself stays; `hold` stops at a target whose first byte is in the range; `as` decodes the target as another first byte |
 | `call(op)` / `return` | `call` saves the next row in `ret` and jumps; `return` jumps to `ret` |
 | `run(base)` | a run of `c0 - base + 1` empty rows (every byte reads 0): the rows after the first count `run` down and leave `pos` where it is; `then` items apply to each empty row |
@@ -241,7 +241,9 @@ cursor name {
 
 - **Arrays.** `table rows width 3;` reads the `ro` byte array state `rows` instead of memory:
   column `j` of the row at `pos` is item `pos + j` (one array and a `width`), or one array per
-  column (`table lo, hi;`). Every `cursor.cN` read, `jump` and `hold` check reads the array too. A
+  column (`table lo, hi;`); `table rows @ first[ins] width 3;` adds a base index to every column,
+  so `pos`, `start` and `jump`/`call` targets count from the slice that starts at `first[ins]`, as
+  they do from the address of `table @ base`. Every `cursor.cN` read, `jump` and `hold` check reads the array too. A
   read past its items is a `SpecRuntimeError`, so the binder ends the list with the `width - 1`
   bytes a last row's decode reads. `start` and the `react` operands are indexes, so
   `start first[inst]` starts each instrument at its own row.
@@ -250,6 +252,9 @@ cursor name {
   `stream @ base` takes, e.g. `first[curptn]`). Fields, runs, `next`, `last` and `grammar` behave as
   over memory. A row's decode reads as many bytes as the cursor has fields, so a read past the
   items is a `SpecRuntimeError`, so the binder pads each slice by one byte less than the cursor has fields.
+- **Shared tail.** `match c0 { ... } then v = e, ...;` appends the `then` items to the `then` of
+  every arm that has one (`value`, `hold`, `sweep`, `end`, `run`); `stop`, `return`, `jump` and
+  `call` take none.
 - **Steps.** A step decodes at most 256 rows (`SpecRuntimeError` after that). The flag is the
   carry a `-> flag` reaction receives: the carry of the sweep addition (0 with `frac`), 1 at the
   end of a `hold` or `sweep`, at a `stop` and an `end`, a `jump`'s `target >= pos`, else 0.
@@ -487,7 +492,9 @@ the binding). It replaces loading a pointer into zero page and reading through i
 the like read then write the nibble. A nibble is syntax over `>> 4`, `& 0x0F` and the or of the
 masked halves, so the IR, native code, `emit` and proofs are those of that arithmetic. A view
 field is read through its pointer; it is not a target. `.hi` and `.lo` of a `u16` cell are its
-bytes (`pw.hi` in a cursor), and of any other operand than a `u8` an error.
+bytes (`pw.hi` in a cursor); of a `u16` state, local or parameter they are its bytes too, read and
+written (`x.hi := v` stores `word(lo(x), v)`, `x.lo := v` stores `word(v, hi(x))`); of any other
+operand than a `u8` or `u16` an error.
 
 ### u16 cells
 

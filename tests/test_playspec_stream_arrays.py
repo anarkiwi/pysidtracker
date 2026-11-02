@@ -493,3 +493,201 @@ def test_the_complexity_tool_reads_the_array_forms():
     assert kinds == {"pattern_first": "list", "order_bytes": "list"}
     assert analysis.addressing == []
     assert analysis.layout["pattern_first"]["decl"] == 1
+
+
+HEADER = """
+spec aw;
+layout { x: addr; tab, first: list; }
+cell pos: u8 @ 0x20;
+cell cnt: u8 @ 0x21;
+cell pw: u16 @ (0x22, 0x23);
+cell band: u8 @ 0x24;
+cell fine: u16 @ (0x25, 0x26);
+cell tail: u8 @ 0x27;
+cell sel: u8 @ 0x28;
+"""
+SLICES = """
+cursor t {
+  TABLE
+  pos pos; count cnt; values pw, band, fine, tail; start 0;
+  on frame step; on note reset;
+  match c0 {
+    0..0x3f => sweep(into=pw, count=c0, step=c1) then band = c2;
+    0x40..0x4f => hold(c0 & 0x0f) then band = c1;
+    0x50..0x5f => sweep(into=FINE, count=c0 & 3, step=c1, frac=3);
+    0x80..0xfd => value(pw.hi = c0 & 0x7f, pw.lo = c1, band = c0 >> 4, fine.lo = c2);
+    0xfe => jump(c1);
+    0xff => stop;
+  } SHARED
+}
+machine m { step { fire frame; } }
+schedule { m; }
+"""
+BASED = (
+    HEADER
+    + "state tab: u8[] ro = L.tab;\nstate first: u8[] ro = L.first;\n"
+    + SLICES.replace("TABLE", "table tab @ first[sel] width 3;")
+    .replace("FINE", "fine.hi")
+    .replace("SHARED", "then tail = c2;")
+)
+EXPLICIT_THEN = (
+    SLICES.replace("TABLE", "table @ 0x2000 + word(first[sel], 0) width 3;")
+    .replace("FINE", "fine")
+    .replace("SHARED", "")
+    .replace("then band = c2;", "then band = c2, tail = c2;")
+    .replace("then band = c1;", "then band = c1, tail = c2;")
+    .replace("frac=3);", "frac=3) then tail = c2;")
+    .replace("fine.lo = c2);", "fine.lo = c2) then tail = c2;")
+)
+SLICE0 = [2, 0x10, 7, 0x42, 0x99, 0, 0x81, 0x20, 3, 0x51, 5, 1, 0xFE, 0, 0]
+SLICE1 = [1, 0x30, 2, 0x51, 4, 9, 0x80, 0x11, 5, 0xFE, 3, 0]
+WATCH_AW = tuple(range(0x20, 0x29))
+
+
+def based(first=(0, 15)):
+    """The array form of :data:`BASED` over two instrument slices."""
+    return elaborate(parse(BASED), {"x": 0, "tab": SLICE0 + SLICE1, "first": first})
+
+
+def twin():
+    """The memory form: the slices where the table of :data:`BASED` is, shared ``then`` spelt out."""
+    text = HEADER.replace("; tab, first: list", "").replace(
+        "cell sel", "cell first: u8[2] @ 0x30 ro;\ncell sel"
+    )
+    return elaborate(parse(text + EXPLICIT_THEN), {"x": 0})
+
+
+@pytest.mark.parametrize("sel", [0, 1])
+def test_a_cursors_array_table_has_a_base_and_the_row_tail_is_shared(sel):
+    given = {0x28: [sel], 0x30: [0, 15], 0x2000: SLICE0 + SLICE1}
+    over_array = frames(based(), given, 24, WATCH_AW)
+    assert over_array == frames(twin(), given, 24, WATCH_AW)
+    assert len({row[0] for row in over_array}) > 3
+    assert {row[7] for row in over_array} - {0}
+
+
+def test_the_base_moves_the_slice_a_jump_is_relative_to():
+    seen = [frames(based(), {0x28: [s]}, 24, WATCH_AW) for s in (0, 1)]
+    assert seen[0] != seen[1]
+    shifted = frames(based((0, 12)), {0x28: [1]}, 6, WATCH_AW)
+    assert shifted != seen[1][:6]
+
+
+@fast
+@pytest.mark.parametrize("sel", [0, 1])
+def test_native_agrees_on_a_based_cursor_and_its_end(sel):
+    mem = bytearray(0x10000)
+    mem[0x28] = sel
+    assert run_both(based(), mem, 24) is None
+    assert isinstance(run_both(based((0, 40)), mem, 24), SpecRuntimeError) or not sel
+
+
+def test_a_based_cursor_round_trips_through_emit():
+    prog = based()
+    back = elaborate(parse(emit(prog, "based")), {})
+    flat = O.inline(prog.body, prog.procs)
+    assert (
+        isomorphic(flat, O.inline(back.body, back.procs), (prog.objects, back.objects))
+        is None
+    )
+    given = {0x28: [1]}
+    assert frames(back, given, 24, WATCH_AW) == frames(prog, given, 24, WATCH_AW)
+
+
+def test_a_fraction_sweep_into_the_high_byte_is_the_sweep_of_the_word():
+    word = BASED.replace("fine.hi", "fine")
+    given = {0x28: [0]}
+    assert frames(
+        elaborate(parse(word), {"x": 0, "tab": SLICE0 + SLICE1, "first": [0, 15]}),
+        given,
+        20,
+        WATCH_AW,
+    ) == frames(based(), given, 20, WATCH_AW)
+    byte = BASED.replace("frac=3", "frac=0")
+    assert frames(
+        elaborate(parse(byte), {"x": 0, "tab": SLICE0 + SLICE1, "first": [0, 15]}),
+        given,
+        20,
+        WATCH_AW,
+    ) != frames(based(), given, 20, WATCH_AW)
+    bad = BASED.replace("sweep(into=fine.hi,", "sweep(into=band.hi,")
+    with pytest.raises(SpecError, match="frac needs a word"):
+        elaborate(parse(bad), {"x": 0, "tab": SLICE0, "first": [0, 0]})
+
+
+def test_a_shared_then_does_not_follow_a_stop_or_a_jump():
+    stop = [0xFF, 0, 0, 0xFF, 0, 0]
+    binding = {"x": 0, "tab": stop, "first": [0, 3]}
+    prog = elaborate(parse(BASED), binding)
+    assert {row[7] for row in frames(prog, {}, 4, WATCH_AW)} == {0}
+    jump = elaborate(parse(BASED), {**binding, "tab": [0xFE, 3, 7, 0xFF, 0, 0]})
+    assert {row[7] for row in frames(jump, {}, 4, WATCH_AW)} == {0}
+    value = elaborate(parse(BASED), {**binding, "tab": [0x81, 1, 7, 0xFF, 0, 0]})
+    assert {row[7] for row in frames(value, {}, 4, WATCH_AW)} == {7}
+
+
+LANES = """
+spec lanes;
+cell chip: u8[25] @ 0xD400 out;
+cell o: u8 @ 0x20;
+cell w: u16 @ 0x22;
+cell echo: u8 @ 0x24;
+state fm: u16 = 0x1234;
+machine m {
+  step {
+    fm.hi := o;
+    fm.lo += 1;
+    w := fm;
+    echo := fm.hi + fm.lo;
+    chip[0] := fm.lo;
+    chip[1] := fm.hi;
+  }
+}
+schedule { m; }
+"""
+
+
+def test_a_u16_states_bytes_are_written_and_read_as_lanes():
+    prog = elaborate(parse(LANES))
+    mem = bytearray(0x10000)
+    mem[0x20] = 0x7F
+    state = controls(prog)
+    for n in range(3):
+        compile_program(prog)(mem.__getitem__, mem.__setitem__, state)
+        assert mem[0x22] | mem[0x23] << 8 == 0x7F00 | (0x35 + n)
+        assert mem[0x24] == (0x7F + 0x35 + n) & 255
+    mem[0x20] = 0xFF
+    state[0] = 0x12FF
+    compile_program(prog)(mem.__getitem__, mem.__setitem__, state)
+    assert mem[0x22] | mem[0x23] << 8 == 0xFF00
+
+
+def test_lane_writes_reorder_prove_and_agree_natively():
+    prog = elaborate(parse(LANES))
+    result = O.reorder(prog, O.ORDER)
+    back = elaborate(parse(emit(result.program, "ordered")), {})
+    assert (
+        isomorphic(
+            O.inline(result.program.body, result.program.procs),
+            O.inline(back.body, back.procs),
+        )
+        is None
+    )
+    assert outproof.prove(prog, O.ORDER, timeout_ms=60000).holds
+    if native.available():
+        mem = bytearray(0x10000)
+        mem[0x20] = 9
+        assert run_both(prog, mem, 4) is None
+
+
+def test_a_lane_of_a_byte_is_still_a_nibble():
+    text = (
+        LANES.replace("state fm: u16 = 0x1234;", "state fm: u8 = 0x34;")
+        .replace("w := fm;", "w := fm + 0;")
+        .replace("fm.hi := o;", "fm.hi := o & 15;")
+    )
+    prog = elaborate(parse(text))
+    mem = bytearray(0x10000)
+    mem[0x20] = 0x0F
+    compile_program(prog)(mem.__getitem__, mem.__setitem__, controls(prog))
+    assert mem[0x22] == 0xF5 and mem[0x24] == 0x0F + 5

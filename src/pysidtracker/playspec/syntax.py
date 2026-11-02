@@ -253,7 +253,8 @@ class _ToAst(Transformer):
 
     def w_atable(self, meta, c):
         width = c[-1] and c[-1][2]
-        return self._n("w_atable", meta, [str(n) for n in c[:-1]], width)
+        names = [str(n) for n in c[:-2]]
+        return self._n("w_atable", meta, names, width, c[-2])
 
     def w_width(self, meta, c):
         return self._n("w_width", meta, c[0])
@@ -337,7 +338,19 @@ class _ToAst(Transformer):
         del meta
         if str(c[0]) != "c0":
             raise SpecError("a cursor match tests c0")
-        return [row for rows in c[1:] for row in rows]
+        shared = c[-1][2] if c[-1] else []
+        rows = [row for group in c[1:-1] for row in group]
+        if not shared:
+            return rows
+        takes = ("set", "delay", "sweep", "end", "run_row")
+        return [
+            (*row[:6], row[6] + shared, row[7]) if row[5][0] in takes else row
+            for row in rows
+        ]
+
+    def m_then(self, meta, c):
+        del meta
+        return c[0]
 
     def urow(self, meta, c):
         line = _line(meta, self.origin)

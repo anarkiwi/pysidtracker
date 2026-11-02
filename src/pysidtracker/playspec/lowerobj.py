@@ -338,7 +338,7 @@ class ObjectLowering:
             if len(found) != 1:
                 self.error(line, f"cursor {name} needs exactly one {need} clause")
                 return Obj(oid, "cursor", "", {}, (0, 1, 1, ()), {}), {}
-        _t, tline, bases, width = tables[0]
+        _t, tline, bases, width, *origin = tables[0]
         arrays = bases if tables[0][0] == "w_atable" else None
         count = by_tag["w_count"][0][2] if "w_count" in by_tag else None
         declared = by_tag["w_values"][0][2] if "w_values" in by_tag else []
@@ -364,6 +364,8 @@ class ObjectLowering:
                 columns if len(found) == 1 else 1
             )
             bases = [const(j if len(found) == 1 else 0, 0) for j in range(columns)]
+            if origin and origin[0] is not None:
+                bases = [("+", tline, origin[0], b) for b in bases]
         elif len(bases) == 1 and columns > 1:
             bases = [("+", tline, bases[0], const(j, 0)) for j in range(columns)]
         cols = {f"c{j}": j for j in range(columns)}
@@ -461,6 +463,7 @@ class ObjectLowering:
             index = names.index(into[2]) if into[2] in names[:-1] else 0
             part = (None, "lo", "hi").index(into[3]) if into[0] == "attr" else 0
             frac = self.static(args["frac"], scope, line) if "frac" in args else 0
+            part = 0 if frac and part == 2 else part
             count, delta = (
                 self.xform(args[k], cols, scope, line) for k in ("count", "step")
             )
