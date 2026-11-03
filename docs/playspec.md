@@ -67,8 +67,8 @@ schedule {
       nothing about *when* in the call the read happens (see "Volatile inputs").
     - `per_proc`: for a partly relocated player whose routines address the cell at different places. A proc `P` accesses the cell at its place with `L.<cell>` read as the binding's `<cell>@P` when that field exists (the rest of the place expression is unchanged), else at the cell's own place. Without such fields the program is unchanged.
     - `notes(lo|hi|word, K)`: the `ro` table holds the native note table; index `i` means standard note `i + K` (`K` a static, possibly negative). `lo`/`hi` mark a `u8[n]` as the low/high byte of the note word, `word` a `u16[n]`/`ptr[n]` as the whole word. Cells aliasing one table may declare different `K`.
-- `state n: T[len] [ro] = L.list;` declares an [array state](#array-states): song data the binder
-  lays out as a list, indexed at run time.
+- `state n: T[len] [ro] [notes(part, K)] = L.list;` declares an [array state](#array-states): song
+  data the binder lays out as a list, indexed at run time.
 - `machine m [x in a..b] { cell/signal/control/proc/step }` declares a machine
   and its instances; `x` is the static instance index.
 - `control c [on cell mask M] { s = v, ... }` declares control states. With
@@ -371,6 +371,7 @@ state rows:  u8[] ro = L.rows;        // song data: read-only, length from the l
 state first: u8[8] ro = L.first;      // the length is checked against the list
 state hist:  u8[4]  = 0;              // spec-owned: every element starts as 0
 state seen:  u8[3]  = [1, 2, 3];      // a literal list
+state pitch: u16[] ro notes(word, -24) = L.pitch;   // the native note table, one word per index
 ```
 
 An array state is a list the spec indexes at run time, `rows[i]` (any 8- or 16-bit expression),
@@ -380,6 +381,9 @@ filter rows of an instrument out as index-addressed lists and never interprets a
 encoding stays in the spec. Jagged data is a flat array plus a list of start indexes
 (`rows[first[inst] + k]`); nested lists are not part of the language.
 
+- **Notes.** `notes(lo|hi|word, K)` on a `ro` array (`word` of a `u16`, `lo`/`hi` of a `u8`) says
+  item `i` is the native table's word (or its byte) for standard note `i + K`. Elaborated with a
+  standard clock, the array holds the standard table instead, as a `notes` cell reads.
 - **Length.** `[n]` is a layout or constant expression and must equal the list's length; `[]` takes it
   from the list. `len(rows)` is static. A mutable array may start every element as one static
   value (`= 0`) and then needs `[n]`.

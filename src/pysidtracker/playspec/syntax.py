@@ -548,9 +548,9 @@ class _ToAst(Transformer):
         return self._n("signal", meta, str(c[0]), str(c[1]), c[2])
 
     def own(self, meta, c):
-        name, typ, size, attr, initial = c
+        name, typ, size, attr, notes, initial = c
         return self._n(
-            "own", meta, str(name), str(typ), initial, size, attr and str(attr)
+            "own", meta, str(name), str(typ), initial, size, attr and str(attr), notes
         )
 
     def alen(self, meta, c):

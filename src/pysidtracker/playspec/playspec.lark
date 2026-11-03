@@ -26,7 +26,7 @@ ATTR: "ro" | "out" | "operand" | "scratch" | "latched" | "volatile" | "per_proc"
 machine: "machine" NAME ("[" NAME "in" expr ".." expr "]")? "{" _mitem* "}"
 _mitem: cell | own | signal | control | proc | step | _object | record
 signal: "signal" NAME ":" TYPE "=" expr ";"
-own: "state" NAME ":" TYPE [alen] [ATTR] "=" (expr | alist) ";"
+own: "state" NAME ":" TYPE [alen] [ATTR] [notes] "=" (expr | alist) ";"
 alen: "[" [expr] "]"
 alist: "[" expr ("," expr)* "]"
 control: "control" NAME ("on" NAME "mask" expr)? "{" state ("," state)* "}"
