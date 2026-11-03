@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from ..notes import PARTS, table
 from .ir import K, V, width
 from .lowerops import mk, zext
 
@@ -22,7 +23,8 @@ class ArrayLowering:
 
     def bind_array(self, states: dict, item, scope, owner: str = "") -> None:
         """Declare ``state name: T[n] [ro] = list;``."""
-        _tag, line, name, typ, initial, size, attr = item
+        _tag, line, name, typ, initial, size, attr = item[:7]
+        notes = item[7] if len(item) > 7 else None
         w = int(typ[1:]) if typ[:1] == "u" else 0
         key = f"{owner}.{name}" if owner else name
         ro = attr == "ro"
@@ -52,6 +54,11 @@ class ArrayLowering:
             self.error(line, f"state {name}: an item does not fit u{w}")
             values = UNKNOWN_LIST
         known = values is not UNKNOWN_LIST
+        if notes is not None:
+            values = self.array_notes(
+                name, w, ro, n, notes, values if known else None, scope, line
+            )
+            known = values is not None
         if ro:
             states[name] = ("array", key, w, True, values if known else None, n)
             return
@@ -63,6 +70,21 @@ class ArrayLowering:
         if elems:
             self.arrays[key] = elems
         states[name] = ("array", key, w, False, elems, n)
+
+    def array_notes(self, name, w, ro, n, notes, values, scope, line):
+        """The items of a ``ro`` array declared ``notes(part, K)``: its own, or with a
+        standard clock the standard table (item ``i`` the part of note ``i + K``)."""
+        part, expr = notes
+        offset = self.static(expr, scope, line)
+        if not ro or (part == "word") != (w == 16):
+            self.error(
+                line,
+                f"state {name}: notes needs a ro array, lo/hi of u8 or word of u16",
+            )
+            return values
+        if self.standard is None or offset is None or n is None:
+            return values
+        return table(self.standard, PARTS[part], offset, n)
 
     def array_items(self, name: str, initial, ro: bool, scope, line: int):
         """``(items, listed)``: the initial items of an array state, UNKNOWN_LIST while the

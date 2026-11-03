@@ -334,11 +334,11 @@ class Lowerer(ViewLowering, ObjectLowering, ArrayLowering):
     def bind_state(self, states: dict, item, scope: Scope, owner: str = "") -> None:
         """Declare spec-owned state: a variable kept from call to call, at no address; its
         key is ``name``, qualified by the instance ``owner`` of a machine's."""
-        _tag, line, name, typ, initial, size, attr = item
+        _tag, line, name, typ, initial, size, attr = item[:7]
         if size is not None:
             self.bind_array(states, item, scope, owner)
             return
-        if attr is not None or initial[0] == "alist":
+        if attr is not None or initial[0] == "alist" or item[7:8] not in ((), (None,)):
             self.error(line, f"state {name}: a list or `ro` needs an array ([n])")
             initial = ("num", line, 0)
         w = WIDTHS.get(typ) or int(typ[1:])
