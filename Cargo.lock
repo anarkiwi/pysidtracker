@@ -10,8 +10,8 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "jennings-core"
-version = "0.9.0"
-source = "git+https://github.com/anarkiwi/jennings?tag=v0.9.0#fcc93a611e46fc82162e78f8759a74d976462612"
+version = "0.11.0"
+source = "git+https://github.com/anarkiwi/jennings?tag=v0.11.0#562ecd30544ba0915fcd031d35c5a16b05c697f0"
 
 [[package]]
 name = "libc"
