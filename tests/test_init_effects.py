@@ -18,9 +18,8 @@ from pysidtracker import (
     init_effects,
     subtune_selection,
 )
-from pysidtracker.asm6502 import assemble
 
-from .helpers import build_prg, build_psid
+from .helpers import assemble, build_prg, build_psid
 
 jennings = pytest.importorskip("jennings")
 

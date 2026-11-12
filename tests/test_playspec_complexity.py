@@ -9,13 +9,12 @@ import pytest
 from jennings import memory as jennings_memory
 
 from pysidtracker import jobs
-from pysidtracker.asm6502 import assemble
 from pysidtracker.maincli import main
 from pysidtracker.playspec import SpecPlayer, chains, complexity, elaborate, parse
 from pysidtracker.playspec.pyexec import compile_program, controls
 
 from .conftest import BACKENDS
-from .helpers import build_psid
+from .helpers import assemble, build_psid
 
 ENGINE = "native" if "native" in BACKENDS and jennings_memory.NATIVE else "python"
 

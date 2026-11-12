@@ -4,12 +4,16 @@ import struct
 from pathlib import Path
 
 import zstandard
+from jennings.assembler import Assembler
+from jennings.devices.mpu6502 import MPU
 from vagrant_moses.media import GEOMETRIES
 
 from pysidtracker.oracle import SidtraceRow
 from pysidtracker.registers import PAL_CLOCK_HZ
 
 DATA_OFFSET = 0x7C
+
+assemble = Assembler(MPU()).assemble_program
 
 
 def build_psid(

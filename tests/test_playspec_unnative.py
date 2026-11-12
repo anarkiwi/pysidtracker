@@ -2,14 +2,13 @@
 
 import pytest
 
-from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidError
 from pysidtracker.maincli import main as cli_main
 from pysidtracker.playspec import SpecPlayer, elaborate, load, parse
 from pysidtracker.playspec import smt
 from pysidtracker.playspec.unnative import count_natives, equivalent, unnative
 
-from .helpers import build_psid
+from .helpers import assemble, build_psid
 from .test_playspec import NATIVE_SPEC
 
 BASE = 0x1000

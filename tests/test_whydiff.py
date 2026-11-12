@@ -9,11 +9,12 @@ import numpy as np
 import pytest
 
 from pysidtracker import gridcmp, testing, whydiff
-from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import IncompleteComparison
 from pysidtracker.header import write_psid
 from pysidtracker.player import MemPlayer
 from pysidtracker.testing import whole_song
+
+from .helpers import assemble
 
 ORG = 0x1000
 

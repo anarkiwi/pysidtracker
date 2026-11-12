@@ -4,10 +4,11 @@ import pytest
 
 from pysidtracker import SidImage
 from pysidtracker.errors import SidError
-from pysidtracker.asm6502 import assemble
 from pysidtracker.editor import RAM_SIZE, editor_replay, run_editor
 from pysidtracker.oracle import register_grid
 from pysidtracker.testing import whole_song
+
+from .helpers import assemble
 
 AT, DECODED = 0x2000, 0x3000
 DECODE, BUMP, PLAYER = 0xC000, 0xC100, 0x1000

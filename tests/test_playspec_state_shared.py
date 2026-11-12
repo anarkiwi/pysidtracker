@@ -2,11 +2,10 @@
 
 import pytest
 
-from pysidtracker.asm6502 import assemble
 from pysidtracker.playspec import SpecPlayer, native, parse
 from pysidtracker.testing import whole_song
 
-from .helpers import build_psid
+from .helpers import assemble, build_psid
 
 TWO = """spec two;
 layout { out: addr; }

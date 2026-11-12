@@ -1,4 +1,3 @@
-from pysidtracker.asm6502 import assemble
 from pysidtracker.reference import (
     Reference,
     best_reference,
@@ -6,6 +5,8 @@ from pysidtracker.reference import (
     match_at,
     reference_pattern,
 )
+
+from .helpers import assemble
 
 SRC = """
 start: lda #$00

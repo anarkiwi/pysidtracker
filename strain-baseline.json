@@ -1,13 +1,6 @@
 {
   "version": "0.2.1",
   "accepted": [
-    "tests/test_asm6502.py::test_bad_statements_are_rejected[native-FOO $10-ValueError]",
-    "tests/test_asm6502.py::test_bad_statements_are_rejected[native-JMP nowhere-KeyError]",
-    "tests/test_asm6502.py::test_bad_statements_are_rejected[native-LDA-ValueError]",
-    "tests/test_asm6502.py::test_bad_statements_are_rejected[python-FOO $10-ValueError]",
-    "tests/test_asm6502.py::test_bad_statements_are_rejected[python-LDA-ValueError]",
-    "tests/test_asm6502.py::test_labels_resolve_forwards_and_backwards[native]",
-    "tests/test_asm6502.py::test_unassemblable_operand_is_rejected[python]",
     "tests/test_audio.py::test_default_device_bad_model[python]",
     "tests/test_audio.py::test_default_device_requires_pylibresidfp[python]",
     "tests/test_audio.py::test_render_is_deterministic[native]",

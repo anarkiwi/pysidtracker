@@ -6,7 +6,6 @@ from vagrant_moses import memmap as mm
 
 from pysidtracker import irqhost
 from pysidtracker import registers as reg
-from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidParseError
 from pysidtracker.irqhost import (
     InterruptHost,
@@ -19,7 +18,7 @@ from pysidtracker.oracle import register_grid
 from pysidtracker.testing import whole_song
 
 from . import irqhost_tunes as tunes
-from .helpers import build_psid, build_psid_embedded_load
+from .helpers import assemble, build_psid, build_psid_embedded_load
 
 PAL_LINE, PAL_FRAME = mm.PAL.cycles_per_line, reg.PAL_CYCLES_PER_FRAME
 QUIET = """

@@ -11,7 +11,6 @@ from hypothesis import strategies as st
 
 from pysidtracker import SidFormat, SidParseError, irqhost
 from pysidtracker.formats import SpecBinding
-from pysidtracker.asm6502 import assemble
 from pysidtracker.irqhost import InterruptPlayer
 from pysidtracker.testing import whole_song
 from pysidtracker.maincli import main as cli_main
@@ -30,7 +29,7 @@ from pysidtracker.playspec.pyexec import source as python_source
 from pysidtracker.playspec.tv import TVError, replay, validate
 from pysidtracker.playspec.validate import StreamValidator
 
-from .helpers import build_psid
+from .helpers import assemble, build_psid
 
 HEADER = "spec t;\nlayout { a, b, c, d: addr; f: flag; n: byte; l: list; }\n"
 
@@ -1076,8 +1075,7 @@ def test_per_proc_cell_addresses_follow_the_binding():
     assert not validate(spec, shared, "m.step", bytes(image), 0x2000).proven
 
 
-HOSTED_HOOK = HOSTED.replace("  STA $D404\n  RTS\n", "").rstrip() + """
-play: LDA $1300
+HOSTED_HOOK = HOSTED[: HOSTED.index("play:")] + """play: LDA $1300
   JMP hook
 tail: CLC
   ADC #$03

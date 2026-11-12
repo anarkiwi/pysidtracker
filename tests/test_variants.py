@@ -7,7 +7,6 @@ from pysidtracker import (
     diff_signatures,
     variants,
 )
-from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidParseError
 from pysidtracker.variants import (
     ROW_FIELDS,
@@ -15,7 +14,7 @@ from pysidtracker.variants import (
     variants_cli,
 )
 
-from .helpers import build_prg, build_psid_embedded_load
+from .helpers import assemble, build_prg, build_psid_embedded_load
 
 # Direct player: init (+ JSR setup), play (+ JSR calc), a ZP scratch cell and an in-span table.
 BASE_SRC = """

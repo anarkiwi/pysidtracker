@@ -9,11 +9,10 @@ import pytest
 
 from pysidtracker import pathfuzz as pf
 from pysidtracker import paths
-from pysidtracker.asm6502 import assemble
 from pysidtracker.image import SidImage
 from pysidtracker.player import MemPlayer
 
-from .helpers import build_prg, build_psid, build_psid_embedded_load
+from .helpers import assemble, build_prg, build_psid, build_psid_embedded_load
 
 ORG = 0x1000
 TUNE = (

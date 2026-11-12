@@ -7,14 +7,13 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from pysidtracker import SidParseError
-from pysidtracker.asm6502 import assemble
 from pysidtracker.playspec import SpecPlayer, SpecRuntimeError, native, parse
 from pysidtracker.playspec import elaborate
 from pysidtracker.playspec.ir import K, Obj, Op, Program, Rd, V
 from pysidtracker.playspec.pyexec import compile_program, controls
 from pysidtracker.testing import whole_song
 
-from .helpers import build_psid
+from .helpers import assemble, build_psid
 from .test_playspec_events import BINDING, FULL, STATED_WALKER, TABLE
 
 pytestmark = pytest.mark.skipif(

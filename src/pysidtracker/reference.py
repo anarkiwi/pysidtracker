@@ -2,9 +2,9 @@
 
 Hand-writing a :mod:`~pysidtracker.codescan` pattern per player release is
 tedious and drifts from the vendored player source. :func:`reference_pattern`
-walks an assembled player (see :mod:`~pysidtracker.asm6502`) and wildcards
-everything that legitimately differs between the reference and a tune that
-embeds the same code:
+walks a player assembled with jennings (``Assembler.assemble_program``) and
+wildcards everything that legitimately differs between the reference and a tune
+that embeds the same code:
 
 * absolute operands pointing back into the player (relocated; validated on
   match, see :func:`match_at`),

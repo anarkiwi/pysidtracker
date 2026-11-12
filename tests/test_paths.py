@@ -8,12 +8,11 @@ import numpy as np
 import pytest
 
 from pysidtracker import oracle, paths
-from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidParseError
 from pysidtracker.player import MemPlayer
 from pysidtracker.testing import song_frames, whole_song
 
-from .helpers import build_psid, build_prg
+from .helpers import assemble, build_psid, build_prg
 
 TUNE = (
     "init:\n  LDA #0\n  STA cnt\n{pad}  RTS\n"

@@ -36,7 +36,7 @@ classifiers = [
 # z3-solver: playspec model checking and translation validation.
 # deity-informant: the p-code lift playspec translation validation executes symbolically.
 dependencies = [
-  "jennings>=0.9.0",
+  "jennings>=0.12.0",
   "deity-informant>=0.7.0",
   "pydexomizer>=0.1",
   "pylibresidfp>=0.1.0",

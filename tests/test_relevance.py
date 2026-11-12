@@ -10,10 +10,9 @@ from pysidtracker import faultloc as fl
 from pysidtracker import paths
 from pysidtracker import relevance as rv
 from pysidtracker import survey
-from pysidtracker.asm6502 import assemble
 from pysidtracker.whydiff import CpuStep, cpu_slice
 
-from .helpers import DATA_OFFSET, build_psid
+from .helpers import assemble, DATA_OFFSET, build_psid
 
 LOOP = [("A", "B"), ("A", "C"), ("B", "D"), ("C", "D"), ("D", "A"), ("D", "E")]
 LOOP += [("E", rv.EXIT)]
@@ -53,7 +52,7 @@ def test_cpu_control_keeps_the_guarding_branch_and_its_condition():
 
 
 DECOY = (
-    "mode:\n  .byte {mode}\ntrig:\n  .byte {trig}\nfthr:\n  .byte {fthr}\n"
+    "mode:\n  .byte ${mode:02X}\ntrig:\n  .byte ${trig:02X}\nfthr:\n  .byte ${fthr:02X}\n"
     "cnt:\n  .byte 0\nflag:\n  .byte 0\n"
     "init:\n  LDA #0\n  STA cnt\n  LDA #$0F\n  STA $D418\n  RTS\n"
     "play:\n  LDA cnt\n  CMP fthr\n  BCC nofilt\n  LDA #1\n  STA flag\n  JMP root\n"
