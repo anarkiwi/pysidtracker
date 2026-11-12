@@ -965,6 +965,7 @@ measures that differ between two reports (`--diff OLD.play`).
   - **Stretches:** `stop=ADDR` (`tv ... --stop ADDR`) runs the code only to that address, for a spec routine that states the first part of a longer one; every path must reach it, and the comparison and `preserve` check happen there.
   - **The claim:** no byte either side wrote, outside the stack page and `scratch` cells, can differ afterwards; `preserve` registers survive; and the spec's own obligations hold.
   - **Assumption:** no data read aliases a return address the code itself pushed. The spec does not model the stack.
+  - **Decimal flag:** clear on entry (ADC/SBC are binary) unless `registers` gives `D` or the spec reads `cpu.d`, which leaves it free. The lift's throw-away bus reads and read-modify-write dummy stores are not data accesses and are skipped.
   - **Refusal:** a constant store into lifted code is refused.
   - **Counterexample:** z3 rewrites reads through stores before solving. A counterexample carries the differing address and both bytes, the initial registers, every cell's initial bytes and the full 64 KiB model. `tv.replay` re-runs it concretely on jennings and the compiled spec to confirm it.
 

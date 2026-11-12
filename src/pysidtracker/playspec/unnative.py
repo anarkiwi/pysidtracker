@@ -9,6 +9,7 @@ holding a hook is restated in a variant spec that ``extends`` the original.
 The statements read every memory byte they need before they store any, so they see
 the memory the hook saw. The spec models no register outputs, no stack page and no
 code writes, so the hook may not depend on those: such a hook is refused.
+The hook starts with the decimal flag clear.
 """
 
 from __future__ import annotations
@@ -280,6 +281,8 @@ def _lift(
             entry[index] = z3.BitVecVal(0xFF, 8)
         elif name.lower() in regs:
             entry[index] = z3.BitVec(f"in_{name.lower()}", 8)
+        elif name == "D":
+            entry[index] = z3.BitVecVal(0, 8)
         else:
             entry[index] = z3.BitVec(f"free_{name}", 8)
     for index in range(16):

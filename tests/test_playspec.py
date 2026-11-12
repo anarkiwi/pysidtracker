@@ -870,12 +870,17 @@ schedule { m; }
 VOLATILE_BINDING = {"osc": 0xD41B, "pw": 0xD402}
 
 
-def _prove_volatile(step: str, source: str):
+def _prove_volatile(step: str, source: str, **registers):
     code, _ = assemble(source, 0x2000)
     image = bytearray(0x10000)
     image[0x2000 : 0x2000 + len(code)] = code
     return validate(
-        parse(VOLATILE % step), VOLATILE_BINDING, "m.step", bytes(image), 0x2000
+        parse(VOLATILE % step),
+        VOLATILE_BINDING,
+        "m.step",
+        bytes(image),
+        0x2000,
+        registers=registers,
     )
 
 
@@ -894,6 +899,15 @@ def test_volatile_reads_that_differ_in_number_or_address_are_refuted(step, code)
 def test_a_volatile_read_is_not_shared_between_uses():
     both = "lda $d41b\nsta $10\nlda $d41b\nclc\nadc $10\nsta $d402\nrts"
     assert _prove_volatile("pw := osc3 + osc3;", both).proven
+
+
+def test_the_decimal_flag_is_free_only_when_read_or_given():
+    step = "if cpu.d { pw := 8; } else { pw := 0; }"
+    clear = "lda #0\nsta $d402\nrts"
+    assert not _prove_volatile(step, clear).proven
+    assert _prove_volatile(step, clear, D=0).proven
+    add = "lda #$09\nclc\nadc #$01\nsta $d402\nrts"
+    assert not _prove_volatile("pw := 0x0A;", add, D=1).proven
 
 
 def test_a_volatile_read_on_one_branch_counts_only_where_it_runs():

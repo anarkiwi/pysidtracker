@@ -479,6 +479,7 @@
     "tests/test_playspec.py::test_symbolic_frame_equals_concrete[native]",
     "tests/test_playspec.py::test_syntax_error_is_a_spec_error[native]",
     "tests/test_playspec.py::test_syntax_error_is_a_spec_error[python]",
+    "tests/test_playspec.py::test_the_decimal_flag_is_free_only_when_read_or_given[native]",
     "tests/test_playspec.py::test_translation_validation_assume_bounds_memory_driven_loop[native]",
     "tests/test_playspec.py::test_translation_validation_assume_bounds_memory_driven_loop[python]",
     "tests/test_playspec.py::test_translation_validation_counterexample_replays[python]",
