@@ -277,3 +277,15 @@ def test_a_hook_a_patch_put_into_a_base_proc_is_refused():
     binding = {"freq": 0x1300, "sid": 0xD400, "hook": 0x1010, "tail": 0x1020}
     with pytest.raises(SidError, match="not in a proc written in one spec"):
         unnative(variant, binding, bytes(0x10000))
+
+
+def test_register_arguments_the_hook_never_reads_are_not_stated():
+    make, binding, _ = players(
+        HOOK, {"freq": 0x1300, "sid": 0xD400, "hook": "hook", "tail": "tail"}
+    )
+    old = parse(NATIVE_SPEC.replace("(a = v)", "(a = v, x = v, y = 7)"))
+    new = unnative(old, binding, make(old).view())
+    assert "let nat0_a: u8 = v;" in new.source
+    assert "nat0_x" not in new.source and "nat0_y" not in new.source
+    equivalent(make, old, new, 60)
+    equivalent(make, parse(NATIVE_SPEC), new, 60)
