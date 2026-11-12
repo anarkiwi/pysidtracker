@@ -279,6 +279,9 @@ def test_a_hook_a_patch_put_into_a_base_proc_is_refused():
         unnative(variant, binding, bytes(0x10000))
 
 
+@pytest.mark.strain_exempt(
+    reason="the unread-argument filter is a comprehension condition coverage cannot see"
+)
 def test_register_arguments_the_hook_never_reads_are_not_stated():
     make, binding, _ = players(
         HOOK, {"freq": 0x1300, "sid": 0xD400, "hook": "hook", "tail": "tail"}
