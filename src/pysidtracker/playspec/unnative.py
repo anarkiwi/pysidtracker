@@ -14,7 +14,7 @@ The hook starts with the decimal flag clear.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import z3
 
@@ -55,6 +55,7 @@ class Stater:
 
     Anything that reads memory, or is shared, is bound once by a ``let`` so the
     statements that follow cannot see a store they make; the rest stays inline.
+    ``used`` collects the inputs the stated terms refer to.
     """
 
     def __init__(self, mem0, inputs: Dict[str, str], prefix: str):
@@ -65,6 +66,7 @@ class Stater:
         self.done: Dict[object, Tuple[str, int]] = {}
         self.uses: Dict[object, int] = {}
         self.reads: Dict[object, bool] = {}
+        self.used: Set[str] = set()
 
     def count(self, roots) -> None:
         """Count each subterm's uses and mark those that read memory."""
@@ -154,6 +156,7 @@ class Stater:
                 raise TVError(
                     f"the hook reads {name}, which the native arguments do not give it"
                 )
+            self.used.add(name)
             return self.inputs[name]
         if z3.is_select(term):
             if not term.arg(0).eq(self.mem0):
@@ -332,7 +335,6 @@ def state_hook(
     lets = Stater(mem0, inputs, prefix)
     lets.count(roots)
     pad = indent
-    out = [f"let {prefix}_{r}: u8 = {text};" for r, text in args.items()]
 
     def block(kind: str, depth: str) -> List[str]:
         lines = [
@@ -351,6 +353,11 @@ def state_hook(
     else:
         body = block(exits[0][0], "")
     # the lets are discovered while the bodies are written, so splice them first
+    out = [
+        f"let {prefix}_{r}: u8 = {text};"
+        for r, text in args.items()
+        if f"in_{r}" in lets.used
+    ]
     return f"\n{pad}".join(out + lets.lets + body)
 
 
