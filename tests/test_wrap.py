@@ -2,7 +2,6 @@
 
 import pytest
 
-from pysidtracker.asm6502 import assemble
 from pysidtracker.emu import SidWriteLog, call_play
 from pysidtracker.errors import SidError
 from pysidtracker.image import SidImage
@@ -16,7 +15,7 @@ from pysidtracker.wrap import (
     measure_wrap,
 )
 
-from .helpers import build_psid
+from .helpers import assemble, build_psid
 
 ORG = 0x1000
 

@@ -13,13 +13,14 @@ from collections import Counter
 from itertools import chain
 from typing import Callable, Dict, Iterator, List, Optional, Tuple, Type, Union
 
+from jennings.assembler import Assembler
+from jennings.devices.mpu6502 import MPU
 from vagrant_moses import memmap as mm
 from vagrant_moses import machine as vagrant_machine
 from vagrant_moses.machine import Machine, NativeSid, boot_cycle
 from vagrant_moses.roms import KERNAL_VECTORS
 
 from . import registers as reg
-from .asm6502 import assemble
 from .cadence import Cadence, TriggerSource, _driver_base, _iomap, playroutine_cadence
 from .emu import SidReads
 from .errors import SidParseError
@@ -221,7 +222,7 @@ def _boot(
     header = image.header
     rsid = not header.is_psid
     base = _driver_base(image)
-    code, labels = assemble(_DRIVER, base)
+    code, labels = Assembler(MPU()).assemble_program(_DRIVER, base)
     ram = machine.ram
     ram[:PSID_DRIVER_CLEARED] = bytes(PSID_DRIVER_CLEARED)
     if rsid:

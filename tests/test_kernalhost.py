@@ -1,15 +1,14 @@
 """The headless KERNAL host: real jump table and register ABI, files under a host dir.
 
-Real 6502 programs (:func:`asm6502.assemble`) call the KERNAL entries as a C64
+Real 6502 programs (assembled by jennings) call the KERNAL entries as a C64
 program does; the calls are answered in Python against ``tmp_path``.
 """
 
 import pytest
 
 from pysidtracker import KernalHost, KernalHostError, sys_addr
-from pysidtracker.asm6502 import assemble
 
-from .helpers import build_prg
+from .helpers import assemble, build_prg
 
 DONE = 0x1701
 SETUP = """

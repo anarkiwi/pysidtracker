@@ -8,10 +8,11 @@ import numpy as np
 import pytest
 
 from pysidtracker import provenance as prov
-from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidParseError
 from pysidtracker.image import SidImage
 from pysidtracker import survey
+
+from .helpers import assemble
 
 ORG = 0x1000
 

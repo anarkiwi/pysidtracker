@@ -10,10 +10,9 @@ from pysidtracker import (
     locate,
     variant_facet,
 )
-from pysidtracker.asm6502 import assemble
 from pysidtracker.locate import AFTER_INIT, STATIC, SYS_UNPACK
 
-from .helpers import build_prg, build_psid, store_sig
+from .helpers import assemble, build_prg, build_psid, store_sig
 
 SIG = b"SIG"
 

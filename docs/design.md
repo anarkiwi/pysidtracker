@@ -70,7 +70,7 @@ play wrappers ([wrap.md](wrap.md)).
 ### `reference` — patterns from assembled reference players
 
 `reference_pattern(Reference(name, code, org, labels, data=..., facets=...))`
-derives a `CodePattern` from a player assembled with `asm6502.assemble`:
+derives a `CodePattern` from a player assembled with jennings' `Assembler.assemble_program`:
 relocated absolute operands (targets inside the player), zero-page operands,
 self-modified operands and declared data ranges are wildcarded; hardware
 absolutes and branches stay literal. `match_at` validates that every relocated

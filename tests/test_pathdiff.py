@@ -12,7 +12,6 @@ import pytest
 from pysidtracker import oracle
 from pysidtracker import pathdiff as pd
 from pysidtracker import survey
-from pysidtracker.asm6502 import assemble
 from pysidtracker.gridcmp import LEAD
 from pysidtracker.oracle import (
     ShortTrace,
@@ -22,10 +21,10 @@ from pysidtracker.registers import PAL_CYCLES_PER_FRAME
 from pysidtracker.paths import PySubject
 from pysidtracker.testing import whole_song
 
-from .helpers import DATA_OFFSET, build_psid, fake_sidtrace
+from .helpers import assemble, DATA_OFFSET, build_psid, fake_sidtrace
 
 TUNE = (
-    "mode:\n  .byte {mode}\ntrig:\n  .byte {trig}\ncnt:\n  .byte 0\n"
+    "mode:\n  .byte ${mode:02X}\ntrig:\n  .byte ${trig:02X}\ncnt:\n  .byte 0\n"
     "init:\n  LDA #0\n  STA cnt\n  LDA #$0F\n  STA $D418\n  RTS\n"
     "play:\n  LDA cnt\n  CMP trig\n  BCC early\n"
     "  LDA cnt\n  ASL A\n  CLC\n  ADC mode\n  STA $D400\n  JMP gate\n"

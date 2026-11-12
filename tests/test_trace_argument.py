@@ -3,9 +3,10 @@
 import pytest
 
 from pysidtracker import SidImage, SidParseError
-from pysidtracker.asm6502 import assemble
 from pysidtracker.header import write_psid
 from pysidtracker.trace import init_arguments, trace_init_argument
+
+from .helpers import assemble
 
 WRAPPER = """
 init: tax

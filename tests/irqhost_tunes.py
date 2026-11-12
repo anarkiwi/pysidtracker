@@ -8,9 +8,8 @@ import random
 import sys
 from pathlib import Path
 
-from pysidtracker.asm6502 import assemble
 
-from .helpers import build_psid_embedded_load
+from .helpers import assemble, build_psid_embedded_load
 
 LOAD = 0x1000
 FIXTURES = Path(__file__).parent / "data" / "irqhost"
@@ -27,9 +26,9 @@ TUNES = {
 """,
         {},
     ),
+    # main loop counter into $D418 under the default screen (badlines on), CIA1 KERNAL IRQ
     "badline_loop": (
         """
-        ; main loop counter into $D418 under the default screen (badlines on), CIA1 KERNAL IRQ
         init: LDX #$00
         loop: INX
           STX $D418
@@ -37,10 +36,10 @@ TUNES = {
 """,
         {},
     ),
+    # raster IRQ via $0314 at line $80, handler bumps $D400 and acks with INC $D019, exits $EA31;
+    # main loop counts into $D418
     "raster_kernal": (
         """
-        ; raster IRQ via $0314 at line $80, handler bumps $D400 and acks with INC $D019, exits $EA31;
-        ; main loop counts into $D418
         init: SEI
           LDA #<irq
           STA $0314
@@ -69,9 +68,9 @@ TUNES = {
 """,
         {},
     ),
+    # CIA2 TA NMI digi via $0318 (KERNAL), CIA1 TB IRQ in one-shot restarted, main loop
     "nmi_digi_oneshot": (
         """
-        ; CIA2 TA NMI digi via $0318 (KERNAL), CIA1 TB IRQ in one-shot restarted, main loop
         init: SEI
           LDA #<nmi
           STA $0318
@@ -121,9 +120,9 @@ TUNES = {
 """,
         {},
     ),
+    # sprites 0,3,7 enabled at varied Y (one expanded), main loop counter into $D418
     "sprite_dma": (
         """
-        ; sprites 0,3,7 enabled at varied Y (one expanded), main loop counter into $D418
         init: LDA #$89
           STA $D015
           LDA #$60
@@ -141,9 +140,9 @@ TUNES = {
 """,
         {},
     ),
+    # KERNAL banked out: NMI via $FFFA and IRQ via $FFFE with RTI; CIA2 TB NMI, raster IRQ
     "vectors_in_ram": (
         """
-        ; KERNAL banked out: NMI via $FFFA and IRQ via $FFFE with RTI; CIA2 TB NMI, raster IRQ
         init: SEI
           LDA #$35
           STA $01
@@ -190,9 +189,9 @@ TUNES = {
 """,
         {},
     ),
+    # YSCROLL rewritten every frame from a raster IRQ, DEN toggled; main loop
     "yscroll_den": (
         """
-        ; YSCROLL rewritten every frame from a raster IRQ, DEN toggled; main loop
         init: SEI
           LDA #<irq
           STA $0314
@@ -222,9 +221,9 @@ TUNES = {
 """,
         {},
     ),
+    # CIA1 TB cascading TA underflows, force load, timer reads; BRK in main; CLI inside IRQ
     "cascade_brk_nested": (
         """
-        ; CIA1 TB cascading TA underflows, force load, timer reads; BRK in main; CLI inside IRQ
         init: SEI
           LDA #<irq
           STA $0314
@@ -271,9 +270,9 @@ TUNES = {
 """,
         {},
     ),
+    # interrupt-latency stress: fast NMI, raster + CIA IRQs, main loop of SEI/CLI/PLP/branches
     "latency_stress": (
         """
-        ; interrupt-latency stress: fast NMI, raster + CIA IRQs, main loop of SEI/CLI/PLP/branches
         init: SEI
           LDA #<nmi
           STA $0318
@@ -333,9 +332,9 @@ TUNES = {
 """,
         {},
     ),
+    # osc3 noise reads stored to $D418, voice 3 noise running
     "osc3_reads": (
         """
-        ; osc3 noise reads stored to $D418, voice 3 noise running
         init: LDA #$FF
           STA $D40E
           STA $D40F
@@ -349,9 +348,9 @@ TUNES = {
 """,
         {},
     ),
+    # NTSC: raster IRQ via $0314 at line 0, main loop
     "ntsc_raster": (
         """
-        ; NTSC: raster IRQ via $0314 at line 0, main loop
         init: SEI
           LDA #<irq
           STA $0314
@@ -416,9 +415,9 @@ TUNES = {
 """,
         {"magic": b"PSID", "play": "play", "version": 3, "second_sid": 0x42},
     ),
+    # YSCROLL and $D017 rewritten every pass with four sprites on, main loop only
     "badline_tricks": (
         """
-        ; YSCROLL and $D017 rewritten every pass with four sprites on, main loop only
         init: LDA #$0F
           STA $D015
           LDA #$40
@@ -438,9 +437,9 @@ TUNES = {
 """,
         {},
     ),
+    # raster IRQ leaving via a NOP slide into $EA7E; CIA2 NMI on the KERNAL's $FE47
     "kernal_slides": (
         """
-        ; raster IRQ leaving via a NOP slide into $EA7E; CIA2 NMI on the KERNAL's $FE47
         init: SEI
           LDA #<irq
           STA $0314
@@ -470,9 +469,9 @@ TUNES = {
 """,
         {},
     ),
+    # RAM under the ROMs and I/O read back through the CPU port
     "banking": (
         """
-        ; RAM under the ROMs and I/O read back through the CPU port
         init: SEI
           LDA #$34
           STA $01
@@ -495,9 +494,9 @@ TUNES = {
 """,
         {},
     ),
+    # no sprites: YSCROLL rewritten at drifting line cycles, badlines made mid-line
     "badline_midline": (
         """
-        ; no sprites: YSCROLL rewritten at drifting line cycles, badlines made mid-line
         init: SEI
           LDA #$7F
           STA $DC0D
@@ -512,9 +511,9 @@ TUNES = {
 """,
         {},
     ),
+    # ANE ($8B) and its magic constant, flags pushed to the SID
     "illegal_ane": (
         """
-        ; ANE ($8B) and its magic constant, flags pushed to the SID
         init: LDX #$00
         loop: INX
           TXA

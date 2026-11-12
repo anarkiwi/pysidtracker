@@ -11,12 +11,11 @@ import pytest
 import zstandard
 
 from pysidtracker import formats, oracle, registers, survey
-from pysidtracker.asm6502 import assemble
 from pysidtracker.errors import SidFormatError
 from pysidtracker.header import write_psid
 from pysidtracker.testing import whole_song
 
-from .helpers import build_prg, handled, trace_csv
+from .helpers import assemble, build_prg, handled, trace_csv
 
 LOAD = 0x1000
 PLAYER = """
