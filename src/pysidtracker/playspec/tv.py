@@ -15,6 +15,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import z3
 from deity_informant import lift
+from deity_informant.lifter import bus_only
 
 from ..errors import SidError
 from .ir import Program
@@ -156,7 +157,10 @@ class Machine6502:
                 return self.constant(path, pc, rec, at, vn)
             return (path.regs if space == "r" else uniq)[off]
 
+        dummy = bus_only(rec["ops"])
         for i, (name, dst, ins) in enumerate(rec["ops"]):
+            if i in dummy:
+                continue
             args = [get((i, j), vn) for j, vn in enumerate(ins)]
             if name == "STORE":
                 self.store(path, args[0], args[1])
@@ -322,14 +326,21 @@ def merge(a: Path, b: Path) -> Path:
     )
 
 
-def entry_registers(registers: Dict[str, int]) -> Dict[int, object]:
-    """Registers and flags on entry: the given ones concrete, the rest free; SP $FF."""
+def entry_registers(
+    registers: Dict[str, int], decimal: bool = False
+) -> Dict[int, object]:
+    """Registers and flags on entry: the given ones concrete, the rest free; SP $FF.
+
+    The decimal flag is clear unless given, or free when ``decimal`` (the spec reads it).
+    """
     regs: Dict[int, object] = {}
     for name, index in {**REGS, **FLAGS}.items():
         if name == "SP":
             regs[index] = z3.BitVecVal(0xFF, 8)
         elif name in registers:
             regs[index] = z3.BitVecVal(registers[name], 8)
+        elif name == "D" and not decimal:
+            regs[index] = z3.BitVecVal(0, 8)
         elif name in FLAGS:
             regs[index] = z3.ZeroExt(7, z3.BitVec(f"flag_{name}", 1))
         else:
@@ -369,7 +380,7 @@ def validate(
     solver = z3.Solver()
     volatile = {a for c in program.cells if "volatile" in c.attrs for a in c.extent()}
     cpu = Machine6502(bytes(image), operands, solver, mem0, volatile)
-    regs = entry_registers(dict(registers or {}))
+    regs = entry_registers(dict(registers or {}), "cpu_d" in program.inputs)
     env = {}
     for name, w in program.inputs.items():
         key = name[4:].upper()

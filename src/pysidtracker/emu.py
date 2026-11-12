@@ -68,6 +68,18 @@ class SidReads:
 _WIRED_VM: Dict[type, type] = {}
 
 
+def _engine_slots(engine: type) -> Tuple[str, ...]:
+    """Every state slot ``engine`` and its bases declare, so a rewired engine keeps them all."""
+    return tuple(
+        dict.fromkeys(
+            slot
+            for klass in engine.__mro__
+            for slot in getattr(klass, "__slots__", ())
+            if slot not in ("_on_read", "_on_write")
+        )
+    )
+
+
 def _observed_vm_class(engine: type) -> type:
     """A subclass whose pcode ``rd``/``wr`` also notify per-instance callbacks."""
 
@@ -140,17 +152,9 @@ def observe_data_access(
         wired = engine
     else:
         wired = cls(b"")
-        for attr in (
-            "mem",
-            "reg",
-            "uniq",
-            "cycles",
-            "volatile",
-            "vicirq",
-            "ciaicr",
-            "wlog",
-        ):
-            setattr(wired, attr, getattr(engine, attr))
+        for attr in _engine_slots(type(engine)):
+            if hasattr(engine, attr):
+                setattr(wired, attr, getattr(engine, attr))
         mpu._vm = wired  # pylint: disable=protected-access
     wired._on_read = on_read  # pylint: disable=protected-access
     wired._on_write = on_write  # pylint: disable=protected-access
