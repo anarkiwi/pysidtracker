@@ -89,6 +89,28 @@ def _fake_docker(csv_text):
     return _run
 
 
+def test_run_sidtrace_mounts_roms_read_only(tmp_path, monkeypatch):
+    cmds = []
+    fake = _fake_docker(_CSV)
+
+    def _run(cmd, **kw):
+        cmds.append(cmd)
+        return fake(cmd, **kw)
+
+    monkeypatch.setattr(oracle.subprocess, "run", _run)
+    tune = tmp_path / "song.sid"
+    tune.write_bytes(b"PSID" + b"\x00" * 60)
+    (tmp_path / "roms").mkdir()
+    run_sidtrace(tune, tmp_path / "a.csv.zst")
+    run_sidtrace(tune, tmp_path / "b.csv.zst", roms_dir=tmp_path / "x" / ".." / "roms")
+    plain, roms = cmds
+    mount = f"{(tmp_path / 'roms').resolve()}:/root/.local/share/sidplayfp:ro"
+    assert mount not in plain and roms.count("-v") == 2
+    assert roms[roms.index(mount) - 1] == "-v" and roms.index(mount) < roms.index(
+        oracle.SIDTRACE_IMAGE
+    )
+
+
 def test_run_sidtrace_missing_docker(tmp_path, monkeypatch):
     def _boom(*_a, **_k):
         raise FileNotFoundError("docker")

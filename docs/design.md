@@ -215,6 +215,11 @@ line (`#` comments allowed, first line `REGLOG_HEADER`).
   to the first play call (first write after a `>gap`-cycle gap), forward-fill,
   nibble-mask `pw_hi_regs`; frame assignment rounds to nearest
   (`(clock - t0 + cpf//2)//cpf`).
+- `grid_from_calls(calls, *, reg_count=25, pw_hi_regs=(0x03,0x0A,0x11), start=())`
+  — per-call `(reg, val)` write lists to exactly `len(calls) - 1` rows: `start[i]` is
+  register `i` before init, `calls[0]` (init) only sets the baseline, row `k` is the
+  forward-filled registers after `calls[k + 1]`; registers `>= reg_count` are
+  ignored and `pw_hi_regs` nibble-masked.
 - `read_sidwr(path)` — parse a `preframr-sidtrace` `.sidwr.bin` record stream
   (`struct.Struct("<qHBB")` = clock, addr, reg, val); drops the addr field and
   records with `reg >= 25`, returning `(clock, reg, val)` triples.

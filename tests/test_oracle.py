@@ -6,6 +6,7 @@ from pysidtracker import (
     EmuPlayer,
     SidParseError,
     aligned_match,
+    grid_from_calls,
     grid_from_writes,
     read_sidwr,
     register_grid,
@@ -74,6 +75,35 @@ def test_register_grid_no_header():
     image = SidImage.from_prg(build_prg(_SIMPLE, load=0x1000))
     with pytest.raises(SidParseError):
         register_grid(image, whole_song(1))
+
+
+def test_grid_from_calls_without_play_calls():
+    assert grid_from_calls([]) == grid_from_calls([[(0, 1)]]) == []
+
+
+def test_grid_from_calls_forward_fills_and_pads():
+    calls = [[(0, 7), (3, 0xAB)], [(1, 2)], [], [(0, 9), (25, 5), (10, 0xF3)], [], []]
+    base = [0] * 25
+    base[0], base[3] = 7, 0x0B
+    row1 = base[:]
+    row1[1] = 2
+    row3 = row1[:]
+    row3[0], row3[10] = 9, 0x03
+    grid = grid_from_calls(calls)
+    assert grid == [row1, row1, row3, row3, row3]
+    assert grid[3] is not grid[4]
+    start = [0x40, 0x50, 0, 0xF6]
+    assert grid_from_calls([[(0, 1)], [], [(3, 0x21)]], reg_count=4, start=start) == [
+        [1, 0x50, 0, 0x06],
+        [1, 0x50, 0, 0x01],
+    ]
+    assert grid_from_calls(calls, reg_count=2, pw_hi_regs=()) == [
+        [7, 2],
+        [7, 2],
+        [9, 2],
+        [9, 2],
+        [9, 2],
+    ]
 
 
 def test_grid_from_writes_empty():

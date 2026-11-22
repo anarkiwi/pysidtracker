@@ -2,6 +2,8 @@
 
 import pytest
 
+from pysidtracker import emu
+
 from pysidtracker.emu import SidWriteLog, call_play
 from pysidtracker.errors import SidError
 from pysidtracker.image import SidImage
@@ -52,6 +54,7 @@ TUNES = {
     "twice": "init: RTS\nplay: JSR entry\nJSR entry\nRTS\n" + SID_PLAYER,
     "spin": "init: CLI\nidle: JMP idle\nplay: RTS\n",
     "hang": "init: RTS\nplay: JMP play\n",
+    "cycles": "init: RTS\nplay: LDA #$01\nSTA $D400\nNOP\nSTA $D401\nRTS\n",
     "busy": "init: LDX #$00\nloop:" + "NOP\n" * 10 + "DEX\nBNE loop\nRTS\nplay: RTS\n",
 }
 
@@ -136,6 +139,35 @@ def test_write_log_and_call_play():
     mirrored, exact = SidWriteLog(mpu), SidWriteLog(mpu, mirrors=False)
     assert mirrored.registers[0xD421] == 1 and 0xD421 not in exact.registers
     assert 0xD400 + SID_REG_COUNT not in mirrored.registers
+
+
+def test_write_log_cycles_count_from_each_calls_start():
+    image, lab = tune("cycles")
+    _, mpu, mem, _ = boot(image)
+    log = SidWriteLog(mpu, cycles=True)
+    for _ in range(2):
+        writes = log.call(mem, lab["play"])
+        assert [(r, v, c) for r, _, _, v, c in writes] == [(0, 1, 2), (1, 1, 8)]
+    assert [pc for _, _, pc, _, _ in writes] == [lab["play"] + 2, lab["play"] + 6]
+
+
+def test_write_log_pairs_are_shared_and_need_no_read_observer(monkeypatch):
+    seen = []
+    real = emu.observe_data_access
+
+    def spy(mpu, on_read=None, **kw):
+        seen.append(on_read)
+        real(mpu, on_read=on_read, **kw)
+
+    monkeypatch.setattr(emu, "observe_data_access", spy)
+    image, lab = tune("cycles")
+    _, mpu, mem, _ = boot(image)
+    SidWriteLog(mpu)
+    log = SidWriteLog(mpu, detail=False)
+    assert (seen[0] is None) == getattr(mpu, "native", False) and seen[1] is None
+    first, second = log.call(mem, lab["play"]), log.call(mem, lab["play"])
+    assert first == second == [(0, 1), (1, 1)]
+    assert all(a is b for a, b in zip(first, second))
 
 
 def test_call_play_raises_when_play_hangs():

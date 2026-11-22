@@ -181,6 +181,7 @@ from .oracle import (
     SidtraceUnavailable,
     aligned_match,
     cached_sidtrace,
+    grid_from_calls,
     grid_from_writes,
     handler_sources,
     play_seconds,
@@ -308,7 +309,7 @@ from .whydiff import (
     python_side,
 )
 
-__version__ = "0.64.1"
+__version__ = "0.65.0"
 
 __all__ = [
     "REACH",
@@ -485,6 +486,7 @@ __all__ = [
     "frame_writes",
     "frames_to_seconds",
     "gather_tune_relpaths",
+    "grid_from_calls",
     "grid_from_writes",
     "image_after_init",
     "is_jmp_vector",
