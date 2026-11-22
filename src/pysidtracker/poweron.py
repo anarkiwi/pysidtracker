@@ -52,23 +52,9 @@ def place_tune(ram, load: int, image) -> None:
     ram[load : load + len(image)] = image
 
 
-def _iomap(address: int) -> int:
-    """libsidplayfp ``psiddrv::iomap``: the ``$01`` map for code at ``address``.
-
-    ``$37`` (BASIC + KERNAL ROM, I/O) below BASIC, ``$36`` (KERNAL ROM, I/O) in
-    ``$A000-$CFFF``, ``$35`` (I/O only) above ``$DFFF``, ``$34`` (RAM only) in
-    ``$D000-$DFFF``.
-    """
-    if address < 0xA000:
-        return 0x37
-    if address < 0xD000:
-        return 0x36
-    return 0x35 if address >= 0xE000 else 0x34
-
-
 def psid_init_bank(init_address: int) -> int:
-    """The driver's ``$01`` bank register before running ``init`` (init's ROM in)."""
-    return _iomap(init_address)
+    """The driver's ``$01`` bank register before ``init`` (vagrant-moses ``c64.psid_iomap``)."""
+    return c64.psid_iomap(init_address)
 
 
 def psid_play_bank(play_address: int) -> int:
@@ -77,7 +63,7 @@ def psid_play_bank(play_address: int) -> int:
     ``psiddrv`` sets this around every play call, so a play in ``$A000-$CFFF``
     reads the RAM behind the BASIC window (the tune's loaded data), not ROM.
     """
-    return _iomap(play_address)
+    return c64.psid_iomap(play_address)
 
 
 __all__ = [
