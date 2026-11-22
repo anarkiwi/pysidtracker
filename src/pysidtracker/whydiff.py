@@ -32,7 +32,16 @@ from vagrant_moses import memmap as mm
 
 from . import gridcmp
 from . import registers as reg
-from .emu import observe_data_access, run_to_rts, unobserve_data_access
+from jennings.opcodes import OPCODES
+
+from .emu import (
+    live_ram,
+    observe_data_access,
+    run_to_rts,
+    trace_pcs,
+    unobserve_data_access,
+    wire_mpu,
+)
 from .errors import SidParseError
 from .image import SidImage
 from .oracle import boot_flat, register_grid
@@ -1707,6 +1716,178 @@ def explain_divergence(
     if state:
         why.state = explain_state(why)
     return why
+
+
+LOCKSTEP_WATCH = np.ones(0x10000, bool)
+LOCKSTEP_WATCH[:0x200] = LOCKSTEP_WATCH[mm.IO_BASE : mm.IO_LAST + 1] = False
+_INDIRECT = frozenset(("indx", "indy"))
+
+
+@dataclass
+class StepRun:
+    """One side's play call in :func:`lockstep`: the PC of each instruction, the watched
+    data accesses ``(kind, pc, addr, value)`` in order (``kind`` ``"r"`` or ``"w"``, the
+    value read under the side's remap, or the value stored), and its RAM after the call.
+    """
+
+    pcs: List[int]
+    accesses: List[Tuple[str, int, int, int]]
+    ram: np.ndarray
+
+    def writes(self, mask) -> List[Tuple[int, int, int]]:
+        """``(pc, addr, value)`` of the watched writes to an address of ``mask``."""
+        return [(q, x, v) for t, q, x, v in self.accesses if t == "w" and mask[x]]
+
+    def reads(self, mask) -> List[Tuple[int, int]]:
+        """``(pc, value)`` of the watched reads of an address of ``mask``."""
+        return [(q, v) for t, q, x, v in self.accesses if t == "r" and mask[x]]
+
+
+@dataclass
+class Lockstep:
+    """The first play call (``frame``) where two runs of :func:`lockstep` differ.
+
+    ``trace``, ``write`` and ``read`` are the indexes of the first instruction PC, the
+    first compared write by ``(pc, value)`` and the first watched read by ``(pc, value)``
+    that differ (``None`` where they agree; one sequence a prefix of the other differs at
+    the shorter length); ``data`` the positions of ``cells`` (``src``, ``dst``) whose
+    bytes differ after the call; ``a``/``b`` the calls themselves.
+    """
+
+    frame: int
+    trace: Optional[int]
+    write: Optional[int]
+    read: Optional[int]
+    data: np.ndarray
+    a: StepRun
+    b: StepRun
+
+
+def _first_diff(x, y) -> Optional[int]:
+    i = next((i for i, (p, q) in enumerate(zip(x, y)) if p != q), None)
+    return min(len(x), len(y)) if i is None and len(x) != len(y) else i
+
+
+def _remap_model(mpu, mem, ram, remap):
+    """Apply ``remap`` ({pc: int [65536] table}) to ``mpu``'s data accesses: an access by
+    the instruction at a table's pc to an address whose entry is not -1 reads 0 (-2) or
+    the byte at the entry, and stores nothing; an indirect instruction's page-zero
+    pointer bytes are accessed as they are. Returns ``read(addr)``: the remapped byte, or
+    ``None`` for an access as it is."""
+    tables = {pc: np.asarray(t, np.int64) for pc, t in (remap or {}).items()}
+
+    def source(addr):
+        pc = mpu.pc
+        t = tables.get(pc)
+        if t is None or t[addr] == -1:
+            return None
+        if OPCODES[ram[pc]][1] in _INDIRECT:
+            zp = ram[(pc + 1) & 0xFFFF]
+            if addr in (zp, (zp + 1) & 0xFF):
+                return None
+        return int(t[addr])
+
+    def read(addr):
+        src = source(addr)
+        return None if src is None else 0 if src == -2 else ram[src]
+
+    if tables:
+        watched = np.flatnonzero(
+            np.logical_or.reduce([t != -1 for t in tables.values()])
+        ).tolist()
+        mem.subscribe_to_read(watched, read)
+        mem.subscribe_to_write(
+            watched, lambda a, v: None if source(a) is None else ram[a]
+        )
+    return read
+
+
+def _stepper(subject, play, remap, watch, max_cycles):
+    buf = bytearray(bytes(subject))
+    mpu, mem = wire_mpu(buf)
+    ram = live_ram(mpu, buf)
+    read = _remap_model(mpu, mem, ram, remap)
+    log: List[Tuple[str, int, int, int]] = []
+
+    def on_read(addr):
+        v = read(addr)
+        log.append(("r", mpu.pc, addr, ram[addr] if v is None else v))
+
+    def on_write(addr, value):
+        log.append(("w", mpu.pc, addr, value))
+
+    at = np.flatnonzero(watch).tolist()
+    observe_data_access(mpu, on_read, on_write, reads=at, writes=at)
+
+    def call() -> StepRun:
+        pcs: List[int] = []
+        log.clear()
+        trace_pcs(mpu, mem, play, 0, max_cycles, pcs)
+        return StepRun(pcs, list(log), np.frombuffer(bytes(ram), np.uint8))
+
+    return call
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
+def lockstep(
+    a,
+    b,
+    play_a: int,
+    play_b: int,
+    frames: int,
+    remap=None,
+    *,
+    cells=None,
+    watch=None,
+    writes=None,
+    max_cycles: int = 1_000_000,
+    progress: bool = True,
+) -> Optional[Lockstep]:
+    """The first of ``frames`` play calls where two 6502 runs differ, else ``None``.
+
+    ``a`` and ``b`` are 64K post-init memories (each copied and wired as
+    :func:`~pysidtracker.emu.wire_mpu`); each frame calls ``play_a`` on ``a`` and
+    ``play_b`` on ``b`` with ``A = 0``, at most ``max_cycles`` each. ``remap``
+    (``{pc: table}``, the per-instruction tables of :class:`jennings.devices.mpu6502.Remap`:
+    -1 as it is, -2 reads 0, else the address read instead; a remapped write stores
+    nothing) applies to ``a``. Compared per call: the instruction PCs; the data writes by
+    ``(pc, value)`` to an address of ``writes`` (bool [65536], default ``watch``); the
+    data reads of ``watch`` (bool [65536], default :data:`LOCKSTEP_WATCH`: RAM above the
+    stack, without I/O) by ``(pc, value)``; and with ``cells`` (``(src, dst)`` int
+    arrays) each byte ``a[src[k]]`` against ``b[dst[k]]`` after the call.
+    """
+    watch = LOCKSTEP_WATCH if watch is None else np.asarray(watch, bool)
+    writes = watch if writes is None else np.asarray(writes, bool)
+    src, dst = (np.zeros(0, np.int64),) * 2 if cells is None else cells
+    runs = (
+        _stepper(a, play_a, remap, watch | writes, max_cycles),
+        _stepper(b, play_b, None, watch | writes, max_cycles),
+    )
+    steps = range(frames)
+    if progress:
+        from tqdm import tqdm
+
+        steps = tqdm(steps, desc="lockstep", unit="frame")
+    for frame in steps:
+        x, y = (run() for run in runs)
+        wx, wy = ([(q, v) for q, _, v in r.writes(writes)] for r in (x, y))
+        found = Lockstep(
+            frame,
+            _first_diff(x.pcs, y.pcs),
+            _first_diff(wx, wy),
+            _first_diff(x.reads(watch), y.reads(watch)),
+            np.flatnonzero(x.ram[src] != y.ram[dst]),
+            x,
+            y,
+        )
+        if (
+            found.trace is not None
+            or found.write is not None
+            or found.read is not None
+            or found.data.size
+        ):
+            return found
+    return None
 
 
 def main(argv=None) -> int:

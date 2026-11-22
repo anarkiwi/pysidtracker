@@ -152,6 +152,13 @@ last: ...                              // the same expansions as step
   of `code` that changes: targets in `moved` shift by `delta`, targets in
   `remap` are replaced, and a target in `forbidden` that neither covers raises
   `error` (data the relocation does not place).
+- `store_stub(writes)` is 6502 code storing each `(addr, value)` in order
+  (`LDA #` only when the value changes; `STA zp` below `$0100`), then `RTS`.
+- `init_fixup(init, adds, copies, writes=())` is 6502 code that calls `init`,
+  `CLD`s, adds each `(addr, value)` of `adds` in place (`CLC; ADC #`), makes each
+  `(src, dst, n)` copy of `copies` (`LDX #n`, `LDA src-1,X; STA dst-1,X; DEX;
+  BNE`), then runs `store_stub(writes)`. `n` = 256 loads `X = 0`, which copies
+  `src-1 .. src+254`.
 
 ## `pysidtracker.snapshot`
 

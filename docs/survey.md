@@ -29,6 +29,10 @@ are case-insensitive. Jobs run in `pysidtracker.jobs` workers: a job's `deadline
 parent, which kills the worker's process group at the deadline (whether the job is in Python,
 in a C extension or waiting on a child pool) and records the job's timeout row.
 
+`hvsc_capture(data, song, hvsc, root)` is the sidtrace capture
+`root/<HVSC path>/<tune>.<song + 1>.csv.zst` of 0-based `song` of the SID `data`,
+its path found by MD5 in `hvsc/DOCUMENTS/Songlengths.md5`, or `None`.
+
 ## Renderer
 
 A format package supplies only an importable callable

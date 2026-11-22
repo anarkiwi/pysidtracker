@@ -150,6 +150,18 @@ def verdict_fields(scan):
     )
 
 
+def change_offsets(a, b):
+    """``(matched, {dt: n})`` of two ``(cycle, reg, value)`` register-change streams:
+    the length of their common prefix by ``(reg, value)``, and the count of each cycle
+    offset ``a.cycle - b.cycle`` over it."""
+    matched = next(
+        (i for i, (x, y) in enumerate(zip(a, b)) if x[1:] != y[1:]), min(len(a), len(b))
+    )
+    dt = np.array([x[0] - y[0] for x, y in zip(a[:matched], b[:matched])], np.int64)
+    vals, counts = np.unique(dt, return_counts=True)
+    return matched, dict(zip(vals.tolist(), counts.tolist()))
+
+
 def compare_grids(a, b, max_shift=LEAD):
     """:func:`verdict_fields` of render ``b`` against render ``a`` at every constant shift.
 
