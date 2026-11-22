@@ -1,15 +1,19 @@
 """The shared libsidplayfp power-on RAM image that the players and emulator boot from."""
 
+import numpy as np
+import pytest
+
 from pysidtracker import MemPlayer, poweron
 
 
+@pytest.mark.strain_exempt(reason="branches live in vagrant-moses")
 def test_banks_follow_the_driver_iomap():
-    """The init and play bank maps are libsidplayfp's ``psiddrv::iomap``."""
-    # address windows: below BASIC, BASIC ($A000-$CFFF), I/O page, above $DFFF
-    addresses = (0x9FF0, 0xC000, 0xD000, 0xE000)
-    expected = (0x37, 0x36, 0x34, 0x35)
-    assert tuple(poweron.psid_init_bank(a) for a in addresses) == expected
-    assert tuple(poweron.psid_play_bank(a) for a in addresses) == expected
+    """Every address banks as ``psiddrv::iomap``'s $A000/$D000/$E000 windows."""
+    addresses = np.arange(0x10000)
+    windows = np.searchsorted([0xA000, 0xD000, 0xE000], addresses, side="right")
+    expected = np.array([0x37, 0x36, 0x34, 0x35])[windows].tolist()
+    assert [poweron.psid_init_bank(a) for a in range(0x10000)] == expected
+    assert [poweron.psid_play_bank(a) for a in range(0x10000)] == expected
 
 
 class _ReadPlayer(MemPlayer):
