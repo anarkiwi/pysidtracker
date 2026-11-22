@@ -404,6 +404,27 @@ def grid_from_writes(
     )
 
 
+def register_changes(rows, chip: int = 0) -> List[Tuple[int, int, int]]:
+    """The ``(cycle, reg, value)`` writes of ``rows`` that change their register
+    (each register starting at 0).
+
+    ``rows`` are :class:`SidtraceRow` (only ``chip``'s writes count; interrupt rows
+    have ``chip`` ``None``) or ``(cycle, reg, value)`` writes of one chip.
+    """
+    regs: Dict[int, int] = {}
+    out: List[Tuple[int, int, int]] = []
+    for row in rows:
+        if getattr(row, "chip", chip) != chip:
+            continue
+        cycle, register, value = (
+            (row.cycle, row.reg, row.value) if hasattr(row, "chip") else row
+        )
+        if regs.get(register, 0) != value:
+            regs[register] = value
+            out.append((cycle, register, value))
+    return out
+
+
 def read_sidwr(path, *, reg_count: int = 25) -> List[Tuple[int, int, int]]:
     """Read a ``preframr-sidtrace`` ``.sidwr.bin`` into ``(clock, reg, val)``.
 

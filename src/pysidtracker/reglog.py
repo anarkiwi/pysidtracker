@@ -17,7 +17,17 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from typing import IO, Iterable, Iterator, NamedTuple, Optional, Tuple, Union
+from typing import (
+    IO,
+    Any,
+    Iterable,
+    Iterator,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 from vagrant_moses.memmap import PAL
 
@@ -178,3 +188,24 @@ def register_writes_from_player(
         start_frame=1,
         sid_reg_base=0,
     )
+
+
+def first_divergence(
+    ref_calls: Sequence[Sequence[Any]], got_calls: Sequence[Sequence[Any]]
+) -> Optional[Tuple[int, int, Any, Any]]:
+    """``(call, index, ref, got)`` of the first write where two per-call write
+    sequences differ, else ``None``.
+
+    ``ref_calls[call]`` and ``got_calls[call]`` are the writes of one call, compared
+    over the calls both have; ``index`` is the first write of that call that differs,
+    or the shorter call's length when one is a prefix of the other, and ``ref``/``got``
+    the writes there (``None`` past a call's end).
+    """
+    for call, (ref, got) in enumerate(zip(ref_calls, got_calls)):
+        if ref != got:
+            i = next(
+                (i for i, (a, b) in enumerate(zip(ref, got)) if a != b),
+                min(len(ref), len(got)),
+            )
+            return call, i, *(w[i] if i < len(w) else None for w in (ref, got))
+    return None

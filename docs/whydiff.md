@@ -153,6 +153,20 @@ flags and bytes its value came from. The flow is read off the pcode jennings
 executes, so it is exact for every legal and illegal opcode. `cpu_slice` walks
 these backwards from the SID store.
 
+## Lockstep
+
+`lockstep(a, b, play_a, play_b, frames, remap=None, *, cells=None, watch=None,
+writes=None)` runs two 64K post-init memories' play calls side by side (a tune
+and its relocation, say) and returns the first frame where they part as a
+`Lockstep`: the first differing instruction PC (`trace`), compared write and
+watched read by `(pc, value)` (`write`, `read`), and the `cells` (`(src, dst)`
+address arrays) whose bytes differ after the call (`data`), with each side's
+`StepRun` (PCs, accesses, RAM). `remap` (`{pc: table}`, the tables
+`jennings` `Remap` takes) redirects `a`'s accesses: `-2` reads 0, an address
+reads that byte instead, and a remapped write stores nothing; an indirect
+instruction's pointer bytes are read as they are. `watch` defaults to
+`LOCKSTEP_WATCH`, RAM from `$0200` without I/O.
+
 ## Limits
 
 - The 6502 history is the flat jennings PSID host, not sidplayfp. For tunes whose

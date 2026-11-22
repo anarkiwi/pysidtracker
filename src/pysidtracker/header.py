@@ -15,6 +15,7 @@ exists after the init routine runs. This module resolves the on-disk fields;
 from __future__ import annotations
 
 import struct
+import dataclasses
 from dataclasses import dataclass
 
 from .errors import SidFormatError
@@ -117,6 +118,11 @@ class SidHeader:
     def is_multi_sid(self) -> bool:
         """True if the header advertises a 2nd/3rd/4th SID chip."""
         return self.version >= 3 and (self.second_sid != 0 or self.third_sid != 0)
+
+    def replace(self, **fields) -> "SidHeader":
+        """A copy with ``fields`` changed and every other field kept
+        (:func:`dataclasses.replace`); :meth:`to_bytes` serialises it."""
+        return dataclasses.replace(self, **fields)
 
     def to_bytes(self) -> bytes:
         """Serialise this header back to its container bytes (inverse of parse).

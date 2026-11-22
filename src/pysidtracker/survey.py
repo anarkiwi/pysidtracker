@@ -129,6 +129,17 @@ def songlengths(hvsc_root):
     return out
 
 
+def hvsc_capture(data, song, hvsc, root):
+    """The capture ``root``/<HVSC path>/<tune>.<song + 1>.csv.zst of 0-based ``song`` of
+    the SID ``data``, its HVSC path found by its MD5 in
+    ``hvsc``/DOCUMENTS/Songlengths.md5; ``None`` when unlisted or not captured."""
+    md5 = hashlib.md5(data).hexdigest()
+    text = (Path(hvsc) / "DOCUMENTS" / "Songlengths.md5").read_text("latin-1")
+    m = re.search(rf"^; (\S+)\.sid\r?\n{md5}=", text, re.M)
+    path = m and Path(root) / f"{m[1].lstrip('/')}.{song + 1}.csv.zst"
+    return path if path and path.exists() else None
+
+
 THREADS = {"on": False}
 THREADS_HELP = "run on a thread pool in this process, not worker processes"
 

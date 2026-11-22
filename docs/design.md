@@ -177,6 +177,9 @@ validation, consolidated here.
 pulse-width-high register offsets, masked to 4 bits in a register grid),
 `SID_VOICE_OFFSET` (`(0, 7, 14)`) and `SID_REG_COUNT` (25, the `$D400..$D418`
 file). `SID_BASE` (`0xD400`) is unchanged.
+`SidHeader.replace(**fields)` is a copy with `fields` changed and the others
+kept; `to_bytes()` serialises it.
+
 
 ### `reglog` — register-write log convention
 
@@ -195,6 +198,9 @@ line (`#` comments allowed, first line `REGLOG_HEADER`).
   emitted write). Pass `sid_reg_base=0` when the player already yields `0..24`
   offsets. Raises `SidParseError` if `write_spacing * reg_count >=
   cycles_per_frame`.
+- `first_divergence(ref_calls, got_calls)` — `(call, index, ref, got)` of the
+  first write where two per-call write sequences differ (`None` past a call's
+  end), or `None`.
 
 ### `oracle` — register-grid ground truth
 
@@ -214,6 +220,11 @@ line (`#` comments allowed, first line `REGLOG_HEADER`).
   records with `reg >= 25`, returning `(clock, reg, val)` triples.
 - `aligned_match(oracle, rendered, *, max_lead=4) -> bool` — True if `rendered`
   matches `oracle` allowing up to `max_lead` leading silent frames.
+- `register_changes(rows, chip=0)` — the `(cycle, reg, value)` writes that
+  change their register (from 0), of `chip`'s `SidtraceRow`s or of plain
+  `(cycle, reg, value)` writes; `gridcmp.change_offsets(a, b)` is `(matched,
+  {dt: n})` of two such streams: their common `(reg, value)` prefix length and
+  the counts of `a.cycle - b.cycle` over it.
 
 ### `testing` — HVSC fetch/resolve
 
