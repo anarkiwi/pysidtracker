@@ -50,3 +50,10 @@ def backend(request, monkeypatch):
     machine = pytest.importorskip("vagrant_moses.machine")
     monkeypatch.setattr(machine, "NATIVE", machine.NATIVE and request.param == "native")
     return request.param
+
+
+@pytest.fixture
+def one_engine(backend):
+    """An engine-independent test: run it on the pure-Python engine only."""
+    if backend != "python":
+        pytest.skip("engine-independent")

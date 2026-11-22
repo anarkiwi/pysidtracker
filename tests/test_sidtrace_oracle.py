@@ -89,6 +89,7 @@ def _fake_docker(csv_text):
     return _run
 
 
+@pytest.mark.usefixtures("one_engine")
 def test_run_sidtrace_mounts_roms_read_only(tmp_path, monkeypatch):
     cmds = []
     fake = _fake_docker(_CSV)
@@ -103,7 +104,8 @@ def test_run_sidtrace_mounts_roms_read_only(tmp_path, monkeypatch):
     (tmp_path / "roms").mkdir()
     run_sidtrace(tune, tmp_path / "a.csv.zst")
     run_sidtrace(tune, tmp_path / "b.csv.zst", roms_dir=tmp_path / "x" / ".." / "roms")
-    plain, roms = cmds
+    assert len(cmds) == 2
+    plain, roms = cmds[0], cmds[1]
     mount = f"{(tmp_path / 'roms').resolve()}:/root/.local/share/sidplayfp:ro"
     assert mount not in plain and roms.count("-v") == 2
     assert roms[roms.index(mount) - 1] == "-v" and roms.index(mount) < roms.index(

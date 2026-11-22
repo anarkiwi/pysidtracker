@@ -141,6 +141,7 @@ def test_write_log_and_call_play():
     assert 0xD400 + SID_REG_COUNT not in mirrored.registers
 
 
+@pytest.mark.strain_exempt(reason="pins each engine's cycle count and read observer")
 def test_write_log_cycles_count_from_each_calls_start():
     image, lab = tune("cycles")
     _, mpu, mem, _ = boot(image)
@@ -151,6 +152,7 @@ def test_write_log_cycles_count_from_each_calls_start():
     assert [pc for _, _, pc, _, _ in writes] == [lab["play"] + 2, lab["play"] + 6]
 
 
+@pytest.mark.strain_exempt(reason="pins each engine's cycle count and read observer")
 def test_write_log_pairs_are_shared_and_need_no_read_observer(monkeypatch):
     seen = []
     real = emu.observe_data_access

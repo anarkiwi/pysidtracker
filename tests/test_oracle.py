@@ -77,10 +77,12 @@ def test_register_grid_no_header():
         register_grid(image, whole_song(1))
 
 
+@pytest.mark.usefixtures("one_engine")
 def test_grid_from_calls_without_play_calls():
     assert grid_from_calls([]) == grid_from_calls([[(0, 1)]]) == []
 
 
+@pytest.mark.usefixtures("one_engine")
 def test_grid_from_calls_forward_fills_and_pads():
     calls = [[(0, 7), (3, 0xAB)], [(1, 2)], [], [(0, 9), (25, 5), (10, 0xF3)], [], []]
     base = [0] * 25
