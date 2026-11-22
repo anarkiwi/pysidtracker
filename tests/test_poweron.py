@@ -1,10 +1,12 @@
 """The shared libsidplayfp power-on RAM image that the players and emulator boot from."""
 
 import numpy as np
+import pytest
 
 from pysidtracker import MemPlayer, poweron
 
 
+@pytest.mark.strain_exempt(reason="branches live in vagrant-moses")
 def test_banks_follow_the_driver_iomap():
     """Every address banks as ``psiddrv::iomap``'s $A000/$D000/$E000 windows."""
     addresses = np.arange(0x10000)
