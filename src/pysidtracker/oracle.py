@@ -23,6 +23,7 @@ from __future__ import annotations
 import bisect
 import csv
 import io
+import itertools
 import math
 import os
 import shutil
@@ -66,6 +67,7 @@ _SIDWR_REC = struct.Struct("<qHBB")
 
 # The published ``sidplayfp`` register-trace oracle (deterministic power-on delay).
 SIDTRACE_IMAGE = "anarkiwi/sidtrace:latest"
+SIDPLAYFP_ROMS = "/root/.local/share/sidplayfp"
 # Seconds of a song HVSC lists no length for.
 DEFAULT_SECONDS = 180
 
@@ -402,6 +404,32 @@ def grid_from_writes(
         reg_count,
         pw_hi_regs,
     )
+
+
+def grid_from_calls(
+    calls: Sequence[Sequence[Tuple[int, int]]],
+    *,
+    reg_count: int = 25,
+    pw_hi_regs: Iterable[int] = reg.PW_HI_REGS,
+    start: Sequence[int] = (),
+) -> List[List[int]]:
+    """The forward-filled grid of per-call ``(reg, val)`` writes, one row per play call.
+
+    ``start[i]`` is register ``i`` before init; ``calls[0]`` (init) is only the
+    baseline; row ``k`` holds the registers after ``calls[k + 1]``, so there are
+    ``len(calls) - 1`` rows.
+    """
+    if len(calls) < 2:
+        return []
+    rows = _frame_grid(
+        itertools.chain(
+            ((-1, r, v) for r, v in enumerate(start)),
+            ((k - 1, r, v) for k, call in enumerate(calls) for r, v in call),
+        ),
+        reg_count,
+        pw_hi_regs,
+    )
+    return rows + [rows[-1][:] for _ in range(len(calls) - 1 - len(rows))]
 
 
 def register_changes(rows, chip: int = 0) -> List[Tuple[int, int, int]]:
@@ -757,12 +785,13 @@ def run_sidtrace(
     extra_args: Sequence[str] = (),
     song: Optional[int] = None,
     user: Optional[str] = None,
+    roms_dir=None,
 ) -> Path:
     """Render ``tune_path`` under the sidtrace Docker oracle to ``out_path``.
 
     Renders in a temp dir beside ``out_path`` and moves it in atomically. ``song``
-    (1-based) adds ``-o<song>``; ``user`` (``uid:gid``) sets the owner. Raises
-    :class:`SidtraceUnavailable` on failure.
+    (1-based) adds ``-o<song>``; ``user`` (``uid:gid``) sets the owner; ``roms_dir``
+    is mounted read-only as sidplayfp's ROM directory. Raises :class:`SidtraceUnavailable`.
     """
     tune_path = Path(tune_path)
     out_path = Path(out_path)
@@ -783,6 +812,11 @@ def run_sidtrace(
             *(["--user", user] if user else []),
             "-v",
             f"{work.resolve()}:/work",
+            *(
+                ["-v", f"{Path(roms_dir).resolve()}:{SIDPLAYFP_ROMS}:ro"]
+                if roms_dir
+                else []
+            ),
             image,
             result.name,
             tune_local.name,

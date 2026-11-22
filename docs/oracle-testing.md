@@ -12,7 +12,10 @@ Docker — frame for frame.
    and are never committed.
 2. **Render the oracle** with `run_sidtrace` (the `anarkiwi/sidtrace` image),
    which streams a zstd CSV of every changed SID write annotated with
-   cycle/interrupt timing. The CSV is cached per tune.
+   cycle/interrupt timing. The CSV is cached per tune. `run_sidtrace(...,
+   roms_dir=path)` (also through `cached_sidtrace`) mounts `path` read-only at
+   sidplayfp's ROM directory (`/root/.local/share/sidplayfp`), which RSID tunes
+   needing real KERNAL/BASIC/character ROMs require.
 3. **Frame** the CSV into a per-frame grid (`sidtrace_grid`): the cadence is the
    median raise interval of the play source (`play_source`) taken from the CSV
    itself (`sidtrace_cadence`), so no cadence guessing is needed.

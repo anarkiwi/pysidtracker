@@ -61,9 +61,13 @@ for a caller stepping the CPU itself.
 
 ## SID write log
 
-`emu.SidWriteLog(mpu, mirrors=True)` attaches to an MPU with
-`observe_data_access` and records, per play call, `(register, address read last,
-pc, value)` for each SID write (`mirrors=False`: `$D400-$D418` only). `start()`
+`emu.SidWriteLog(mpu, mirrors=True, detail=True, cycles=False)` attaches to an MPU
+with `observe_data_access` and records, per play call, `(register, address read last,
+pc, value)` for each SID write (`mirrors=False`: `$D400-$D418` only). `cycles=True`
+appends a fifth element, the storing instruction's cycle counted from its call's
+`start()` (`processorCycles` at the write minus its value at `start()`, kept in
+`starts`). `detail=False` records `(register, value)` instead, one shared tuple per
+distinct pair (interned in `pairs`), and installs no read observer. `start()`
 opens a call's list; `call(mem, play, max_cycles, error)` opens one and runs
 `emu.call_play`, which runs one play call and raises `error` (default `SidError`)
 when it does not return within `max_cycles`.

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import weakref
 from array import array
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from vagrant_moses import memmap as mm
@@ -321,18 +321,24 @@ def run_to_rts_until(mpu, mem, pc: int, acc: int, pcs, max_cycles: int) -> bool:
 
 PLAY_CYCLES = 200_000
 
-SidWrite = Tuple[int, Optional[int], int, int]
+SidWrite = Union[
+    Tuple[int, int],
+    Tuple[int, Optional[int], int, int],
+    Tuple[int, Optional[int], int, int, int],
+]
 
 
 class SidWriteLog:
     """Each play call's SID writes, ``(register, address read last, pc, value)``.
 
-    Attaches to ``mpu`` with :func:`observe_data_access`; ``mirrors`` also logs
-    the ``$20``-mirrored band, else only ``$D400-$D418``. :meth:`start` opens a call.
-    On a native MPU the address read last is the core's ``last_load``.
+    ``mirrors`` also logs the ``$20``-mirrored band, else only ``$D400-$D418``;
+    ``cycles`` appends the write's cycle from its call's :meth:`start`.
+    ``detail=False`` logs shared ``(register, value)`` pairs with no read observer.
     """
 
-    def __init__(self, mpu, mirrors: bool = True):
+    def __init__(
+        self, mpu, mirrors: bool = True, detail: bool = True, cycles: bool = False
+    ):
         top = mm.SID_BASE + (0x400 if mirrors else SID_REG_COUNT)
         self.registers = {
             addr: (addr - mm.SID_BASE) & 0x1F
@@ -340,27 +346,38 @@ class SidWriteLog:
             if is_sid_reg(addr)
         }
         self.calls: List[List[SidWrite]] = []
-        self.mpu, self._last = mpu, None
-        if getattr(mpu, "native", False):
-            observe_data_access(mpu, on_write=self._write, writes=self.registers)
-        else:
-            observe_data_access(
-                mpu, on_read=self._read, on_write=self._write, writes=self.registers
-            )
+        self.starts: List[int] = []
+        self.pairs: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        self.mpu, self._last, self.detail, self.cycles = mpu, None, detail, cycles
+        reads = detail and not getattr(mpu, "native", False)
+        observe_data_access(
+            mpu,
+            on_read=self._read if reads else None,
+            on_write=self._write,
+            writes=self.registers,
+        )
 
     def _read(self, addr: int) -> None:
         self._last = addr
 
     def _write(self, addr: int, value: int) -> None:
-        if self.calls:
-            if getattr(self.mpu, "native", False):
-                self._last = self.mpu.memory.last_load
-            self.calls[-1].append(
-                (self.registers[addr], self._last, self.mpu.pc, value)
-            )
+        if not self.calls:
+            return
+        mpu = self.mpu
+        if not self.detail:
+            w = (self.registers[addr], value)
+            self.calls[-1].append(self.pairs.setdefault(w, w))
+            return
+        if getattr(mpu, "native", False):
+            self._last = mpu.memory.last_load
+        w = (self.registers[addr], self._last, mpu.pc, value)
+        if self.cycles:
+            w += (mpu.processorCycles - self.starts[-1],)
+        self.calls[-1].append(w)
 
     def start(self) -> List[SidWrite]:
         """Open a new call's write list and return it."""
+        self.starts.append(self.mpu.processorCycles)
         self.calls.append([])
         return self.calls[-1]
 

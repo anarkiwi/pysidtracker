@@ -52,7 +52,7 @@ API.
 - `reglog` — `RegWrite` register-log format (`read_reglog` / `write_reglog`) and
   `frame_writes`, the shared per-frame SID-write framing loop.
 - `oracle` — per-frame SID register grids: `register_grid` (jennings), the stdlib
-  `grid_from_writes` framer, `read_sidwr` (`preframr-sidtrace` `.sidwr.bin`),
+  `grid_from_writes` and `grid_from_calls` framers, `read_sidwr` (`preframr-sidtrace` `.sidwr.bin`),
   `aligned_match`, and the `sidtrace` (sidplayfp) oracle bridge — `run_sidtrace`,
   `read_sidtrace`, `sidtrace_cadence`, `sidtrace_grid`.
 - Caching — every download lands under one root, `.tunecache`
